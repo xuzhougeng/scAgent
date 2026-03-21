@@ -1,0 +1,143 @@
+package orchestrator
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"scagent/internal/models"
+	"scagent/internal/session"
+	"scagent/internal/skill"
+)
+
+type emptyLLMPlanner struct{}
+
+func (p emptyLLMPlanner) Plan(context.Context, PlanningRequest) (models.Plan, error) {
+	return models.Plan{}, nil
+}
+
+func (p emptyLLMPlanner) Mode() string {
+	return "llm"
+}
+
+func TestBuildExecutablePlanFallsBackWhenLLMReturnsEmptyPlan(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	service := NewService(session.NewStore(), registry, nil, emptyLLMPlanner{}, t.TempDir())
+	plan, note, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
+		Message: "完成常规的数据预处理",
+	})
+	if err != nil {
+		t.Fatalf("build executable plan: %v", err)
+	}
+	if note == "" {
+		t.Fatalf("expected fallback note when LLM returns empty plan")
+	}
+
+	wantSkills := []string{
+		"normalize_total",
+		"log1p_transform",
+		"select_hvg",
+		"run_pca",
+		"compute_neighbors",
+		"run_umap",
+	}
+	if len(plan.Steps) != len(wantSkills) {
+		t.Fatalf("unexpected step count: got %d want %d", len(plan.Steps), len(wantSkills))
+	}
+	for index, want := range wantSkills {
+		if plan.Steps[index].Skill != want {
+			t.Fatalf("unexpected skill at %d: got %q want %q", index, plan.Steps[index].Skill, want)
+		}
+	}
+}
+
+func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
+	store := session.NewStore()
+	service := NewService(store, nil, nil, NewFakePlanner(), t.TempDir())
+
+	sessionRecord := store.CreateSession("test")
+	now := time.Now().UTC()
+	sessionRecord.ActiveObjectID = "obj_active"
+	store.SaveSession(sessionRecord)
+
+	store.SaveObject(&models.ObjectMeta{
+		ID:        "obj_active",
+		SessionID: sessionRecord.ID,
+		Label:     "prepared_pbmc3k",
+		Kind:      models.ObjectFilteredDataset,
+		Metadata: map[string]any{
+			"obsm_keys": []string{"X_umap"},
+		},
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	})
+	store.AddMessage(&models.Message{
+		ID:        "msg_prev_user",
+		SessionID: sessionRecord.ID,
+		Role:      models.MessageUser,
+		Content:   "画一下 UMAP 图",
+		CreatedAt: now,
+	})
+	store.AddMessage(&models.Message{
+		ID:        "msg_prev_assistant",
+		SessionID: sessionRecord.ID,
+		Role:      models.MessageAssistant,
+		Content:   "执行完成：plot_umap：已生成真实 UMAP 图。",
+		CreatedAt: now.Add(time.Second),
+	})
+	store.AddMessage(&models.Message{
+		ID:        "msg_current",
+		SessionID: sessionRecord.ID,
+		Role:      models.MessageUser,
+		Content:   "把这个图改一下",
+		CreatedAt: now.Add(2 * time.Second),
+	})
+	store.SaveJob(&models.Job{
+		ID:        "job_prev",
+		SessionID: sessionRecord.ID,
+		Status:    models.JobSucceeded,
+		Summary:   "已生成 UMAP 图。",
+		Steps: []models.JobStep{
+			{Skill: "plot_umap"},
+		},
+		CreatedAt:  now,
+		FinishedAt: ptrTime(now.Add(time.Second)),
+	})
+	store.SaveArtifact(&models.Artifact{
+		ID:        "art_prev",
+		SessionID: sessionRecord.ID,
+		Kind:      models.ArtifactPlot,
+		Title:     "prepared_pbmc3k 的 UMAP 图",
+		Summary:   "prepared_pbmc3k 的真实 UMAP 散点图。",
+		CreatedAt: now.Add(time.Second),
+	})
+
+	request, err := service.buildPlanningRequest(sessionRecord, "把这个图改一下")
+	if err != nil {
+		t.Fatalf("build planning request: %v", err)
+	}
+
+	if request.ActiveObject == nil || request.ActiveObject.ID != "obj_active" {
+		t.Fatalf("expected active object in planning request, got %+v", request.ActiveObject)
+	}
+	if len(request.RecentMessages) != 2 {
+		t.Fatalf("expected previous messages without current one, got %d", len(request.RecentMessages))
+	}
+	if request.RecentMessages[len(request.RecentMessages)-1].Content != "执行完成：plot_umap：已生成真实 UMAP 图。" {
+		t.Fatalf("unexpected recent assistant message: %+v", request.RecentMessages)
+	}
+	if len(request.RecentJobs) != 1 || request.RecentJobs[0].ID != "job_prev" {
+		t.Fatalf("unexpected recent jobs: %+v", request.RecentJobs)
+	}
+	if len(request.RecentArtifacts) != 1 || request.RecentArtifacts[0].ID != "art_prev" {
+		t.Fatalf("unexpected recent artifacts: %+v", request.RecentArtifacts)
+	}
+}
+
+func ptrTime(value time.Time) *time.Time {
+	return &value
+}

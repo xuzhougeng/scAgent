@@ -12,6 +12,7 @@ const appState = {
 
 const quickActions = [
   { label: "查看数据集", prompt: "查看当前数据集概览" },
+  { label: "常规预处理", prompt: "完成常规的数据预处理" },
   { label: "绘制 UMAP", prompt: "绘制当前对象的 UMAP 图" },
   { label: "筛选 cortex 细胞", prompt: "把 cortex 细胞筛选出来" },
   { label: "重新聚类", prompt: "对当前对象重新聚类" },
@@ -27,6 +28,13 @@ const roleLabels = {
 const skillLabels = {
   inspect_dataset: "查看数据集",
   assess_dataset: "评估数据集",
+  normalize_total: "总表达归一化",
+  log1p_transform: "log1p 变换",
+  select_hvg: "选择高变基因",
+  run_pca: "计算 PCA",
+  compute_neighbors: "计算邻接图",
+  run_umap: "计算 UMAP",
+  prepare_umap: "完成常规预处理",
   subset_cells: "筛选细胞子集",
   recluster: "重新聚类",
   find_markers: "查找 marker 基因",
@@ -40,6 +48,13 @@ const skillLabels = {
 const skillPrompts = {
   inspect_dataset: "查看当前数据集概览",
   assess_dataset: "评估当前数据集的预处理状态",
+  normalize_total: "对当前对象做总表达归一化",
+  log1p_transform: "对当前对象执行 log1p 变换",
+  select_hvg: "为当前对象选择高变基因",
+  run_pca: "为当前对象计算 PCA",
+  compute_neighbors: "为当前对象计算邻接图",
+  run_umap: "为当前对象计算 UMAP",
+  prepare_umap: "完成当前对象的常规数据预处理并生成 UMAP",
   subset_cells: "从当前对象中筛选一组细胞",
   recluster: "对当前对象重新聚类",
   find_markers: "查找当前对象的 marker 基因",

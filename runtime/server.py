@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import csv
 import importlib
 import io
 import json
 import logging
 import os
-import random
 import shutil
 import sys
 import time
@@ -43,6 +41,36 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 LOGGER = logging.getLogger("scagent.runtime")
+
+os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/scagent-numba")
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/scagent-mpl")
+os.environ.setdefault("MPLBACKEND", "Agg")
+
+_ANALYSIS_MODULES: tuple[Any, Any, Any, Any, Any] | None = None
+
+
+def analysis_modules() -> tuple[Any, Any, Any, Any, Any]:
+    global _ANALYSIS_MODULES
+    if _ANALYSIS_MODULES is None:
+        import anndata as ad
+        import matplotlib
+        import numpy as np
+        import scanpy as sc
+        import scipy.sparse as sp
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        _ANALYSIS_MODULES = (ad, sc, plt, np, sp)
+    return _ANALYSIS_MODULES
+
+
+def matrix_has_negative_values(matrix: Any) -> bool:
+    _, _, _, np, sp = analysis_modules()
+    if sp.issparse(matrix):
+        minimum = matrix.min()
+        return float(minimum) < 0
+    return float(np.nanmin(np.asarray(matrix))) < 0
 
 
 @dataclass
@@ -124,6 +152,115 @@ class RuntimeState:
             "summary": f"已上传 {file_path.name}，并注册为 {object_label}（{n_obs} 个细胞，{n_vars} 个基因）。{annotation_note}",
         }
 
+    def _require_target(self, target: RuntimeObject | None, skill: str) -> RuntimeObject:
+        if target is None:
+            raise RuntimeError(f"{skill} 需要一个目标对象")
+        return target
+
+    def _load_adata(self, target: RuntimeObject) -> Any:
+        ad, _, _, _, _ = analysis_modules()
+        adata = ad.read_h5ad(target.materialized_path)
+        adata.var_names_make_unique()
+        return adata
+
+    def _load_counts_adata(self, target: RuntimeObject) -> Any:
+        adata = self._load_adata(target)
+        if matrix_has_negative_values(adata.X):
+            if adata.raw is None:
+                raise RuntimeError("当前对象缺少可用于预处理的原始 counts，请先提供原始矩阵或带 raw 的 h5ad。")
+            adata = adata.raw.to_adata()
+            adata.var_names_make_unique()
+        return adata
+
+    def _persist_adata_object(
+        self,
+        session_id: str,
+        session_root: Path,
+        label: str,
+        kind: str,
+        adata: Any,
+        summary: str,
+    ) -> dict[str, Any]:
+        backend_ref = self.next_ref(session_id)
+        suffix = backend_ref.split(":")[-1]
+        materialized_path = session_root / "objects" / f"{slug(label)}_{slug(suffix)}.h5ad"
+        materialized_path.parent.mkdir(parents=True, exist_ok=True)
+        adata.write_h5ad(materialized_path)
+
+        n_obs, n_vars = inspect_h5ad_shape(materialized_path)
+        metadata = inspect_h5ad_metadata(materialized_path)
+        obj = RuntimeObject(
+            backend_ref=backend_ref,
+            session_id=session_id,
+            label=label,
+            kind=kind,
+            n_obs=n_obs,
+            n_vars=n_vars,
+            state="resident",
+            in_memory=True,
+            materialized_path=str(materialized_path),
+            metadata=metadata,
+        )
+        self.objects[backend_ref] = obj
+        return {
+            "summary": summary,
+            "object": self._descriptor(obj),
+        }
+
+    def _cluster_field(self, target: RuntimeObject, adata: Any, requested: str | None = None) -> str:
+        if requested and requested in adata.obs.columns:
+            return requested
+
+        cluster_annotation = (target.metadata or {}).get("cluster_annotation") or {}
+        field = cluster_annotation.get("field")
+        if field and field in adata.obs.columns:
+            return str(field)
+
+        for candidate in ("leiden", "louvain", "cluster", "clusters"):
+            if candidate in adata.obs.columns:
+                return candidate
+
+        raise RuntimeError("当前对象缺少可用的聚类字段。")
+
+    def _default_kind_after_processing(self, target: RuntimeObject) -> str:
+        if target.kind == "raw_dataset":
+            return "filtered_dataset"
+        return target.kind
+
+    def _plot_path(self, session_root: Path, skill: str, label: str) -> Path:
+        return session_root / "artifacts" / f"{skill}_{slug(label)}.svg"
+
+    def _save_umap_plot(self, adata: Any, path: Path, color_by: str | None) -> None:
+        _, _, plt, np, _ = analysis_modules()
+        coords = adata.obsm.get("X_umap")
+        if coords is None or len(coords.shape) != 2 or coords.shape[1] < 2:
+            raise RuntimeError("当前对象缺少 `X_umap`，请先执行 run_umap。")
+
+        fig, ax = plt.subplots(figsize=(6.2, 4.8))
+        if color_by and color_by in adata.obs.columns:
+            series = adata.obs[color_by]
+            if getattr(series.dtype, "kind", "") in {"i", "u", "f"}:
+                scatter = ax.scatter(coords[:, 0], coords[:, 1], c=series.to_numpy(), s=8, cmap="viridis", linewidths=0)
+                fig.colorbar(scatter, ax=ax, fraction=0.045, pad=0.04)
+            else:
+                categories = series.astype("category")
+                codes = categories.cat.codes.to_numpy()
+                scatter = ax.scatter(coords[:, 0], coords[:, 1], c=codes, s=8, cmap="tab20", linewidths=0)
+                handles, labels = scatter.legend_elements()
+                legend_labels = list(categories.cat.categories)
+                ax.legend(handles, legend_labels[: len(handles)], title=color_by, loc="best", fontsize=7)
+        else:
+            ax.scatter(coords[:, 0], coords[:, 1], s=8, c="#2f7d4a", alpha=0.85, linewidths=0)
+
+        ax.set_title("UMAP")
+        ax.set_xlabel("UMAP1")
+        ax.set_ylabel("UMAP2")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        fig.tight_layout()
+        fig.savefig(path, format="svg")
+        plt.close(fig)
+
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
         skill = payload["skill"]
         session_id = payload["session_id"]
@@ -132,8 +269,7 @@ class RuntimeState:
         params = payload.get("params", {})
 
         if skill in {"inspect_dataset", "assess_dataset"}:
-            if not target:
-                raise RuntimeError(f"{skill} 需要一个目标对象")
+            target = self._require_target(target, skill)
             metadata = target.metadata or {}
             return {
                 "summary": f"{target.label}：{target.n_obs} 个细胞，{target.n_vars} 个基因，状态为 {format_object_state_zh(target.state)}。{describe_annotation_summary(metadata)}",
@@ -147,104 +283,246 @@ class RuntimeState:
                 },
             }
 
-        if skill == "subset_cells":
-            if not target:
-                raise RuntimeError("subset_cells 需要一个目标对象")
-            value = params.get("value", "subset")
-            new_n_obs = max(100, int(target.n_obs * 0.44))
-            return self._new_object_response(
+        if skill == "normalize_total":
+            target = self._require_target(target, skill)
+            _, sc, _, _, _ = analysis_modules()
+            adata = self._load_counts_adata(target)
+            target_sum = float(params.get("target_sum") or 1e4)
+            sc.pp.normalize_total(adata, target_sum=target_sum)
+            return self._persist_adata_object(
                 session_id=session_id,
                 session_root=session_root,
-                label=f"subset_{value}",
+                label=f"normalized_{target.label}",
+                kind=self._default_kind_after_processing(target),
+                adata=adata,
+                summary=f"已对 {target.label} 完成总表达归一化（target_sum={target_sum:g}）。",
+            )
+
+        if skill == "log1p_transform":
+            target = self._require_target(target, skill)
+            _, sc, _, _, _ = analysis_modules()
+            adata = self._load_counts_adata(target)
+            sc.pp.log1p(adata)
+            return self._persist_adata_object(
+                session_id=session_id,
+                session_root=session_root,
+                label=f"log1p_{target.label}",
+                kind=self._default_kind_after_processing(target),
+                adata=adata,
+                summary=f"已对 {target.label} 完成 log1p 变换。",
+            )
+
+        if skill == "select_hvg":
+            target = self._require_target(target, skill)
+            _, sc, _, _, _ = analysis_modules()
+            adata = self._load_adata(target)
+            assessment = (target.metadata or {}).get("assessment") or {}
+            needs_recipe = (
+                target.kind == "raw_dataset"
+                or assessment.get("preprocessing_state") == "raw_like"
+                or matrix_has_negative_values(adata.X)
+            )
+            if needs_recipe:
+                adata = self._load_counts_adata(target)
+                sc.pp.normalize_total(adata, target_sum=1e4)
+                sc.pp.log1p(adata)
+            n_top_genes = int(params.get("n_top_genes") or 2000)
+            flavor = str(params.get("flavor") or "seurat")
+            sc.pp.highly_variable_genes(adata, n_top_genes=n_top_genes, flavor=flavor, subset=False)
+            n_hvg = int(adata.var.get("highly_variable", []).sum()) if "highly_variable" in adata.var else 0
+            return self._persist_adata_object(
+                session_id=session_id,
+                session_root=session_root,
+                label=f"hvg_{target.label}",
+                kind=self._default_kind_after_processing(target),
+                adata=adata,
+                summary=f"已为 {target.label} 选择高变基因（n_top_genes={n_top_genes}，实际标记 {n_hvg} 个）。",
+            )
+
+        if skill == "run_pca":
+            target = self._require_target(target, skill)
+            _, sc, _, _, _ = analysis_modules()
+            adata = self._load_adata(target)
+            n_comps = int(params.get("n_comps") or 30)
+            if "highly_variable" in adata.var and bool(adata.var["highly_variable"].sum()):
+                adata = adata[:, adata.var["highly_variable"]].copy()
+            max_comps = max(2, min(n_comps, adata.n_obs - 1, adata.n_vars - 1))
+            sc.pp.pca(adata, n_comps=max_comps)
+            return self._persist_adata_object(
+                session_id=session_id,
+                session_root=session_root,
+                label=f"pca_{target.label}",
+                kind=self._default_kind_after_processing(target),
+                adata=adata,
+                summary=f"已为 {target.label} 计算 PCA（n_comps={max_comps}）。",
+            )
+
+        if skill == "compute_neighbors":
+            target = self._require_target(target, skill)
+            _, sc, _, _, _ = analysis_modules()
+            adata = self._load_adata(target)
+            if "X_pca" not in adata.obsm:
+                raise RuntimeError("当前对象缺少 `X_pca`，请先执行 run_pca。")
+            n_neighbors = int(params.get("n_neighbors") or 15)
+            use_rep = params.get("use_rep")
+            if use_rep:
+                sc.pp.neighbors(adata, n_neighbors=n_neighbors, use_rep=str(use_rep))
+            else:
+                sc.pp.neighbors(adata, n_neighbors=n_neighbors, n_pcs=min(30, adata.obsm["X_pca"].shape[1]))
+            return self._persist_adata_object(
+                session_id=session_id,
+                session_root=session_root,
+                label=f"neighbors_{target.label}",
+                kind=self._default_kind_after_processing(target),
+                adata=adata,
+                summary=f"已为 {target.label} 计算邻接图（n_neighbors={n_neighbors}）。",
+            )
+
+        if skill == "run_umap":
+            target = self._require_target(target, skill)
+            _, sc, _, _, _ = analysis_modules()
+            adata = self._load_adata(target)
+            if "neighbors" not in adata.uns and "connectivities" not in getattr(adata, "obsp", {}):
+                raise RuntimeError("当前对象缺少邻接图，请先执行 compute_neighbors。")
+            min_dist = float(params.get("min_dist") or 0.5)
+            sc.tl.umap(adata, min_dist=min_dist)
+            return self._persist_adata_object(
+                session_id=session_id,
+                session_root=session_root,
+                label=f"umap_{target.label}",
+                kind=self._default_kind_after_processing(target),
+                adata=adata,
+                summary=f"已为 {target.label} 计算 UMAP（min_dist={min_dist:g}）。",
+            )
+
+        if skill == "prepare_umap":
+            target = self._require_target(target, skill)
+            _, sc, _, _, _ = analysis_modules()
+            adata = self._load_counts_adata(target)
+            sc.pp.normalize_total(adata, target_sum=1e4)
+            sc.pp.log1p(adata)
+            sc.pp.highly_variable_genes(adata, n_top_genes=2000, flavor="seurat", subset=True)
+            sc.pp.pca(adata, n_comps=min(30, adata.n_obs - 1, adata.n_vars - 1))
+            sc.pp.neighbors(adata, n_neighbors=15, n_pcs=min(30, adata.obsm["X_pca"].shape[1]))
+            sc.tl.umap(adata)
+            return self._persist_adata_object(
+                session_id=session_id,
+                session_root=session_root,
+                label=f"prepared_{target.label}",
+                kind=self._default_kind_after_processing(target),
+                adata=adata,
+                summary=f"已为 {target.label} 完成常规预处理链，并生成 PCA、邻接图和 UMAP。",
+            )
+
+        if skill == "subset_cells":
+            target = self._require_target(target, skill)
+            adata = self._load_adata(target)
+            obs_field = str(params.get("obs_field") or "").strip()
+            op = str(params.get("op") or "eq").strip()
+            value = params.get("value")
+            if obs_field == "" or obs_field not in adata.obs.columns:
+                raise RuntimeError(f"当前对象缺少 obs 字段 `{obs_field}`。")
+
+            series = adata.obs[obs_field]
+            if op == "eq":
+                mask = series.astype(str) == str(value)
+            elif op == "in":
+                values = value if isinstance(value, list) else [value]
+                mask = series.astype(str).isin([str(item) for item in values])
+            elif op == "gt":
+                mask = series.astype(float) > float(value)
+            elif op == "lt":
+                mask = series.astype(float) < float(value)
+            else:
+                raise RuntimeError(f"不支持的筛选操作符：{op}")
+
+            subset = adata[mask.to_numpy()].copy()
+            if subset.n_obs == 0:
+                raise RuntimeError("筛选结果为空，请检查筛选条件。")
+            subset_label = f"subset_{obs_field}_{slug(str(value)) or 'selected'}"
+            return self._persist_adata_object(
+                session_id=session_id,
+                session_root=session_root,
+                label=subset_label,
                 kind="subset",
-                n_obs=new_n_obs,
-                n_vars=target.n_vars,
-                summary=f"已从 {target.label} 生成子集 subset_{value}，包含 {new_n_obs} 个细胞。",
+                adata=subset,
+                summary=f"已从 {target.label} 中筛选出 {subset.n_obs} 个细胞，生成子集 {subset_label}。",
             )
 
         if skill == "recluster":
-            if not target:
-                raise RuntimeError("recluster 需要一个目标对象")
+            target = self._require_target(target, skill)
+            _, sc, _, _, _ = analysis_modules()
+            adata = self._load_adata(target)
+            if "X_pca" not in adata.obsm:
+                raise RuntimeError("当前对象缺少 `X_pca`，请先执行 run_pca。")
+            if "neighbors" not in adata.uns and "connectivities" not in getattr(adata, "obsp", {}):
+                sc.pp.neighbors(adata, n_neighbors=15, n_pcs=min(30, adata.obsm["X_pca"].shape[1]))
             resolution = params.get("resolution", 0.6)
-            return self._new_object_response(
+            sc.tl.leiden(adata, resolution=float(resolution), key_added="leiden")
+            return self._persist_adata_object(
                 session_id=session_id,
                 session_root=session_root,
                 label=f"reclustered_{target.label}",
                 kind="reclustered_subset",
-                n_obs=target.n_obs,
-                n_vars=target.n_vars,
+                adata=adata,
                 summary=f"已对 {target.label} 完成重新聚类，分辨率为 {resolution}。",
             )
 
         if skill == "find_markers":
-            if not target:
-                raise RuntimeError("find_markers 需要一个目标对象")
+            target = self._require_target(target, skill)
+            _, sc, _, _, _ = analysis_modules()
+            adata = self._load_adata(target)
+            groupby = self._cluster_field(target, adata, str(params.get("groupby") or ""))
+            adata.obs[groupby] = adata.obs[groupby].astype("category")
             path = session_root / "artifacts" / f"markers_{slug(target.label)}.csv"
-            with path.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.writer(handle)
-                writer.writerow(["cluster", "gene", "score", "logfc"])
-                rows = [
-                    ("0", "WOX5", "18.2", "2.8"),
-                    ("1", "SCR", "15.6", "2.4"),
-                    ("2", "PLT1", "14.8", "2.2"),
-                    ("3", "CYCD6", "13.1", "1.9"),
-                ]
-                writer.writerows(rows)
+            sc.tl.rank_genes_groups(adata, groupby=groupby, method="wilcoxon", use_raw=adata.raw is not None)
+            markers = sc.get.rank_genes_groups_df(adata, group=None)
+            markers.to_csv(path, index=False)
             return {
-                "summary": f"已为 {target.label} 生成 marker 表。",
+                "summary": f"已为 {target.label} 生成 marker 表（groupby={groupby}）。",
                 "artifacts": [
                     {
                         "kind": "table",
                         "title": f"{target.label} 的 marker 表",
                         "path": str(path),
                         "content_type": "text/csv",
-                        "summary": "按 leiden 聚类汇总的高分 marker 基因。",
+                        "summary": f"按 {groupby} 汇总的 marker 基因结果。",
                     }
                 ],
-                "metadata": {"groupby": params.get("groupby", "leiden")},
+                "metadata": {"groupby": groupby},
             }
 
-        if skill in {"plot_umap", "plot_dotplot", "plot_violin"}:
-            if not target:
-                raise RuntimeError(f"{skill} 需要一个目标对象")
-            title, note = {
-                "plot_umap": ("UMAP 占位示意图", "当前不是基于真实 UMAP 坐标绘制。"),
-                "plot_dotplot": ("Marker 点图占位示意图", "当前不是基于真实表达矩阵绘制。"),
-                "plot_violin": ("基因小提琴图占位示意图", "当前不是基于真实表达矩阵绘制。"),
-            }[skill]
-            path = session_root / "artifacts" / f"{skill}_{slug(target.label)}.svg"
-            path.write_text(self._build_svg(title, target.label, note), encoding="utf-8")
+        if skill == "plot_umap":
+            target = self._require_target(target, skill)
+            adata = self._load_adata(target)
+            color_by = str(params.get("color_by") or "").strip()
+            if not color_by:
+                try:
+                    color_by = self._cluster_field(target, adata, None)
+                except RuntimeError:
+                    color_by = ""
+            if color_by and color_by not in adata.obs.columns:
+                color_by = self._cluster_field(target, adata, None)
+            path = self._plot_path(session_root, skill, target.label)
+            self._save_umap_plot(adata, path, color_by or None)
             return {
-                "summary": f"已生成 {target.label} 的 {title}。{note}",
+                "summary": f"已为 {target.label} 生成真实 UMAP 图。{f'着色字段：{color_by}。' if color_by else ''}",
                 "artifacts": [
                     {
                         "kind": "plot",
-                        "title": title,
+                        "title": f"{target.label} 的 UMAP 图",
                         "path": str(path),
                         "content_type": "image/svg+xml",
-                        "summary": f"{target.label} 的 {title}。{note}",
+                        "summary": f"{target.label} 的真实 UMAP 散点图。",
                     }
                 ],
-                "metadata": {"placeholder_plot": True, "note": note},
+                "metadata": {"placeholder_plot": False, "color_by": color_by or None},
             }
 
         if skill == "export_h5ad":
-            if not target:
-                raise RuntimeError("export_h5ad 需要一个目标对象")
+            target = self._require_target(target, skill)
             export_path = session_root / "objects" / f"{slug(target.label)}.h5ad"
-            export_path.write_text(
-                json.dumps(
-                    {
-                        "exported_from": target.backend_ref,
-                        "label": target.label,
-                        "kind": target.kind,
-                        "n_obs": target.n_obs,
-                        "n_vars": target.n_vars,
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
+            shutil.copy2(target.materialized_path, export_path)
             target.materialized_path = str(export_path)
             target.state = "materialized"
             return {
@@ -261,49 +539,6 @@ class RuntimeState:
             }
 
         raise RuntimeError(f"暂不支持的技能：{skill}")
-
-    def _new_object_response(
-        self,
-        session_id: str,
-        session_root: Path,
-        label: str,
-        kind: str,
-        n_obs: int,
-        n_vars: int,
-        summary: str,
-    ) -> dict[str, Any]:
-        backend_ref = self.next_ref(session_id)
-        materialized_path = session_root / "objects" / f"{slug(label)}.h5ad"
-        materialized_path.write_text(
-            json.dumps(
-                {
-                    "label": label,
-                    "kind": kind,
-                    "n_obs": n_obs,
-                    "n_vars": n_vars,
-                    "note": "占位派生对象",
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        obj = RuntimeObject(
-            backend_ref=backend_ref,
-            session_id=session_id,
-            label=label,
-            kind=kind,
-            n_obs=n_obs,
-            n_vars=n_vars,
-            state="resident",
-            in_memory=True,
-            materialized_path=str(materialized_path),
-            metadata={},
-        )
-        self.objects[backend_ref] = obj
-        return {
-            "summary": summary,
-            "object": self._descriptor(obj),
-        }
 
     def _descriptor(self, obj: RuntimeObject) -> dict[str, Any]:
         return {
@@ -395,34 +630,6 @@ class RuntimeState:
             "summary": "未在磁盘上找到样例 .h5ad，已使用回退演示数据初始化会话。",
         }
 
-    def _build_svg(self, title: str, label: str, note: str = "") -> str:
-        random.seed(f"{title}:{label}")
-        dots = []
-        for _ in range(26):
-            x = 60 + random.randint(0, 420)
-            y = 70 + random.randint(0, 220)
-            radius = 5 + random.randint(0, 8)
-            shade = 45 + random.randint(0, 40)
-            dots.append(
-                f'<circle cx="{x}" cy="{y}" r="{radius}" fill="hsl(135 30% {shade}%)" opacity="0.82" />'
-            )
-        rings = []
-        for idx in range(3):
-            rings.append(
-                f'<path d="M 60 {120 + idx * 60} C 180 {40 + idx * 50}, 300 {260 - idx * 30}, 480 {100 + idx * 50}" stroke="rgba(197,136,49,0.35)" fill="none" stroke-width="{2 + idx}" />'
-            )
-        return f"""
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 320">
-  <rect width="540" height="320" rx="24" fill="#f7faf2" />
-  <text x="36" y="48" font-size="24" font-family="IBM Plex Sans, sans-serif" fill="#234631">{title}</text>
-  <text x="36" y="76" font-size="14" font-family="IBM Plex Sans, sans-serif" fill="#68746c">{label}</text>
-  <text x="36" y="102" font-size="12" font-family="IBM Plex Sans, sans-serif" fill="#9b5b1d">{note}</text>
-  {''.join(rings)}
-  {''.join(dots)}
-</svg>
-""".strip()
-
-
 def log_runtime_event(event: str, **fields: Any) -> None:
     payload = {"event": event}
     for key, value in fields.items():
@@ -437,24 +644,29 @@ class RequestHandler(BaseHTTPRequestHandler):
         if self.path == "/healthz":
             payload = {
                 "status": "ok",
-                "runtime_mode": "hybrid_demo",
+                "runtime_mode": "live",
                 "real_h5ad_inspection": True,
-                "real_analysis_execution": False,
+                "real_analysis_execution": True,
                 "executable_skills": [
                     "inspect_dataset",
                     "assess_dataset",
+                    "normalize_total",
+                    "log1p_transform",
+                    "select_hvg",
+                    "run_pca",
+                    "compute_neighbors",
+                    "run_umap",
+                    "prepare_umap",
                     "subset_cells",
                     "recluster",
                     "find_markers",
                     "plot_umap",
-                    "plot_dotplot",
-                    "plot_violin",
                     "export_h5ad",
                 ],
                 "notes": [
                     "运行时会读取真实的 h5ad 结构和注释信息。",
-                    "subset、recluster、marker 和绘图等分析步骤目前仍是占位实现。",
-                    "plot_umap 当前返回的是占位 SVG，而不是真实 UMAP 坐标绘图。",
+                    "常规预处理链、subset、recluster、marker 和 UMAP 已切到真实 AnnData/Scanpy 执行。",
+                    "dotplot 和 violin 仍未开放给 planner，等真实实现完成后再升为 wired。",
                 ],
             }
             payload.update(STATE.environment_report)

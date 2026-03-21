@@ -30,6 +30,29 @@ func (p *FakePlanner) Mode() string {
 func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.Plan, error) {
 	lower := strings.ToLower(request.Message)
 	steps := make([]models.PlanStep, 0, 4)
+	wantsLegend := strings.Contains(lower, "legend") || strings.Contains(request.Message, "图例")
+	wantsPlot := strings.Contains(lower, "plot") || strings.Contains(request.Message, "画") || strings.Contains(request.Message, "绘") || wantsLegend
+	activeHasUMAP := objectHasEmbedding(request.ActiveObject, "X_umap")
+	recentPlotSkill := latestRecentPlotSkill(request)
+	wantsPlotFollowUp := strings.Contains(request.Message, "这个图") ||
+		strings.Contains(request.Message, "这张图") ||
+		strings.Contains(request.Message, "上一张图") ||
+		strings.Contains(request.Message, "刚才的图") ||
+		strings.Contains(request.Message, "改图") ||
+		strings.Contains(request.Message, "修改图") ||
+		strings.Contains(request.Message, "重画") ||
+		strings.Contains(request.Message, "不符合要求")
+
+	if strings.Contains(lower, "preprocess") || strings.Contains(request.Message, "预处理") {
+		steps = append(steps,
+			models.PlanStep{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active"},
+			models.PlanStep{ID: "step_2", Skill: "log1p_transform", TargetObjectID: "$prev"},
+			models.PlanStep{ID: "step_3", Skill: "select_hvg", TargetObjectID: "$prev"},
+			models.PlanStep{ID: "step_4", Skill: "run_pca", TargetObjectID: "$prev"},
+			models.PlanStep{ID: "step_5", Skill: "compute_neighbors", TargetObjectID: "$prev"},
+			models.PlanStep{ID: "step_6", Skill: "run_umap", TargetObjectID: "$prev"},
+		)
+	}
 
 	if strings.Contains(lower, "subset") || strings.Contains(request.Message, "拿出来") || strings.Contains(request.Message, "筛") || strings.Contains(request.Message, "cortex") {
 		value := "cortex"
@@ -37,9 +60,9 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 			value = "selected_group"
 		}
 		steps = append(steps, models.PlanStep{
-			ID:             "step_1",
+			ID:             stepID(len(steps) + 1),
 			Skill:          "subset_cells",
-			TargetObjectID: "$active",
+			TargetObjectID: targetFromPrevious(steps),
 			Params: map[string]any{
 				"obs_field": "cell_type",
 				"op":        "eq",
@@ -70,37 +93,25 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		})
 	}
 
-	if strings.Contains(lower, "umap") || strings.Contains(request.Message, "UMAP") || strings.Contains(request.Message, "降维") {
-		steps = append(steps, models.PlanStep{
-			ID:             stepID(len(steps) + 1),
-			Skill:          "plot_umap",
-			TargetObjectID: targetFromPrevious(steps),
-			Params: map[string]any{
-				"color_by": "leiden",
-			},
-		})
-	}
-
-	if strings.Contains(lower, "dotplot") || strings.Contains(request.Message, "点图") {
-		steps = append(steps, models.PlanStep{
-			ID:             stepID(len(steps) + 1),
-			Skill:          "plot_dotplot",
-			TargetObjectID: targetFromPrevious(steps),
-			Params: map[string]any{
-				"genes": []string{"WOX5", "SCR", "PLT1"},
-			},
-		})
-	}
-
-	if strings.Contains(lower, "violin") || strings.Contains(request.Message, "小提琴") {
-		steps = append(steps, models.PlanStep{
-			ID:             stepID(len(steps) + 1),
-			Skill:          "plot_violin",
-			TargetObjectID: targetFromPrevious(steps),
-			Params: map[string]any{
-				"genes": []string{"WOX5", "SCR"},
-			},
-		})
+	if strings.Contains(lower, "umap") || strings.Contains(request.Message, "UMAP") || strings.Contains(request.Message, "降维") || wantsLegend || (wantsPlotFollowUp && recentPlotSkill == "plot_umap") {
+		if !hasSkill(steps, "run_umap") && ((!wantsPlot && !wantsPlotFollowUp) || !activeHasUMAP) {
+			steps = append(steps, models.PlanStep{
+				ID:             stepID(len(steps) + 1),
+				Skill:          "run_umap",
+				TargetObjectID: targetFromPrevious(steps),
+				Params:         map[string]any{},
+			})
+		}
+		if !hasSkill(steps, "plot_umap") {
+			steps = append(steps, models.PlanStep{
+				ID:             stepID(len(steps) + 1),
+				Skill:          "plot_umap",
+				TargetObjectID: targetFromPrevious(steps),
+				Params: map[string]any{
+					"color_by": "leiden",
+				},
+			})
+		}
 	}
 
 	if strings.Contains(lower, "export") || strings.Contains(request.Message, "导出") {
@@ -147,6 +158,72 @@ func targetFromPrevious(steps []models.PlanStep) string {
 		return "$active"
 	}
 	return "$prev"
+}
+
+func hasSkill(steps []models.PlanStep, skill string) bool {
+	for _, step := range steps {
+		if step.Skill == skill {
+			return true
+		}
+	}
+	return false
+}
+
+func objectHasEmbedding(object *models.ObjectMeta, embedding string) bool {
+	if object == nil || object.Metadata == nil {
+		return false
+	}
+
+	value, ok := object.Metadata["obsm_keys"]
+	if !ok {
+		return false
+	}
+
+	switch typed := value.(type) {
+	case []string:
+		for _, item := range typed {
+			if item == embedding {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if text, ok := item.(string); ok && text == embedding {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func latestRecentPlotSkill(request PlanningRequest) string {
+	for index := len(request.RecentJobs) - 1; index >= 0; index-- {
+		job := request.RecentJobs[index]
+		if job == nil {
+			continue
+		}
+		for stepIndex := len(job.Steps) - 1; stepIndex >= 0; stepIndex-- {
+			step := job.Steps[stepIndex]
+			if strings.HasPrefix(step.Skill, "plot_") {
+				return step.Skill
+			}
+		}
+	}
+
+	for index := len(request.RecentArtifacts) - 1; index >= 0; index-- {
+		artifact := request.RecentArtifacts[index]
+		if artifact == nil || artifact.Kind != models.ArtifactPlot {
+			continue
+		}
+		title := strings.ToLower(artifact.Title)
+		summary := strings.ToLower(artifact.Summary)
+		if strings.Contains(title, "umap") || strings.Contains(summary, "umap") {
+			return "plot_umap"
+		}
+	}
+
+	return ""
 }
 
 func NormalizePlan(plan models.Plan) models.Plan {

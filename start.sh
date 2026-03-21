@@ -25,6 +25,39 @@ fi
 : "${SCAGENT_OPENAI_REASONING_EFFORT:=low}"
 : "${SCAGENT_OPENAI_API_KEY:=}"
 : "${SCAGENT_USE_PIXI:=1}"
+: "${SCAGENT_PIXI_BIN:=}"
+: "${SCAGENT_NUMBA_CACHE_DIR:=/tmp/scagent-numba}"
+: "${SCAGENT_MPLCONFIGDIR:=/tmp/scagent-mpl}"
+
+export NUMBA_CACHE_DIR="${SCAGENT_NUMBA_CACHE_DIR}"
+export MPLCONFIGDIR="${SCAGENT_MPLCONFIGDIR}"
+export MPLBACKEND="${MPLBACKEND:-Agg}"
+
+resolve_pixi_bin() {
+  if [[ -n "${SCAGENT_PIXI_BIN}" ]]; then
+    if [[ -x "${SCAGENT_PIXI_BIN}" ]]; then
+      printf '%s\n' "${SCAGENT_PIXI_BIN}"
+      return 0
+    fi
+    echo "SCAGENT_PIXI_BIN is set but not executable: ${SCAGENT_PIXI_BIN}" >&2
+    return 1
+  fi
+
+  if command -v pixi >/dev/null 2>&1; then
+    command -v pixi
+    return 0
+  fi
+
+  local candidate
+  for candidate in "${HOME}/.pixi/bin/pixi" "/home/xzg/.pixi/bin/pixi"; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
 
 if [[ "${SCAGENT_PLANNER_MODE}" == "llm" && -z "${SCAGENT_OPENAI_API_KEY}" ]]; then
   echo "SCAGENT_OPENAI_API_KEY is required when SCAGENT_PLANNER_MODE=llm" >&2
@@ -33,12 +66,12 @@ fi
 
 runtime_cmd=(python3 runtime/server.py)
 if [[ "${SCAGENT_USE_PIXI}" != "0" ]]; then
-  if ! command -v pixi >/dev/null 2>&1; then
+  if ! pixi_bin="$(resolve_pixi_bin)"; then
     echo "SCAGENT_USE_PIXI=${SCAGENT_USE_PIXI}, but pixi was not found in PATH." >&2
-    echo "Install pixi or set SCAGENT_USE_PIXI=0 to run the runtime with python3." >&2
+    echo "Add pixi to PATH, set SCAGENT_PIXI_BIN=/path/to/pixi, or set SCAGENT_USE_PIXI=0 to run the runtime with python3." >&2
     exit 1
   fi
-  runtime_cmd=(pixi run runtime)
+  runtime_cmd=("${pixi_bin}" run runtime)
 fi
 
 cleanup() {

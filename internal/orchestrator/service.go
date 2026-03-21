@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,10 +26,13 @@ type Service struct {
 }
 
 type PlanningRequest struct {
-	Message      string               `json:"message"`
-	Session      *models.Session      `json:"session,omitempty"`
-	ActiveObject *models.ObjectMeta   `json:"active_object,omitempty"`
-	Objects      []*models.ObjectMeta `json:"objects,omitempty"`
+	Message         string               `json:"message"`
+	Session         *models.Session      `json:"session,omitempty"`
+	ActiveObject    *models.ObjectMeta   `json:"active_object,omitempty"`
+	Objects         []*models.ObjectMeta `json:"objects,omitempty"`
+	RecentMessages  []*models.Message    `json:"recent_messages,omitempty"`
+	RecentJobs      []*models.Job        `json:"recent_jobs,omitempty"`
+	RecentArtifacts []*models.Artifact   `json:"recent_artifacts,omitempty"`
 }
 
 type PlannerDebugPreview struct {
@@ -118,15 +122,8 @@ func (s *Service) Status(ctx context.Context) *SystemStatus {
 }
 
 func (s *Service) PreviewPlan(ctx context.Context, message string) (models.Plan, error) {
-	plan, err := s.planner.Plan(ctx, PlanningRequest{Message: message})
-	if err != nil {
-		return models.Plan{}, err
-	}
-	plan = NormalizePlan(plan)
-	if err := s.skills.ValidatePlan(plan); err != nil {
-		return models.Plan{}, err
-	}
-	return plan, nil
+	plan, _, err := s.buildExecutablePlan(ctx, PlanningRequest{Message: message})
+	return plan, err
 }
 
 func (s *Service) PreviewFakePlan(ctx context.Context, message string) (models.Plan, error) {
@@ -376,19 +373,18 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		return
 	}
 
-	plan, err := s.planner.Plan(ctx, planningRequest)
+	plan, fallbackNote, err := s.buildExecutablePlan(ctx, planningRequest)
 	if err != nil {
 		s.failJob(sessionID, jobID, fmt.Errorf("规划器执行失败：%w", err))
 		return
 	}
-	plan = NormalizePlan(plan)
-	if err := s.skills.ValidatePlan(plan); err != nil {
-		s.failJob(sessionID, jobID, fmt.Errorf("执行计划不合法：%w", err))
-		return
-	}
 
 	job.Plan = &plan
-	job.Summary = "编排器已接受执行计划。"
+	if fallbackNote != "" {
+		job.Summary = fallbackNote
+	} else {
+		job.Summary = "编排器已接受执行计划。"
+	}
 	s.store.SaveJob(job)
 	s.publishJob(sessionID, jobID)
 
@@ -529,6 +525,34 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 	s.publishSnapshot(sessionID)
 }
 
+func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningRequest) (models.Plan, string, error) {
+	plan, err := s.planner.Plan(ctx, request)
+	if err != nil {
+		return models.Plan{}, "", err
+	}
+
+	plan = NormalizePlan(plan)
+	validateErr := s.skills.ValidatePlan(plan)
+	if validateErr == nil {
+		return plan, "", nil
+	}
+
+	if s.PlannerMode() != "llm" {
+		return models.Plan{}, "", fmt.Errorf("执行计划不合法：%w", validateErr)
+	}
+
+	fallbackPlan, fallbackErr := NewFakePlanner().Plan(ctx, request)
+	if fallbackErr != nil {
+		return models.Plan{}, "", fmt.Errorf("执行计划不合法：%w；规则兜底也失败：%v", validateErr, fallbackErr)
+	}
+	fallbackPlan = NormalizePlan(fallbackPlan)
+	if fallbackValidateErr := s.skills.ValidatePlan(fallbackPlan); fallbackValidateErr != nil {
+		return models.Plan{}, "", fmt.Errorf("执行计划不合法：%w；规则兜底也失败：%v", validateErr, fallbackValidateErr)
+	}
+
+	return fallbackPlan, "LLM 规划结果为空或无效，已切换到规则兜底计划。", nil
+}
+
 func (s *Service) failJob(sessionID, jobID string, err error) {
 	job, ok := s.store.GetJob(jobID)
 	if !ok {
@@ -651,10 +675,13 @@ func (s *Service) buildPlanningRequest(sessionRecord *models.Session, message st
 	}
 
 	return PlanningRequest{
-		Message:      message,
-		Session:      snapshot.Session,
-		ActiveObject: activeObject,
-		Objects:      snapshot.Objects,
+		Message:         message,
+		Session:         snapshot.Session,
+		ActiveObject:    activeObject,
+		Objects:         snapshot.Objects,
+		RecentMessages:  trimRecentMessages(snapshot.Messages, message, 6),
+		RecentJobs:      trimRecentJobs(snapshot.Jobs, 3),
+		RecentArtifacts: trimRecentArtifacts(snapshot.Artifacts, 4),
 	}, nil
 }
 
@@ -676,4 +703,56 @@ func sanitizeUploadName(name string) (string, error) {
 		return "", fmt.Errorf("上传文件名不合法")
 	}
 	return safe, nil
+}
+
+func trimRecentMessages(messages []*models.Message, currentMessage string, limit int) []*models.Message {
+	if len(messages) == 0 || limit <= 0 {
+		return nil
+	}
+
+	end := len(messages)
+	if last := messages[end-1]; last != nil && last.Role == models.MessageUser && strings.TrimSpace(last.Content) == strings.TrimSpace(currentMessage) {
+		end--
+	}
+	if end <= 0 {
+		return nil
+	}
+
+	start := end - limit
+	if start < 0 {
+		start = 0
+	}
+	return messages[start:end]
+}
+
+func trimRecentJobs(jobs []*models.Job, limit int) []*models.Job {
+	if len(jobs) == 0 || limit <= 0 {
+		return nil
+	}
+
+	out := make([]*models.Job, 0, limit)
+	for index := len(jobs) - 1; index >= 0 && len(out) < limit; index-- {
+		job := jobs[index]
+		if job == nil {
+			continue
+		}
+		if job.Status == models.JobQueued || job.Status == models.JobRunning {
+			continue
+		}
+		out = append(out, job)
+	}
+	slices.Reverse(out)
+	return out
+}
+
+func trimRecentArtifacts(artifacts []*models.Artifact, limit int) []*models.Artifact {
+	if len(artifacts) == 0 || limit <= 0 {
+		return nil
+	}
+
+	start := len(artifacts) - limit
+	if start < 0 {
+		start = 0
+	}
+	return artifacts[start:]
 }

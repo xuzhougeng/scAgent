@@ -197,6 +197,11 @@ func (p *LLMPlanner) instructions(requestPayload PlanningRequest) string {
 		"Use \"$active\" for the current object and \"$prev\" for chaining.",
 		"Do not invent parameters outside the skill schemas.",
 		"Prefer the fewest valid steps needed to satisfy the request.",
+		"Compose multiple skills when the user asks for a workflow, not just a single action.",
+		"If the user asks for routine preprocessing, prefer a chain such as normalize_total -> log1p_transform -> select_hvg -> run_pca -> compute_neighbors -> run_umap when those skills are available and appropriate.",
+		"If the request is about plot presentation details such as legends, colors, or labels, prefer the closest visualization skill such as plot_umap instead of returning an empty plan.",
+		"Treat recent_messages, recent_jobs, and recent_artifacts as conversation context for follow-up requests such as '把这个图改一下' or '把图例加上'.",
+		"Never return an empty steps array.",
 		"Available skills:",
 	}
 
@@ -398,7 +403,7 @@ func compactJSON(value string) string {
 }
 
 func formatPlanningContext(request PlanningRequest) []string {
-	lines := make([]string, 0, 8)
+	lines := make([]string, 0, 20)
 	if request.Session != nil {
 		lines = append(lines, fmt.Sprintf("- session_id=%s", request.Session.ID))
 	}
@@ -411,12 +416,38 @@ func formatPlanningContext(request PlanningRequest) []string {
 
 	if len(request.Objects) == 0 {
 		lines = append(lines, "- objects=none")
-		return lines
+	} else {
+		lines = append(lines, "- objects:")
+		for _, object := range request.Objects {
+			lines = append(lines, "  "+formatObjectContext(object))
+		}
 	}
 
-	lines = append(lines, "- objects:")
-	for _, object := range request.Objects {
-		lines = append(lines, "  "+formatObjectContext(object))
+	if len(request.RecentMessages) == 0 {
+		lines = append(lines, "- recent_messages=none")
+	} else {
+		lines = append(lines, "- recent_messages:")
+		for _, message := range request.RecentMessages {
+			lines = append(lines, "  "+formatMessageContext(message))
+		}
+	}
+
+	if len(request.RecentJobs) == 0 {
+		lines = append(lines, "- recent_jobs=none")
+	} else {
+		lines = append(lines, "- recent_jobs:")
+		for _, job := range request.RecentJobs {
+			lines = append(lines, "  "+formatJobContext(job))
+		}
+	}
+
+	if len(request.RecentArtifacts) == 0 {
+		lines = append(lines, "- recent_artifacts=none")
+	} else {
+		lines = append(lines, "- recent_artifacts:")
+		for _, artifact := range request.RecentArtifacts {
+			lines = append(lines, "  "+formatArtifactContext(artifact))
+		}
 	}
 	return lines
 }
@@ -444,4 +475,51 @@ func mustMarshalJSON(value any) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+func formatMessageContext(message *models.Message) string {
+	if message == nil {
+		return "message=nil"
+	}
+	return fmt.Sprintf("role=%s | content=%s", message.Role, truncateText(message.Content, 200))
+}
+
+func formatJobContext(job *models.Job) string {
+	if job == nil {
+		return "job=nil"
+	}
+	stepSkills := make([]string, 0, len(job.Steps))
+	for _, step := range job.Steps {
+		stepSkills = append(stepSkills, step.Skill)
+	}
+	return fmt.Sprintf(
+		"id=%s | status=%s | summary=%s | steps=%s",
+		job.ID,
+		job.Status,
+		truncateText(job.Summary, 200),
+		strings.Join(stepSkills, ","),
+	)
+}
+
+func formatArtifactContext(artifact *models.Artifact) string {
+	if artifact == nil {
+		return "artifact=nil"
+	}
+	return fmt.Sprintf(
+		"kind=%s | title=%s | summary=%s",
+		artifact.Kind,
+		truncateText(artifact.Title, 120),
+		truncateText(artifact.Summary, 160),
+	)
+}
+
+func truncateText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	if limit <= 3 {
+		return text[:limit]
+	}
+	return text[:limit-3] + "..."
 }

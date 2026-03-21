@@ -25,6 +25,8 @@ pixi install
 pixi run doctor
 ```
 
+If `pixi` is installed but not in `PATH`, `start.sh` also accepts `SCAGENT_PIXI_BIN=/absolute/path/to/pixi`.
+
 Start the Python runtime inside Pixi:
 
 ```bash

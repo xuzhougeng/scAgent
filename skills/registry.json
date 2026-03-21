@@ -177,7 +177,7 @@
       "name": "normalize_total",
       "label": "Normalize total",
       "category": "preprocessing",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Normalize per-cell counts to a common library size.",
       "target_kinds": ["raw_dataset", "filtered_dataset", "subset", "reclustered_subset"],
       "input": {
@@ -201,7 +201,7 @@
       "name": "log1p_transform",
       "label": "Log1p transform",
       "category": "preprocessing",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Apply log1p transformation to the expression matrix.",
       "target_kinds": ["raw_dataset", "filtered_dataset", "subset", "reclustered_subset"],
       "input": {
@@ -220,7 +220,7 @@
       "name": "select_hvg",
       "label": "Select HVGs",
       "category": "preprocessing",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Select highly variable genes for downstream analysis.",
       "target_kinds": ["raw_dataset", "filtered_dataset", "subset", "reclustered_subset"],
       "input": {
@@ -273,7 +273,7 @@
       "name": "run_pca",
       "label": "Run PCA",
       "category": "embedding",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Compute principal components for the target object.",
       "target_kinds": ["filtered_dataset", "subset", "reclustered_subset"],
       "input": {
@@ -297,7 +297,7 @@
       "name": "compute_neighbors",
       "label": "Compute neighbors",
       "category": "embedding",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Build a neighbor graph from PCA or another representation.",
       "target_kinds": ["filtered_dataset", "subset", "reclustered_subset"],
       "input": {
@@ -326,7 +326,7 @@
       "name": "run_umap",
       "label": "Run UMAP",
       "category": "embedding",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Compute a UMAP embedding for the target object.",
       "target_kinds": ["filtered_dataset", "subset", "reclustered_subset"],
       "input": {
@@ -350,7 +350,7 @@
       "name": "prepare_umap",
       "label": "Prepare UMAP prerequisites",
       "category": "embedding",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Run the preprocessing chain needed before computing a UMAP embedding when the current object is still raw-like.",
       "target_kinds": ["raw_dataset", "filtered_dataset", "subset", "reclustered_subset"],
       "input": {
@@ -375,7 +375,7 @@
       "label": "Plot UMAP",
       "category": "visualization",
       "support_level": "wired",
-      "description": "Render a UMAP-like overview plot for the target object.",
+      "description": "Render a UMAP plot from real coordinates on the target object.",
       "target_kinds": ["raw_dataset", "filtered_dataset", "subset", "reclustered_subset"],
       "input": {
         "target_object_id": {
@@ -665,7 +665,7 @@
       "name": "plot_dotplot",
       "label": "Plot dotplot",
       "category": "visualization",
-      "support_level": "wired",
+      "support_level": "planned",
       "description": "Render a dotplot summary for selected genes or markers.",
       "target_kinds": ["subset", "reclustered_subset"],
       "input": {
@@ -689,7 +689,7 @@
       "name": "plot_violin",
       "label": "Plot violin",
       "category": "visualization",
-      "support_level": "wired",
+      "support_level": "planned",
       "description": "Render a violin-style summary plot for one or more genes.",
       "target_kinds": ["subset", "reclustered_subset"],
       "input": {

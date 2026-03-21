@@ -81,3 +81,12 @@
   - 操作教程
   - 测试案例
   - 架构说明
+
+## Tool 扩展
+
+如果你要新增自定义 tool，直接看：
+
+- [自定义 Tool 指南](custom-tools.md)
+- [Skill Catalog](skill-catalog.md)
+
+前者说明 registry、runtime 和 planner 三层怎么接；后者说明当前哪些 skill 已经是 `wired`，哪些还只是 `planned`。

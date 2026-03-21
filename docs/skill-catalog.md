@@ -22,17 +22,17 @@ This catalog organizes common single-cell analysis skills by workflow stage.
 
 ## Preprocessing
 
-- `normalize_total` (`planned`): library-size normalization
-- `log1p_transform` (`planned`): log1p transform counts
-- `select_hvg` (`planned`): select highly variable genes
+- `normalize_total` (`wired`): library-size normalization
+- `log1p_transform` (`wired`): log1p transform counts
+- `select_hvg` (`wired`): select highly variable genes
 - `scale_matrix` (`planned`): scale expression matrix
 
 ## Embedding
 
-- `run_pca` (`planned`): compute principal components
-- `compute_neighbors` (`planned`): build neighbor graph
-- `run_umap` (`planned`): compute UMAP embedding
-- `prepare_umap` (`planned`): run the preprocessing chain needed before UMAP
+- `run_pca` (`wired`): compute principal components
+- `compute_neighbors` (`wired`): build neighbor graph
+- `run_umap` (`wired`): compute UMAP embedding
+- `prepare_umap` (`wired`): run the preprocessing chain needed before UMAP
 
 ## Subsetting And Scoring
 
@@ -58,8 +58,8 @@ This catalog organizes common single-cell analysis skills by workflow stage.
 
 - `plot_umap` (`wired`): UMAP overview
 - `plot_gene_umap` (`planned`): UMAP colored by gene expression
-- `plot_dotplot` (`wired`): marker or gene dotplot
-- `plot_violin` (`wired`): violin plot for genes
+- `plot_dotplot` (`planned`): marker or gene dotplot
+- `plot_violin` (`planned`): violin plot for genes
 - `plot_heatmap` (`planned`): heatmap for selected genes
 - `plot_celltype_composition` (`planned`): cell-type composition by sample or condition
 
@@ -74,7 +74,7 @@ This catalog organizes common single-cell analysis skills by workflow stage.
 
 ## Suggested Implementation Order
 
-If you want to turn the current fake runtime into a real single-cell runtime, the best order is:
+If you want to extend the runtime with new real analysis skills, the best order is:
 
 1. `inspect_dataset`
 2. `filter_cells`

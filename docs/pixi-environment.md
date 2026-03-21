@@ -16,6 +16,8 @@ Install Pixi itself with the official installer first, then create the environme
 pixi install
 ```
 
+If `pixi` is not in `PATH`, set `SCAGENT_PIXI_BIN=/absolute/path/to/pixi` before running `./start.sh`.
+
 Run the environment doctor:
 
 ```bash
@@ -49,7 +51,8 @@ The Pixi environment exports:
 - `SCAGENT_RUNTIME_HOST=127.0.0.1`
 - `SCAGENT_RUNTIME_PORT=8081`
 - `MPLBACKEND=Agg`
-- `MPLCONFIGDIR=.pixi/matplotlib`
+- `MPLCONFIGDIR=/tmp/scagent-mpl`
+- `NUMBA_CACHE_DIR=/tmp/scagent-numba`
 
 These defaults keep the runtime predictable and avoid polluting the user home directory with matplotlib cache files.
 
