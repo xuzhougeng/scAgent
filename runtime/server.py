@@ -751,7 +751,8 @@ class RuntimeState:
             persist_output = bool(params.get("persist_output"))
             stdout_buffer = io.StringIO()
             stderr_buffer = io.StringIO()
-            local_env: dict[str, Any] = {
+            exec_env: dict[str, Any] = {
+                "__builtins__": SAFE_EXEC_BUILTINS,
                 "adata": adata,
                 "counts_adata": counts_adata,
                 "sc": sc,
@@ -768,18 +769,21 @@ class RuntimeState:
                 "figure": None,
                 "result_table": None,
             }
+            plt.close("all")
             with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
-                exec(code, {"__builtins__": SAFE_EXEC_BUILTINS}, local_env)
+                exec(code, exec_env, exec_env)
 
             stdout_text = stdout_buffer.getvalue().strip()
             stderr_text = stderr_buffer.getvalue().strip()
-            result_summary = str(local_env.get("result_summary") or "").strip()
-            output_adata = local_env.get("output_adata")
-            if output_adata is None and bool(local_env.get("persist_output")):
-                output_adata = local_env.get("adata")
+            result_summary = str(exec_env.get("result_summary") or "").strip()
+            output_adata = exec_env.get("output_adata")
+            if output_adata is None and bool(exec_env.get("persist_output")):
+                output_adata = exec_env.get("adata")
 
             artifacts: list[dict[str, Any]] = []
-            figure = local_env.get("figure")
+            figure = exec_env.get("figure")
+            if figure is None and plt.get_fignums():
+                figure = plt.gcf()
             if figure is not None and hasattr(figure, "savefig"):
                 figure_path = self._save_custom_figure(figure, session_root, f"custom_plot_{slug(output_label)}")
                 artifacts.append(
@@ -792,7 +796,7 @@ class RuntimeState:
                     }
                 )
 
-            result_table = local_env.get("result_table")
+            result_table = exec_env.get("result_table")
             if result_table is not None and hasattr(result_table, "to_csv"):
                 table_path = self._save_custom_table(result_table, session_root, f"custom_table_{slug(output_label)}")
                 artifacts.append(
