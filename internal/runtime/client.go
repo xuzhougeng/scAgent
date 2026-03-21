@@ -1,0 +1,184 @@
+package runtime
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"scagent/internal/models"
+)
+
+type Service interface {
+	Health(ctx context.Context) error
+	Status(ctx context.Context) (*HealthStatus, error)
+	InitSession(ctx context.Context, payload InitSessionRequest) (*InitSessionResponse, error)
+	LoadFile(ctx context.Context, payload LoadFileRequest) (*LoadFileResponse, error)
+	Execute(ctx context.Context, payload ExecuteRequest) (*ExecuteResponse, error)
+}
+
+type Client struct {
+	baseURL    string
+	httpClient *http.Client
+}
+
+func NewClient(baseURL string) *Client {
+	return &Client{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+type InitSessionRequest struct {
+	SessionID   string `json:"session_id"`
+	DatasetID   string `json:"dataset_id"`
+	Label       string `json:"label"`
+	SessionRoot string `json:"session_root"`
+}
+
+type ObjectDescriptor struct {
+	BackendRef       string             `json:"backend_ref"`
+	Kind             models.ObjectKind  `json:"kind"`
+	Label            string             `json:"label"`
+	NObs             int                `json:"n_obs"`
+	NVars            int                `json:"n_vars"`
+	State            models.ObjectState `json:"state"`
+	InMemory         bool               `json:"in_memory"`
+	MaterializedPath string             `json:"materialized_path,omitempty"`
+	Metadata         map[string]any     `json:"metadata,omitempty"`
+}
+
+type ArtifactDescriptor struct {
+	Kind        models.ArtifactKind `json:"kind"`
+	Title       string              `json:"title"`
+	Path        string              `json:"path"`
+	ContentType string              `json:"content_type"`
+	Summary     string              `json:"summary"`
+}
+
+type InitSessionResponse struct {
+	Object  ObjectDescriptor `json:"object"`
+	Summary string           `json:"summary"`
+}
+
+type LoadFileRequest struct {
+	SessionID string `json:"session_id"`
+	FilePath  string `json:"file_path"`
+	Label     string `json:"label"`
+}
+
+type LoadFileResponse struct {
+	Object  ObjectDescriptor `json:"object"`
+	Summary string           `json:"summary"`
+}
+
+type ExecuteRequest struct {
+	SessionID        string         `json:"session_id"`
+	RequestID        string         `json:"request_id"`
+	Skill            string         `json:"skill"`
+	TargetBackendRef string         `json:"target_backend_ref,omitempty"`
+	Params           map[string]any `json:"params,omitempty"`
+	SessionRoot      string         `json:"session_root"`
+}
+
+type ExecuteResponse struct {
+	Summary    string               `json:"summary"`
+	Object     *ObjectDescriptor    `json:"object,omitempty"`
+	Artifacts  []ArtifactDescriptor `json:"artifacts,omitempty"`
+	Metadata   map[string]any       `json:"metadata,omitempty"`
+	ActiveHint string               `json:"active_hint,omitempty"`
+}
+
+type HealthStatus struct {
+	Status                string   `json:"status"`
+	RuntimeMode           string   `json:"runtime_mode,omitempty"`
+	RealH5ADInspection    bool     `json:"real_h5ad_inspection"`
+	RealAnalysisExecution bool     `json:"real_analysis_execution"`
+	ExecutableSkills      []string `json:"executable_skills,omitempty"`
+	Notes                 []string `json:"notes,omitempty"`
+}
+
+func (c *Client) Health(ctx context.Context) error {
+	_, err := c.Status(ctx)
+	return err
+}
+
+func (c *Client) Status(ctx context.Context) (*HealthStatus, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/healthz", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("runtime health request: %w", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("runtime health returned %s", response.Status)
+	}
+
+	var status HealthStatus
+	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+		return nil, fmt.Errorf("decode runtime health response: %w", err)
+	}
+	return &status, nil
+}
+
+func (c *Client) InitSession(ctx context.Context, payload InitSessionRequest) (*InitSessionResponse, error) {
+	var response InitSessionResponse
+	if err := c.postJSON(ctx, "/sessions/init", payload, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) Execute(ctx context.Context, payload ExecuteRequest) (*ExecuteResponse, error) {
+	var response ExecuteResponse
+	if err := c.postJSON(ctx, "/execute", payload, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) LoadFile(ctx context.Context, payload LoadFileRequest) (*LoadFileResponse, error) {
+	var response LoadFileResponse
+	if err := c.postJSON(ctx, "/sessions/load_file", payload, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) postJSON(ctx context.Context, path string, payload any, out any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal runtime request: %w", err)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create runtime request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("runtime %s request: %w", path, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("runtime %s returned %s", path, response.Status)
+	}
+
+	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode runtime response: %w", err)
+	}
+	return nil
+}

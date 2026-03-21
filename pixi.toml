@@ -1,0 +1,32 @@
+[project]
+name = "scagent-analysis"
+version = "0.1.0"
+description = "Pinned Python analysis runtime for scAgent"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-64", "osx-arm64"]
+
+[activation.env]
+MPLBACKEND = "Agg"
+MPLCONFIGDIR = ".pixi/matplotlib"
+PYTHONUNBUFFERED = "1"
+SCAGENT_RUNTIME_HOST = "127.0.0.1"
+SCAGENT_RUNTIME_PORT = "8081"
+
+[dependencies]
+python = "3.11.*"
+numpy = "1.26.*"
+scipy = "1.13.*"
+pandas = "2.2.*"
+anndata = "0.10.*"
+scanpy = "1.10.*"
+h5py = "3.11.*"
+matplotlib-base = "3.8.*"
+scikit-learn = "1.5.*"
+umap-learn = "0.5.*"
+python-igraph = "0.11.*"
+leidenalg = "0.10.*"
+seaborn = "0.13.*"
+
+[tasks]
+doctor = "python runtime/doctor.py"
+runtime = "python runtime/server.py"
