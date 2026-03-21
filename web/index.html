@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>scAgent Control Plane</title>
+    <title>scAgent 分析台</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="shell">
       <aside class="panel explorer">
         <div class="panel-head">
-          <p class="eyebrow">Object Explorer</p>
-          <h1>Session Objects</h1>
+          <p class="eyebrow">对象浏览</p>
+          <h1>会话对象</h1>
         </div>
         <div id="sessionMeta" class="session-meta"></div>
         <div id="objectTree" class="object-tree"></div>
@@ -19,16 +19,16 @@
 
       <main class="panel console">
         <div class="panel-head">
-          <p class="eyebrow">Chat + Command</p>
+          <p class="eyebrow">对话与指令</p>
           <div>
-            <h2>Control Plane</h2>
-            <a class="inline-link" href="/help.html" target="_blank" rel="noreferrer">Open Help</a>
+            <h2>分析控制台</h2>
+            <a class="inline-link" href="/help.html" target="_blank" rel="noreferrer">打开帮助</a>
           </div>
         </div>
         <form id="uploadForm" class="upload-bar">
-          <label class="upload-label" for="fileInput">Upload h5ad</label>
+          <label class="upload-label" for="fileInput">上传 h5ad</label>
           <input id="fileInput" name="file" type="file" accept=".h5ad,.ha5d" />
-          <button type="submit" class="ghost-button">Attach Dataset</button>
+          <button type="submit" class="ghost-button">附加数据集</button>
         </form>
         <div id="uploadStatus" class="upload-status muted"></div>
         <div id="quickActions" class="quick-actions"></div>
@@ -39,18 +39,18 @@
             rows="3"
             placeholder="例如：把 cortex 细胞拿出来重新聚类，然后画一下 marker"
           ></textarea>
-          <button type="submit">Run</button>
+          <button type="submit">运行</button>
         </form>
         <div class="planner-tools">
-          <button id="plannerPreviewButton" type="button" class="ghost-button">Preview Planner Context</button>
+          <button id="plannerPreviewButton" type="button" class="ghost-button">预览规划上下文</button>
           <div id="plannerPreviewStatus" class="muted"></div>
         </div>
       </main>
 
       <aside class="panel inspector">
         <div class="panel-head">
-          <p class="eyebrow">Inspector / Context</p>
-          <h2>Active Context</h2>
+          <p class="eyebrow">检查器 / 上下文</p>
+          <h2>当前上下文</h2>
         </div>
         <div id="systemStatus" class="system-status"></div>
         <div id="inspector" class="inspector-body"></div>
@@ -69,11 +69,11 @@
       <div id="imageModalBackdrop" class="image-modal-backdrop"></div>
       <div class="image-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="imageModalTitle">
         <div class="image-modal-head">
-          <h3 id="imageModalTitle">Artifact Preview</h3>
+          <h3 id="imageModalTitle">结果预览</h3>
           <div class="image-modal-actions">
-            <a id="imageModalOpen" class="inline-link" target="_blank" rel="noreferrer">Open</a>
-            <a id="imageModalDownload" class="inline-link" download>Download</a>
-            <button id="imageModalClose" type="button" class="ghost-button">Close</button>
+            <a id="imageModalOpen" class="inline-link" target="_blank" rel="noreferrer">打开</a>
+            <a id="imageModalDownload" class="inline-link" download>下载</a>
+            <button id="imageModalClose" type="button" class="ghost-button">关闭</button>
           </div>
         </div>
         <div class="image-modal-body">

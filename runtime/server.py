@@ -100,7 +100,7 @@ class RuntimeState:
 
     def load_file(self, session_id: str, file_path: Path, label: str) -> dict[str, Any]:
         if not file_path.exists():
-            raise RuntimeError(f"uploaded file does not exist: {file_path}")
+            raise RuntimeError(f"上传文件不存在：{file_path}")
 
         backend_ref = self.next_ref(session_id)
         n_obs, n_vars = inspect_h5ad_shape(file_path)
@@ -121,7 +121,7 @@ class RuntimeState:
         annotation_note = describe_annotation_summary(obj.metadata)
         return {
             "object": self._descriptor(obj),
-            "summary": f"Uploaded {file_path.name} and registered it as {object_label} ({n_obs} cells, {n_vars} genes). {annotation_note}",
+            "summary": f"已上传 {file_path.name}，并注册为 {object_label}（{n_obs} 个细胞，{n_vars} 个基因）。{annotation_note}",
         }
 
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -133,10 +133,10 @@ class RuntimeState:
 
         if skill in {"inspect_dataset", "assess_dataset"}:
             if not target:
-                raise RuntimeError(f"{skill} requires a target object")
+                raise RuntimeError(f"{skill} 需要一个目标对象")
             metadata = target.metadata or {}
             return {
-                "summary": f"{target.label}: {target.n_obs} cells, {target.n_vars} genes, state={target.state}. {describe_annotation_summary(metadata)}",
+                "summary": f"{target.label}：{target.n_obs} 个细胞，{target.n_vars} 个基因，状态为 {format_object_state_zh(target.state)}。{describe_annotation_summary(metadata)}",
                 "metadata": {
                     "available_obs": metadata.get("obs_fields", []),
                     "available_embeddings": metadata.get("obsm_keys", []),
@@ -149,7 +149,7 @@ class RuntimeState:
 
         if skill == "subset_cells":
             if not target:
-                raise RuntimeError("subset_cells requires a target object")
+                raise RuntimeError("subset_cells 需要一个目标对象")
             value = params.get("value", "subset")
             new_n_obs = max(100, int(target.n_obs * 0.44))
             return self._new_object_response(
@@ -159,12 +159,12 @@ class RuntimeState:
                 kind="subset",
                 n_obs=new_n_obs,
                 n_vars=target.n_vars,
-                summary=f"Created subset_{value} from {target.label} with {new_n_obs} cells.",
+                summary=f"已从 {target.label} 生成子集 subset_{value}，包含 {new_n_obs} 个细胞。",
             )
 
         if skill == "recluster":
             if not target:
-                raise RuntimeError("recluster requires a target object")
+                raise RuntimeError("recluster 需要一个目标对象")
             resolution = params.get("resolution", 0.6)
             return self._new_object_response(
                 session_id=session_id,
@@ -173,12 +173,12 @@ class RuntimeState:
                 kind="reclustered_subset",
                 n_obs=target.n_obs,
                 n_vars=target.n_vars,
-                summary=f"Reclustered {target.label} at resolution {resolution}.",
+                summary=f"已对 {target.label} 完成重新聚类，分辨率为 {resolution}。",
             )
 
         if skill == "find_markers":
             if not target:
-                raise RuntimeError("find_markers requires a target object")
+                raise RuntimeError("find_markers 需要一个目标对象")
             path = session_root / "artifacts" / f"markers_{slug(target.label)}.csv"
             with path.open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.writer(handle)
@@ -191,14 +191,14 @@ class RuntimeState:
                 ]
                 writer.writerows(rows)
             return {
-                "summary": f"Marker table generated for {target.label}.",
+                "summary": f"已为 {target.label} 生成 marker 表。",
                 "artifacts": [
                     {
                         "kind": "table",
-                        "title": f"Markers for {target.label}",
+                        "title": f"{target.label} 的 marker 表",
                         "path": str(path),
                         "content_type": "text/csv",
-                        "summary": "Top marker genes grouped by leiden cluster.",
+                        "summary": "按 leiden 聚类汇总的高分 marker 基因。",
                     }
                 ],
                 "metadata": {"groupby": params.get("groupby", "leiden")},
@@ -206,30 +206,31 @@ class RuntimeState:
 
         if skill in {"plot_umap", "plot_dotplot", "plot_violin"}:
             if not target:
-                raise RuntimeError(f"{skill} requires a target object")
-            title = {
-                "plot_umap": "UMAP overview",
-                "plot_dotplot": "Marker dotplot",
-                "plot_violin": "Gene violin plot",
+                raise RuntimeError(f"{skill} 需要一个目标对象")
+            title, note = {
+                "plot_umap": ("UMAP 占位示意图", "当前不是基于真实 UMAP 坐标绘制。"),
+                "plot_dotplot": ("Marker 点图占位示意图", "当前不是基于真实表达矩阵绘制。"),
+                "plot_violin": ("基因小提琴图占位示意图", "当前不是基于真实表达矩阵绘制。"),
             }[skill]
             path = session_root / "artifacts" / f"{skill}_{slug(target.label)}.svg"
-            path.write_text(self._build_svg(title, target.label), encoding="utf-8")
+            path.write_text(self._build_svg(title, target.label, note), encoding="utf-8")
             return {
-                "summary": f"{title} rendered for {target.label}.",
+                "summary": f"已生成 {target.label} 的 {title}。{note}",
                 "artifacts": [
                     {
                         "kind": "plot",
                         "title": title,
                         "path": str(path),
                         "content_type": "image/svg+xml",
-                        "summary": f"{skill} artifact for {target.label}.",
+                        "summary": f"{target.label} 的 {title}。{note}",
                     }
                 ],
+                "metadata": {"placeholder_plot": True, "note": note},
             }
 
         if skill == "export_h5ad":
             if not target:
-                raise RuntimeError("export_h5ad requires a target object")
+                raise RuntimeError("export_h5ad 需要一个目标对象")
             export_path = session_root / "objects" / f"{slug(target.label)}.h5ad"
             export_path.write_text(
                 json.dumps(
@@ -247,19 +248,19 @@ class RuntimeState:
             target.materialized_path = str(export_path)
             target.state = "materialized"
             return {
-                "summary": f"Exported {target.label} to disk.",
+                "summary": f"已将 {target.label} 导出到磁盘。",
                 "artifacts": [
                     {
                         "kind": "file",
                         "title": f"{target.label}.h5ad",
                         "path": str(export_path),
                         "content_type": "application/octet-stream",
-                        "summary": "Materialized object snapshot.",
+                        "summary": "对象落盘快照文件。",
                     }
                 ],
             }
 
-        raise RuntimeError(f"unsupported skill: {skill}")
+        raise RuntimeError(f"暂不支持的技能：{skill}")
 
     def _new_object_response(
         self,
@@ -280,7 +281,7 @@ class RuntimeState:
                     "kind": kind,
                     "n_obs": n_obs,
                     "n_vars": n_vars,
-                    "note": "placeholder derived object",
+                    "note": "占位派生对象",
                 },
                 indent=2,
             ),
@@ -330,7 +331,7 @@ class RuntimeState:
                 "n_vars": n_vars,
                 "materialized_path": materialized_path,
                 "metadata": metadata,
-                "summary": f"Session bootstrapped from sample {self.sample_path.name}. {describe_annotation_summary(metadata)}",
+                "summary": f"会话已从样例文件 {self.sample_path.name} 初始化。{describe_annotation_summary(metadata)}",
             }
 
         materialized_path = objects_dir / "raw_demo.h5ad"
@@ -340,7 +341,7 @@ class RuntimeState:
                     "session_id": session_id,
                     "label": label,
                     "kind": "raw_dataset",
-                    "note": "placeholder h5ad generated by the MVP runtime",
+                    "note": "由 MVP runtime 生成的占位 h5ad",
                 },
                 indent=2,
             ),
@@ -391,10 +392,10 @@ class RuntimeState:
             "n_vars": 28671,
             "materialized_path": materialized_path,
             "metadata": metadata,
-            "summary": "Session bootstrapped from fallback demo data. No sample .h5ad was found on disk.",
+            "summary": "未在磁盘上找到样例 .h5ad，已使用回退演示数据初始化会话。",
         }
 
-    def _build_svg(self, title: str, label: str) -> str:
+    def _build_svg(self, title: str, label: str, note: str = "") -> str:
         random.seed(f"{title}:{label}")
         dots = []
         for _ in range(26):
@@ -415,6 +416,7 @@ class RuntimeState:
   <rect width="540" height="320" rx="24" fill="#f7faf2" />
   <text x="36" y="48" font-size="24" font-family="IBM Plex Sans, sans-serif" fill="#234631">{title}</text>
   <text x="36" y="76" font-size="14" font-family="IBM Plex Sans, sans-serif" fill="#68746c">{label}</text>
+  <text x="36" y="102" font-size="12" font-family="IBM Plex Sans, sans-serif" fill="#9b5b1d">{note}</text>
   {''.join(rings)}
   {''.join(dots)}
 </svg>
@@ -450,15 +452,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "export_h5ad",
                 ],
                 "notes": [
-                    "Runtime reads real h5ad structure and annotations.",
-                    "Analysis execution is still mock for subset, recluster, markers, and plots.",
-                    "plot_umap currently emits a placeholder SVG artifact instead of plotting real UMAP coordinates.",
+                    "运行时会读取真实的 h5ad 结构和注释信息。",
+                    "subset、recluster、marker 和绘图等分析步骤目前仍是占位实现。",
+                    "plot_umap 当前返回的是占位 SVG，而不是真实 UMAP 坐标绘图。",
                 ],
             }
             payload.update(STATE.environment_report)
             self._write_json(HTTPStatus.OK, payload)
             return
-        self._write_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        self._write_json(HTTPStatus.NOT_FOUND, {"error": "未找到接口"})
 
     def do_POST(self) -> None:
         payload: dict[str, Any] = {}
@@ -535,7 +537,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 )
                 self._write_json(HTTPStatus.OK, response)
                 return
-            self._write_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "未找到接口"})
         except Exception as exc:  # noqa: BLE001
             log_runtime_event(
                 "request_failed",
@@ -613,7 +615,7 @@ def build_environment_report(sample_path: Path) -> dict[str, Any]:
                 {
                     "name": "sample_h5ad",
                     "ok": True,
-                    "detail": f"{sample_path} ({sample_summary['n_obs']} cells, {sample_summary['n_vars']} genes)",
+                    "detail": f"{sample_path}（{sample_summary['n_obs']} 个细胞，{sample_summary['n_vars']} 个基因）",
                 }
             )
         except Exception as exc:  # pragma: no cover - diagnostic path
@@ -629,7 +631,7 @@ def build_environment_report(sample_path: Path) -> dict[str, Any]:
             {
                 "name": "sample_h5ad",
                 "ok": False,
-                "detail": f"missing sample file: {sample_path}",
+                "detail": f"缺少样例文件：{sample_path}",
             }
         )
 
@@ -838,21 +840,21 @@ def build_dataset_assessment(metadata: dict[str, Any]) -> dict[str, Any]:
 
     missing_requirements = []
     if not has_pca:
-        missing_requirements.append("No PCA embedding found (`obsm['X_pca']`).")
+        missing_requirements.append("未发现 PCA 嵌入（`obsm['X_pca']`）。")
     if not has_neighbors:
-        missing_requirements.append("No neighbor graph found (`uns['neighbors']`).")
+        missing_requirements.append("未发现邻接图（`uns['neighbors']`）。")
     if not has_umap:
-        missing_requirements.append("No UMAP embedding found (`obsm['X_umap']`).")
+        missing_requirements.append("未发现 UMAP 嵌入（`obsm['X_umap']`）。")
 
     suggested_next_steps = []
     if not has_pca:
-        suggested_next_steps.extend(["filter_cells", "normalize_total", "log1p_transform", "select_hvg", "run_pca"])
+        suggested_next_steps.extend(["过滤低质量细胞", "总表达归一化", "log1p 转换", "选择高变基因", "运行 PCA"])
     if has_pca and not has_neighbors:
-        suggested_next_steps.append("compute_neighbors")
+        suggested_next_steps.append("计算邻接图")
     if (has_pca or has_neighbors) and not has_umap:
-        suggested_next_steps.append("run_umap")
+        suggested_next_steps.append("运行 UMAP")
     if has_umap:
-        suggested_next_steps.append("plot_gene_umap")
+        suggested_next_steps.append("绘制基因 UMAP")
 
     return {
         "preprocessing_state": preprocessing_state,
@@ -877,6 +879,13 @@ def dedupe_list(values: list[str]) -> list[str]:
     return out
 
 
+def format_object_state_zh(state: str) -> str:
+    return {
+        "resident": "常驻",
+        "materialized": "已落盘",
+    }.get(state, state)
+
+
 def describe_annotation_summary(metadata: dict[str, Any]) -> str:
     assessment = metadata.get("assessment", {})
     parts: list[str] = []
@@ -885,21 +894,21 @@ def describe_annotation_summary(metadata: dict[str, Any]) -> str:
 
     if cell_type:
         parts.append(
-            f"Detected cell-type-like field `{cell_type['field']}` with {cell_type['n_categories']} categories."
+            f"检测到疑似细胞类型字段 `{cell_type['field']}`，共 {cell_type['n_categories']} 个类别。"
         )
     elif cluster:
         parts.append(
-            f"No high-confidence cell type field found; detected cluster field `{cluster['field']}` with {cluster['n_categories']} groups."
+            f"未检测到高置信度细胞类型字段；发现聚类字段 `{cluster['field']}`，共 {cluster['n_categories']} 组。"
         )
     else:
-        parts.append("No high-confidence cell type or cluster annotation was detected.")
+        parts.append("未检测到高置信度的细胞类型或聚类注释。")
 
     if assessment.get("preprocessing_state"):
-        parts.append(f"Dataset state is `{assessment['preprocessing_state']}`.")
+        parts.append(f"数据集状态为 `{assessment['preprocessing_state']}`。")
 
     missing = assessment.get("missing_requirements", [])
     if missing:
-        parts.append(f"Missing: {missing[0]}")
+        parts.append(f"缺失条件：{missing[0]}")
 
     return " ".join(parts)
 

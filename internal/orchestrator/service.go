@@ -86,7 +86,7 @@ func (s *Service) Status(ctx context.Context) *SystemStatus {
 	if err != nil {
 		status.SystemMode = "demo"
 		status.RuntimeConnected = false
-		status.Summary = "Demo mode: runtime is not reachable."
+		status.Summary = "当前处于演示模式：运行时暂时不可达。"
 		status.Notes = []string{err.Error()}
 		return status
 	}
@@ -101,18 +101,18 @@ func (s *Service) Status(ctx context.Context) *SystemStatus {
 
 	if status.LLMLoaded && status.RealAnalysisExecution {
 		status.SystemMode = "live"
-		status.Summary = "Live mode: LLM planner is enabled and runtime analysis execution is real."
+		status.Summary = "当前处于正式模式：LLM 规划器已启用，分析执行为真实运行。"
 		return status
 	}
 
 	status.SystemMode = "demo"
 	switch {
 	case !status.LLMLoaded && status.RealH5ADInspection && !status.RealAnalysisExecution:
-		status.Summary = "Demo mode: fake planner is active; h5ad inspection is real, but analysis execution is still mock."
+		status.Summary = "当前处于演示模式：规则规划器生效，h5ad 检查为真实执行，但分析步骤仍为占位实现。"
 	case status.LLMLoaded && !status.RealAnalysisExecution:
-		status.Summary = "Demo mode: LLM planner is enabled, but runtime analysis execution is still mock."
+		status.Summary = "当前处于演示模式：LLM 规划器已启用，但分析执行仍为占位实现。"
 	default:
-		status.Summary = "Demo mode: not all production components are enabled yet."
+		status.Summary = "当前处于演示模式：生产组件尚未全部启用。"
 	}
 	return status
 }
@@ -145,7 +145,7 @@ func (s *Service) PreviewFakePlan(ctx context.Context, message string) (models.P
 func (s *Service) PreviewPlannerDebug(ctx context.Context, sessionID, message string) (*PlannerDebugPreview, error) {
 	sessionRecord, ok := s.store.GetSession(sessionID)
 	if !ok {
-		return nil, fmt.Errorf("session %q not found", sessionID)
+		return nil, fmt.Errorf("未找到会话 %q", sessionID)
 	}
 
 	request, err := s.buildPlanningRequest(sessionRecord, message)
@@ -160,7 +160,7 @@ func (s *Service) PreviewPlannerDebug(ctx context.Context, sessionID, message st
 	return &PlannerDebugPreview{
 		PlannerMode:     s.PlannerMode(),
 		PlanningRequest: request,
-		Note:            "Planner does not expose a richer debug preview.",
+		Note:            "当前规划器没有提供更详细的调试预览。",
 	}, nil
 }
 
@@ -174,7 +174,7 @@ func (s *Service) GetSnapshot(sessionID string) (*models.SessionSnapshot, error)
 
 func (s *Service) CreateSession(ctx context.Context, label string) (*models.SessionSnapshot, error) {
 	if label == "" {
-		label = "Plant single-cell session"
+		label = "植物单细胞分析会话"
 	}
 
 	sessionRecord := s.store.CreateSession(label)
@@ -236,7 +236,7 @@ func (s *Service) CreateSession(ctx context.Context, label string) (*models.Sess
 func (s *Service) UploadH5AD(ctx context.Context, sessionID, filename string, content io.Reader) (*models.ObjectMeta, *models.SessionSnapshot, error) {
 	sessionRecord, ok := s.store.GetSession(sessionID)
 	if !ok {
-		return nil, nil, fmt.Errorf("session %q not found", sessionID)
+		return nil, nil, fmt.Errorf("未找到会话 %q", sessionID)
 	}
 
 	safeName, err := sanitizeUploadName(filename)
@@ -317,7 +317,7 @@ func (s *Service) UploadH5AD(ctx context.Context, sessionID, filename string, co
 func (s *Service) SubmitMessage(ctx context.Context, sessionID, content string) (*models.Job, *models.SessionSnapshot, error) {
 	sessionRecord, ok := s.store.GetSession(sessionID)
 	if !ok {
-		return nil, nil, fmt.Errorf("session %q not found", sessionID)
+		return nil, nil, fmt.Errorf("未找到会话 %q", sessionID)
 	}
 
 	now := time.Now().UTC()
@@ -372,23 +372,23 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 
 	planningRequest, err := s.buildPlanningRequest(sessionRecord, message)
 	if err != nil {
-		s.failJob(sessionID, jobID, fmt.Errorf("planner context error: %w", err))
+		s.failJob(sessionID, jobID, fmt.Errorf("规划上下文构建失败：%w", err))
 		return
 	}
 
 	plan, err := s.planner.Plan(ctx, planningRequest)
 	if err != nil {
-		s.failJob(sessionID, jobID, fmt.Errorf("planner error: %w", err))
+		s.failJob(sessionID, jobID, fmt.Errorf("规划器执行失败：%w", err))
 		return
 	}
 	plan = NormalizePlan(plan)
 	if err := s.skills.ValidatePlan(plan); err != nil {
-		s.failJob(sessionID, jobID, fmt.Errorf("invalid plan: %w", err))
+		s.failJob(sessionID, jobID, fmt.Errorf("执行计划不合法：%w", err))
 		return
 	}
 
 	job.Plan = &plan
-	job.Summary = "Plan accepted by orchestrator."
+	job.Summary = "编排器已接受执行计划。"
 	s.store.SaveJob(job)
 	s.publishJob(sessionID, jobID)
 
@@ -545,7 +545,7 @@ func (s *Service) failJob(sessionID, jobID string, err error) {
 		SessionID: sessionID,
 		JobID:     jobID,
 		Role:      models.MessageAssistant,
-		Content:   "Execution failed: " + err.Error(),
+		Content:   "执行失败：" + err.Error(),
 		CreatedAt: finishedAt,
 	})
 
@@ -567,7 +567,7 @@ func (s *Service) resolveTargetObject(sessionRecord *models.Session, prevObjectI
 func (s *Service) getRequiredObject(objectID string) (*models.ObjectMeta, error) {
 	object, ok := s.store.GetObject(objectID)
 	if !ok {
-		return nil, fmt.Errorf("object %q not found", objectID)
+		return nil, fmt.Errorf("未找到对象 %q", objectID)
 	}
 	return object, nil
 }
@@ -615,9 +615,9 @@ func (s *Service) pathToURL(path string) string {
 
 func (s *Service) buildAssistantSummary(job *models.Job) string {
 	lines := make([]string, 0, len(job.Steps)+1)
-	lines = append(lines, "Plan executed:")
+	lines = append(lines, "执行完成：")
 	for _, step := range job.Steps {
-		lines = append(lines, fmt.Sprintf("%s: %s", step.Skill, step.Summary))
+		lines = append(lines, fmt.Sprintf("%s：%s", step.Skill, step.Summary))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -663,17 +663,17 @@ var uploadNamePattern = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 func sanitizeUploadName(name string) (string, error) {
 	base := filepath.Base(strings.TrimSpace(name))
 	if base == "" || base == "." || base == string(filepath.Separator) {
-		return "", fmt.Errorf("invalid upload filename")
+		return "", fmt.Errorf("上传文件名不合法")
 	}
 
 	ext := strings.ToLower(filepath.Ext(base))
 	if ext != ".h5ad" && ext != ".ha5d" {
-		return "", fmt.Errorf("only .h5ad files are supported")
+		return "", fmt.Errorf("当前仅支持 .h5ad 文件")
 	}
 
 	safe := uploadNamePattern.ReplaceAllString(base, "_")
 	if safe == "" {
-		return "", fmt.Errorf("invalid upload filename")
+		return "", fmt.Errorf("上传文件名不合法")
 	}
 	return safe, nil
 }

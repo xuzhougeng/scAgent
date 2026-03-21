@@ -70,7 +70,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		})
 	}
 
-	if strings.Contains(lower, "umap") {
+	if strings.Contains(lower, "umap") || strings.Contains(request.Message, "UMAP") || strings.Contains(request.Message, "降维") {
 		steps = append(steps, models.PlanStep{
 			ID:             stepID(len(steps) + 1),
 			Skill:          "plot_umap",
@@ -81,7 +81,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		})
 	}
 
-	if strings.Contains(lower, "dotplot") {
+	if strings.Contains(lower, "dotplot") || strings.Contains(request.Message, "点图") {
 		steps = append(steps, models.PlanStep{
 			ID:             stepID(len(steps) + 1),
 			Skill:          "plot_dotplot",
@@ -92,7 +92,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		})
 	}
 
-	if strings.Contains(lower, "violin") {
+	if strings.Contains(lower, "violin") || strings.Contains(request.Message, "小提琴") {
 		steps = append(steps, models.PlanStep{
 			ID:             stepID(len(steps) + 1),
 			Skill:          "plot_violin",
@@ -111,6 +111,14 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		})
 	}
 
+	if len(steps) == 0 && (strings.Contains(lower, "assess") || strings.Contains(request.Message, "评估")) {
+		steps = append(steps, models.PlanStep{
+			ID:             "step_1",
+			Skill:          "assess_dataset",
+			TargetObjectID: "$active",
+		})
+	}
+
 	if len(steps) == 0 {
 		steps = append(steps, models.PlanStep{
 			ID:             "step_1",
@@ -126,7 +134,7 @@ func (p *FakePlanner) DebugPreview(_ context.Context, request PlanningRequest) (
 	return &PlannerDebugPreview{
 		PlannerMode:     p.Mode(),
 		PlanningRequest: request,
-		Note:            "Fake planner uses deterministic keyword rules and does not build an LLM prompt.",
+		Note:            "规则规划器基于固定关键词生成步骤，不会构造 LLM 提示词。",
 	}, nil
 }
 

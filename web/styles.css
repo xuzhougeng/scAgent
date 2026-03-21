@@ -1,3 +1,7 @@
+html {
+  height: 100%;
+}
+
 :root {
   --bg: #eef3ea;
   --panel: rgba(251, 252, 248, 0.92);
@@ -22,6 +26,8 @@
 body {
   margin: 0;
   min-height: 100vh;
+  height: 100%;
+  overflow: hidden;
   color: var(--ink);
   font-family: var(--font-sans);
   background:
@@ -35,19 +41,23 @@ body {
   grid-template-columns: 300px minmax(420px, 1fr) 360px;
   gap: 18px;
   min-height: 100vh;
+  height: 100vh;
   padding: 18px;
+  overflow: hidden;
 }
 
 .panel {
   display: flex;
   flex-direction: column;
-  min-height: calc(100vh - 36px);
+  min-height: 0;
+  height: calc(100vh - 36px);
   padding: 22px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
   box-shadow: var(--shadow);
   backdrop-filter: blur(16px);
+  overflow: hidden;
 }
 
 .console {
@@ -64,6 +74,7 @@ body {
 
 .panel-head {
   margin-bottom: 18px;
+  flex-shrink: 0;
 }
 
 .panel-head h1,
@@ -80,26 +91,28 @@ body {
   text-transform: uppercase;
 }
 
-.session-meta,
-.object-tree,
-.chat,
-.inspector-body {
-  overflow: auto;
-}
-
 .session-meta {
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: 18px;
   background: var(--panel-strong);
   font-size: 0.92rem;
+  flex-shrink: 0;
 }
 
 .object-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
   margin-top: 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.explorer,
+.inspector {
+  overflow: auto;
 }
 
 .tree-node {
@@ -167,11 +180,61 @@ body {
   margin-bottom: 12px;
 }
 
-.status-card {
+.sidebar-card {
   border: 1px solid var(--border);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.74);
+  overflow: hidden;
+}
+
+.sidebar-card + .sidebar-card {
+  margin-top: 12px;
+}
+
+.sidebar-card-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 14px 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.sidebar-card-summary::-webkit-details-marker {
+  display: none;
+}
+
+.sidebar-card-heading {
+  min-width: 0;
+}
+
+.sidebar-card-summary-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.sidebar-card-badge {
+  display: inline-flex;
+}
+
+.sidebar-card-chevron {
+  width: 10px;
+  height: 10px;
+  border-top: 2px solid rgba(61, 107, 75, 0.5);
+  border-right: 2px solid rgba(61, 107, 75, 0.5);
+  transform: rotate(135deg);
+  transition: transform 140ms ease;
+}
+
+.sidebar-card[open] .sidebar-card-chevron {
+  transform: rotate(315deg);
+}
+
+.sidebar-card-body {
+  padding: 0 16px 14px;
 }
 
 .status-card-head {
@@ -226,8 +289,19 @@ body {
   gap: 8px;
 }
 
+.status-detail-grid.compact {
+  margin-top: 8px;
+}
+
 .status-section {
   margin-top: 14px;
+}
+
+.status-inline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .status-section-head {
@@ -238,48 +312,78 @@ body {
   margin-bottom: 10px;
 }
 
-.environment-check-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 10px;
+.status-checks-toggle {
+  min-width: 0;
 }
 
-.environment-check {
-  border: 1px solid var(--border);
+.status-checks-toggle summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.status-checks-toggle summary::-webkit-details-marker {
+  display: none;
+}
+
+.status-check-failures {
+  margin-top: 10px;
+  border: 1px solid rgba(171, 68, 52, 0.14);
   border-radius: 14px;
+  background: rgba(171, 68, 52, 0.05);
   padding: 12px;
-  background: rgba(255, 255, 255, 0.62);
 }
 
-.environment-check.ok {
-  border-color: rgba(61, 107, 75, 0.18);
-  background: rgba(61, 107, 75, 0.06);
+.status-check-failure + .status-check-failure {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(171, 68, 52, 0.12);
 }
 
-.environment-check.bad {
-  border-color: rgba(171, 68, 52, 0.22);
-  background: rgba(171, 68, 52, 0.06);
-}
-
-.environment-check-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.environment-check-head strong {
+.status-check-failure strong {
+  display: block;
+  margin-bottom: 4px;
   word-break: break-word;
 }
 
-.environment-check p {
+.status-check-failure p {
   margin: 0;
   word-break: break-word;
 }
 
 .status-notes p {
   margin: 8px 0 0;
+}
+
+.loaded-skill-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.loaded-skill-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: 1px solid rgba(61, 107, 75, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--accent-deep);
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.loaded-skill-name {
+  font-weight: 600;
+}
+
+.loaded-skill-id {
+  font-size: 0.72rem;
+  color: var(--muted);
+  letter-spacing: 0.01em;
 }
 
 .upload-label {
@@ -322,6 +426,8 @@ body {
 
 .chat {
   flex: 1;
+  min-height: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -435,6 +541,7 @@ body {
   display: grid;
   grid-template-columns: 1fr 110px;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .planner-tools {
@@ -442,6 +549,7 @@ body {
   align-items: center;
   gap: 12px;
   margin-top: 12px;
+  flex-shrink: 0;
 }
 
 .planner-preview {
@@ -632,12 +740,26 @@ body {
 }
 
 @media (max-width: 1100px) {
+  body {
+    height: auto;
+    overflow: auto;
+  }
+
   .shell {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
   }
 
   .panel {
+    height: auto;
     min-height: auto;
+    overflow: visible;
+  }
+
+  .explorer,
+  .inspector {
+    overflow: visible;
   }
 
   .composer {

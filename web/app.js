@@ -10,14 +10,95 @@ const appState = {
   artifactTextCache: new Map(),
 };
 
-const quickActionPrompts = [
-  "Inspect dataset",
-  "Plot UMAP",
-  "Subset cortex cells",
-  "Recluster active object",
-  "Find markers",
-  "Export h5ad",
+const quickActions = [
+  { label: "查看数据集", prompt: "查看当前数据集概览" },
+  { label: "绘制 UMAP", prompt: "绘制当前对象的 UMAP 图" },
+  { label: "筛选 cortex 细胞", prompt: "把 cortex 细胞筛选出来" },
+  { label: "重新聚类", prompt: "对当前对象重新聚类" },
+  { label: "查找 marker", prompt: "查找当前对象的 marker 基因" },
+  { label: "导出 h5ad", prompt: "导出当前对象为 h5ad" },
 ];
+
+const roleLabels = {
+  user: "你",
+  assistant: "助手",
+};
+
+const skillLabels = {
+  inspect_dataset: "查看数据集",
+  assess_dataset: "评估数据集",
+  subset_cells: "筛选细胞子集",
+  recluster: "重新聚类",
+  find_markers: "查找 marker 基因",
+  plot_umap: "绘制 UMAP 图",
+  plot_gene_umap: "绘制基因 UMAP",
+  plot_dotplot: "绘制点图",
+  plot_violin: "绘制小提琴图",
+  export_h5ad: "导出 h5ad",
+};
+
+const skillPrompts = {
+  inspect_dataset: "查看当前数据集概览",
+  assess_dataset: "评估当前数据集的预处理状态",
+  subset_cells: "从当前对象中筛选一组细胞",
+  recluster: "对当前对象重新聚类",
+  find_markers: "查找当前对象的 marker 基因",
+  plot_umap: "绘制当前对象的 UMAP 图",
+  plot_dotplot: "绘制当前对象的 marker 点图",
+  plot_violin: "绘制当前对象的基因小提琴图",
+  export_h5ad: "导出当前对象为 h5ad",
+};
+
+const systemModeLabels = {
+  live: "正式模式",
+  demo: "演示模式",
+};
+
+const plannerModeLabels = {
+  llm: "LLM",
+  fake: "规则规划",
+};
+
+const runtimeModeLabels = {
+  hybrid_demo: "混合演示",
+  demo: "演示",
+  live: "正式",
+  real: "真实",
+  mock: "占位",
+};
+
+const jobStatusLabels = {
+  queued: "排队中",
+  pending: "等待中",
+  running: "运行中",
+  succeeded: "成功",
+  failed: "失败",
+  canceled: "已取消",
+};
+
+const objectKindLabels = {
+  raw_dataset: "原始数据集",
+  subset: "细胞子集",
+  reclustered_subset: "重聚类子集",
+};
+
+const objectStateLabels = {
+  resident: "常驻",
+  materialized: "已落盘",
+};
+
+const annotationRoleLabels = {
+  cell_type: "细胞类型",
+  cluster: "聚类",
+  covariate: "协变量",
+  annotation: "注释",
+};
+
+const analysisStateLabels = {
+  analysis_ready: "可直接分析",
+  partially_processed: "部分预处理",
+  raw_like: "接近原始数据",
+};
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindComposer();
@@ -36,7 +117,7 @@ async function bootstrap() {
   const snapshot = await fetchJSON("/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label: "Arabidopsis atlas session" }),
+    body: JSON.stringify({ label: "拟南芥图谱会话" }),
   });
   appState.sessionId = snapshot.session.id;
   appState.snapshot = snapshot;
@@ -92,13 +173,13 @@ function bindUpload() {
     event.preventDefault();
     const file = input.files?.[0];
     if (!file || !appState.sessionId) {
-      status.textContent = "Select a .h5ad file first.";
+      status.textContent = "请先选择一个 .h5ad 文件。";
       return;
     }
 
     const formData = new FormData();
     formData.append("file", file);
-    status.textContent = `Uploading ${file.name}...`;
+    status.textContent = `正在上传 ${file.name}...`;
 
     try {
       const response = await fetchJSON(`/api/sessions/${appState.sessionId}/upload`, {
@@ -107,7 +188,7 @@ function bindUpload() {
       });
       appState.snapshot = response.snapshot;
       appState.activeObjectId = response.object.id;
-      status.textContent = `${file.name} attached as ${response.object.label}.`;
+      status.textContent = `${file.name} 已作为 ${response.object.label} 附加到当前会话。`;
       input.value = "";
       render();
     } catch (error) {
@@ -123,17 +204,17 @@ function bindPlannerPreview() {
 
   button.addEventListener("click", async () => {
     if (!appState.sessionId) {
-      status.textContent = "Session not ready.";
+      status.textContent = "会话尚未就绪。";
       return;
     }
 
     const message = input.value.trim();
     if (!message) {
-      status.textContent = "Enter a message first.";
+      status.textContent = "请先输入一条消息。";
       return;
     }
 
-    status.textContent = "Building planner preview...";
+    status.textContent = "正在生成规划预览...";
     try {
       appState.plannerPreview = await fetchJSON(
         `/api/sessions/${appState.sessionId}/planner-preview`,
@@ -143,7 +224,7 @@ function bindPlannerPreview() {
           body: JSON.stringify({ message }),
         },
       );
-      status.textContent = `Preview ready for ${appState.plannerPreview.planner_mode} planner.`;
+      status.textContent = `规划预览已生成，当前规划器为 ${formatPlannerMode(appState.plannerPreview.planner_mode)}。`;
       renderPlannerPreview();
     } catch (error) {
       status.textContent = error.message;
@@ -175,14 +256,14 @@ function bindImageModal() {
 function renderQuickActions() {
   const container = document.getElementById("quickActions");
   container.innerHTML = "";
-  for (const prompt of quickActionPrompts) {
+  for (const action of quickActions) {
     const button = document.createElement("button");
     button.className = "chip";
     button.type = "button";
-    button.textContent = prompt;
+    button.textContent = action.label;
     button.addEventListener("click", () => {
       const input = document.getElementById("messageInput");
-      input.value = prompt;
+      input.value = action.prompt;
       input.focus();
     });
     container.appendChild(button);
@@ -210,106 +291,145 @@ function render() {
   renderPlannerPreview();
 }
 
+function renderSidebarCard({ title, body, badge = "", open = true }) {
+  return `
+    <details class="sidebar-card"${open ? " open" : ""}>
+      <summary class="sidebar-card-summary">
+        <div class="sidebar-card-heading">
+          <strong>${escapeHTML(title)}</strong>
+        </div>
+        <div class="sidebar-card-summary-right">
+          ${badge ? `<span class="sidebar-card-badge">${badge}</span>` : ""}
+          <span class="sidebar-card-chevron" aria-hidden="true"></span>
+        </div>
+      </summary>
+      <div class="sidebar-card-body">
+        ${body}
+      </div>
+    </details>
+  `;
+}
+
 function renderSystemStatus() {
   const container = document.getElementById("systemStatus");
   const status = appState.systemStatus;
   if (!status) {
-    container.innerHTML = "<p class='muted'>System status unavailable.</p>";
+    container.innerHTML = "<p class='muted'>系统状态暂不可用。</p>";
     return;
   }
 
   const pills = [
-    statusPill(status.system_mode === "live" ? "ok" : "warn", `Mode: ${status.system_mode || "unknown"}`),
-    statusPill(status.planner_mode === "llm" ? "ok" : "warn", `Planner: ${status.planner_mode || "unknown"}`),
-    statusPill(status.llm_loaded ? "ok" : "muted", `LLM: ${status.llm_loaded ? "loaded" : "not loaded"}`),
-    statusPill(status.runtime_connected ? "ok" : "bad", `Runtime: ${status.runtime_connected ? "connected" : "offline"}`),
-    statusPill(status.real_h5ad_inspection ? "ok" : "muted", `h5ad inspect: ${status.real_h5ad_inspection ? "real" : "mock"}`),
-    statusPill(status.real_analysis_execution ? "ok" : "warn", `Analysis: ${status.real_analysis_execution ? "real" : "mock"}`),
+    statusPill(status.system_mode === "live" ? "ok" : "warn", `模式：${formatSystemMode(status.system_mode)}`),
+    statusPill(status.planner_mode === "llm" ? "ok" : "warn", `规划器：${formatPlannerMode(status.planner_mode)}`),
+    statusPill(status.llm_loaded ? "ok" : "muted", `模型：${status.llm_loaded ? "已加载" : "未加载"}`),
+    statusPill(status.runtime_connected ? "ok" : "bad", `运行时：${status.runtime_connected ? "已连接" : "离线"}`),
+    statusPill(status.real_h5ad_inspection ? "ok" : "muted", `h5ad 检查：${status.real_h5ad_inspection ? "真实" : "占位"}`),
+    statusPill(status.real_analysis_execution ? "ok" : "warn", `分析执行：${status.real_analysis_execution ? "真实" : "占位"}`),
   ];
 
   const runtime = status.runtime || {};
   const environmentChecks = runtime.environment_checks || [];
-  const sampleH5AD = runtime.sample_h5ad;
   const notes = status.notes || [];
+  const failingChecks = environmentChecks.filter((check) => !check.ok);
 
-  const environmentSection = environmentChecks.length
-    ? `
-      <div class="status-section">
-        <div class="status-section-head">
-          <strong>Environment Checks</strong>
-          <span class="muted">Python ${escapeHTML(runtime.python_version || "unknown")}</span>
-        </div>
-        <div class="environment-check-grid">
-          ${environmentChecks
-            .map(
-              (check) => `
-                <section class="environment-check ${check.ok ? "ok" : "bad"}">
-                  <div class="environment-check-head">
-                    <strong>${escapeHTML(check.name)}</strong>
-                    ${statusPill(check.ok ? "ok" : "bad", check.ok ? "OK" : "FAIL")}
-                  </div>
-                  <p class="muted">${escapeHTML(check.detail || (check.ok ? "Ready" : "Unavailable"))}</p>
-                </section>
-              `,
-            )
-            .join("")}
-        </div>
-      </div>
-    `
-    : "";
-
-  const sampleSection = sampleH5AD
-    ? `
-      <div class="status-section">
-        <div class="status-section-head">
-          <strong>Sample h5ad</strong>
-          <span class="muted">${escapeHTML(sampleH5AD.path || "")}</span>
-        </div>
+  const cards = [
+    renderSidebarCard({
+      title: "系统状态",
+      badge: statusPill(status.system_mode === "live" ? "ok" : "warn", formatSystemMode(status.system_mode)),
+      body: `
+        <p class="muted">${escapeHTML(status.summary || "")}</p>
+        <div class="status-pills">${pills.join("")}</div>
         <div class="status-detail-grid">
-          <div class="kv"><span>Cells</span><span>${sampleH5AD.n_obs ?? "unknown"}</span></div>
-          <div class="kv"><span>Genes</span><span>${sampleH5AD.n_vars ?? "unknown"}</span></div>
-          <div class="kv"><span>Obs Fields</span><span>${escapeHTML(formatList(sampleH5AD.obs_fields))}</span></div>
-          <div class="kv"><span>Embeddings</span><span>${escapeHTML(formatList(sampleH5AD.obsm_keys))}</span></div>
+          <div class="kv"><span>运行模式</span><span>${escapeHTML(formatRuntimeMode(status.runtime_mode))}</span></div>
         </div>
-      </div>
-    `
-    : "";
+        ${
+          notes.length
+            ? `<div class="status-notes">${notes.map((note) => `<p class="muted">${escapeHTML(note)}</p>`).join("")}</div>`
+            : ""
+        }
+      `,
+    }),
+  ];
 
-  container.innerHTML = `
-    <section class="status-card">
-      <div class="status-card-head">
-        <strong>System Status</strong>
-        <span class="muted">${escapeHTML(status.summary || "")}</span>
-      </div>
-      <div class="status-pills">${pills.join("")}</div>
-      <div class="status-detail-grid">
-        <div class="kv"><span>Runtime Mode</span><span>${escapeHTML(status.runtime_mode || "unknown")}</span></div>
-        <div class="kv"><span>Executable Skills</span><span>${escapeHTML(formatList(status.executable_skills))}</span></div>
-      </div>
-      ${environmentSection}
-      ${sampleSection}
-      ${
-        notes.length
-          ? `<div class="status-notes">${notes.map((note) => `<p class="muted">${escapeHTML(note)}</p>`).join("")}</div>`
-          : ""
-      }
-    </section>
-  `;
+  if (status.executable_skills?.length) {
+    cards.push(
+      renderSidebarCard({
+        title: "可执行技能",
+        badge: statusPill("ok", `${status.executable_skills.length} 个`),
+        body: `
+          <p class="muted">点击技能按钮会把建议指令填入输入框。</p>
+          <div class="loaded-skill-grid">
+            ${status.executable_skills
+              .map(
+                (skillName) => `
+                  <button
+                    type="button"
+                    class="loaded-skill-chip"
+                    data-skill-name="${escapeAttribute(skillName)}"
+                    data-skill-prompt="${escapeAttribute(promptForSkill(skillName))}"
+                    title="${escapeAttribute(skillName)}"
+                  >
+                    <span class="loaded-skill-name">${escapeHTML(formatSkillName(skillName))}</span>
+                    <span class="loaded-skill-id">${escapeHTML(skillName)}</span>
+                  </button>
+                `,
+              )
+              .join("")}
+          </div>
+        `,
+      }),
+    );
+  }
+
+  if (environmentChecks.length) {
+    cards.push(
+      renderSidebarCard({
+        title: "环境检查",
+        badge: failingChecks.length ? statusPill("bad", `失败 ${failingChecks.length}`) : statusPill("ok", "正常"),
+        body: `
+          <div class="status-detail-grid compact">
+            <div class="kv"><span>Python</span><span>${escapeHTML(runtime.python_version || "未知")}</span></div>
+          </div>
+          ${
+            failingChecks.length
+              ? `
+                <div class="status-check-failures">
+                  ${failingChecks
+                    .map(
+                      (check) => `
+                        <div class="status-check-failure">
+                          <strong>${escapeHTML(check.name)}</strong>
+                          <p class="muted">${escapeHTML(check.detail || "未知错误")}</p>
+                        </div>
+                      `,
+                    )
+                    .join("")}
+                </div>
+              `
+              : `<p class="muted">运行时检查全部通过。</p>`
+          }
+        `,
+      }),
+    );
+  }
+
+  container.innerHTML = cards.join("");
+  bindLoadedSkillButtons(container);
 }
 
 function renderSessionMeta() {
   const meta = document.getElementById("sessionMeta");
   if (!appState.snapshot) {
-    meta.innerHTML = "<p class='muted'>No session loaded.</p>";
+    meta.innerHTML = "<p class='muted'>尚未加载会话。</p>";
     return;
   }
   const { session, objects, jobs, artifacts } = appState.snapshot;
   meta.innerHTML = `
-    <div class="kv"><span>Session</span><span>${session.id}</span></div>
-    <div class="kv"><span>Dataset</span><span>${session.dataset_id}</span></div>
-    <div class="kv"><span>Objects</span><span>${objects.length}</span></div>
-    <div class="kv"><span>Jobs</span><span>${jobs.length}</span></div>
-    <div class="kv"><span>Artifacts</span><span>${artifacts.length}</span></div>
+    <div class="kv"><span>会话</span><span>${session.id}</span></div>
+    <div class="kv"><span>数据集</span><span>${escapeHTML(session.dataset_id || "未设置")}</span></div>
+    <div class="kv"><span>对象</span><span>${objects.length}</span></div>
+    <div class="kv"><span>任务</span><span>${jobs.length}</span></div>
+    <div class="kv"><span>结果</span><span>${artifacts.length}</span></div>
   `;
 }
 
@@ -318,7 +438,7 @@ function renderObjectTree() {
   container.innerHTML = "";
 
   if (!appState.snapshot?.objects?.length) {
-    container.innerHTML = "<p class='muted'>No objects registered.</p>";
+    container.innerHTML = "<p class='muted'>当前还没有对象。</p>";
     return;
   }
 
@@ -340,8 +460,8 @@ function renderObjectTree() {
         object.id === appState.activeObjectId ? "active" : ""
       }`;
       node.innerHTML = `
-        <span class="label">${object.label}</span>
-        <span class="meta">${object.kind} · ${object.n_obs} cells · ${object.state}</span>
+        <span class="label">${escapeHTML(object.label)}</span>
+        <span class="meta">${escapeHTML(formatObjectKind(object.kind))} · ${escapeHTML(String(object.n_obs))} 个细胞 · ${escapeHTML(formatObjectState(object.state))}</span>
       `;
       node.addEventListener("click", () => {
         appState.activeObjectId = object.id;
@@ -378,7 +498,7 @@ async function renderChat() {
 async function buildMessageNode(message, template) {
   const node = template.content.firstElementChild.cloneNode(true);
   node.classList.add(`message-${message.role}`);
-  node.querySelector(".message-role").textContent = message.role;
+  node.querySelector(".message-role").textContent = formatRole(message.role);
   node.querySelector(".message-content").textContent = message.content;
 
   const detailMarkup = await buildMessageDetailMarkup(message);
@@ -420,10 +540,10 @@ function buildJobStatusMarkup(job) {
   return `
     <section class="message-job-card pending">
       <div class="message-job-head">
-        <strong>Job Status</strong>
-        ${statusPill(job.status === "running" ? "warn" : "muted", job.status)}
+        <strong>任务状态</strong>
+        ${statusPill(job.status === "running" ? "warn" : "muted", formatJobStatus(job.status))}
       </div>
-      <p class="message-job-summary">${escapeHTML(job.summary || "Request accepted. Waiting for planner/runtime updates.")}</p>
+      <p class="message-job-summary">${escapeHTML(job.summary || "请求已接收，等待规划器和运行时返回更新。")}</p>
       ${
         job.steps?.length
           ? `<div class="message-step-list">
@@ -432,7 +552,7 @@ function buildJobStatusMarkup(job) {
                   (step) => `
                     <div class="message-step-row">
                       <span>${escapeHTML(formatSkillName(step.skill))}</span>
-                      <span>${escapeHTML(step.summary || step.status)}</span>
+                      <span>${escapeHTML(step.summary || formatJobStatus(step.status))}</span>
                     </div>
                   `,
                 )
@@ -453,8 +573,8 @@ async function buildJobResultMarkup(job) {
   return `
     <section class="message-job-card ${job.status === "failed" ? "failed" : "done"}">
       <div class="message-job-head">
-        <strong>${job.status === "failed" ? "Job Result" : "Analysis Result"}</strong>
-        ${statusPill(statusKindForJob(job.status), job.status)}
+        <strong>${job.status === "failed" ? "任务结果" : "分析结果"}</strong>
+        ${statusPill(statusKindForJob(job.status), formatJobStatus(job.status))}
       </div>
       ${
         job.summary
@@ -475,12 +595,12 @@ async function buildJobResultMarkup(job) {
                     <div class="message-step-card">
                       <div class="message-step-head">
                         <strong>${escapeHTML(formatSkillName(step.skill))}</strong>
-                        ${statusPill(statusKindForJob(step.status), step.status)}
+                        ${statusPill(statusKindForJob(step.status), formatJobStatus(step.status))}
                       </div>
-                      <p class="muted">${escapeHTML(step.summary || "No summary returned.")}</p>
+                      <p class="muted">${escapeHTML(step.summary || "未返回摘要。")}</p>
                       ${
                         step.output_object_id
-                          ? `<div class="message-step-meta">Output object: ${escapeHTML(objectLabel(step.output_object_id))}</div>`
+                          ? `<div class="message-step-meta">输出对象：${escapeHTML(objectLabel(step.output_object_id))}</div>`
                           : ""
                       }
                     </div>
@@ -494,8 +614,8 @@ async function buildJobResultMarkup(job) {
         artifactCards.length
           ? `<div class="message-artifact-group">
               <div class="message-artifact-head">
-                <strong>Artifacts</strong>
-                <span class="muted">${artifactCards.length} item${artifactCards.length > 1 ? "s" : ""}</span>
+                <strong>结果文件</strong>
+                <span class="muted">${artifactCards.length} 项</span>
               </div>
               ${artifactCards.join("")}
             </div>`
@@ -509,7 +629,7 @@ function renderInspector() {
   const container = document.getElementById("inspector");
   const object = activeObject();
   if (!object) {
-    container.innerHTML = "<p class='muted'>Select an object to inspect.</p>";
+    container.innerHTML = "<p class='muted'>请选择一个对象查看详情。</p>";
     return;
   }
 
@@ -526,72 +646,72 @@ function renderInspector() {
   const cluster = metadata.cluster_annotation;
   const categorical = metadata.categorical_obs_fields || [];
 
-  container.innerHTML = `
-    <section class="inspector-card">
-      <h3>${object.label}</h3>
-      <div class="kv"><span>Object ID</span><span>${object.id}</span></div>
-      <div class="kv"><span>Kind</span><span>${object.kind}</span></div>
-      <div class="kv"><span>Parent</span><span>${object.parent_id || "none"}</span></div>
-      <div class="kv"><span>Backend</span><span>${object.backend_ref}</span></div>
-      <div class="kv"><span>Cells</span><span>${object.n_obs}</span></div>
-      <div class="kv"><span>Genes</span><span>${object.n_vars}</span></div>
-      <div class="kv"><span>Residency</span><span>${object.state}</span></div>
-      <div class="kv"><span>Materialized</span><span>${object.materialized_path || "not yet"}</span></div>
-      <div class="kv"><span>Download</span><span>${
-        object.materialized_url
-          ? `<a class="inline-link" href="${object.materialized_url}" download>Get h5ad</a>`
-          : "not available"
-      }</span></div>
-    </section>
-    <section class="inspector-card">
-      <h3>Dataset Assessment</h3>
-      <div class="kv"><span>Status</span><span>${escapeHTML(assessment.preprocessing_state || "unknown")}</span></div>
-      <div class="kv"><span>Layers</span><span>${escapeHTML(formatList(metadata.layer_keys))}</span></div>
-      <div class="kv"><span>Obs Fields</span><span>${escapeHTML(formatList(metadata.obs_fields))}</span></div>
-      <div class="kv"><span>Var Fields</span><span>${escapeHTML(formatList(metadata.var_fields))}</span></div>
-      <div class="kv"><span>Embeddings</span><span>${escapeHTML(formatList(metadata.obsm_keys))}</span></div>
-      <div class="kv"><span>Uns Keys</span><span>${escapeHTML(formatList(metadata.uns_keys))}</span></div>
-      <div class="kv"><span>Cell Type</span><span>${escapeHTML(formatAnnotation(cellType))}</span></div>
-      <div class="kv"><span>Cluster</span><span>${escapeHTML(formatAnnotation(cluster))}</span></div>
-      <div class="kv"><span>Available</span><span>${escapeHTML(formatList(assessment.available_analyses))}</span></div>
-      <div class="kv"><span>Missing</span><span>${escapeHTML(formatList(assessment.missing_requirements))}</span></div>
-      <div class="kv"><span>Next Steps</span><span>${escapeHTML(formatList(assessment.suggested_next_steps))}</span></div>
-    </section>
-    <section class="inspector-card">
-      <h3>Annotation Candidates</h3>
-      ${
-        categorical.length
-          ? categorical
-              .slice(0, 8)
-              .map(
-                (item) => `
-                  <div class="kv">
-                    <span>${escapeHTML(item.field)}</span>
-                    <span>${escapeHTML(`${item.role || "annotation"} · ${item.n_categories} groups · ${(item.sample_values || []).join(", ")}`)}</span>
-                  </div>
-                `,
-              )
-              .join("")
-          : "<p class='muted'>No categorical obs fields detected yet.</p>"
-      }
-    </section>
-    <section class="inspector-card">
-      <h3>Recent Jobs</h3>
-      ${
-        relatedJobs.length
-          ? relatedJobs
-              .slice(-3)
-              .reverse()
-              .map(
-                (job) => `
-                  <div class="kv"><span>${job.status}</span><span>${job.summary || "Waiting..."}</span></div>
-                `,
-              )
-              .join("")
-          : "<p class='muted'>No jobs linked to this object yet.</p>"
-      }
-    </section>
-  `;
+  container.innerHTML = [
+    renderSidebarCard({
+      title: object.label,
+      body: `
+        <div class="kv"><span>对象 ID</span><span>${escapeHTML(object.id)}</span></div>
+        <div class="kv"><span>类型</span><span>${escapeHTML(formatObjectKind(object.kind))}</span></div>
+        <div class="kv"><span>父对象</span><span>${escapeHTML(object.parent_id || "无")}</span></div>
+        <div class="kv"><span>后端引用</span><span>${escapeHTML(object.backend_ref)}</span></div>
+        <div class="kv"><span>细胞数</span><span>${escapeHTML(String(object.n_obs))}</span></div>
+        <div class="kv"><span>基因数</span><span>${escapeHTML(String(object.n_vars))}</span></div>
+        <div class="kv"><span>状态</span><span>${escapeHTML(formatObjectState(object.state))}</span></div>
+        <div class="kv"><span>落盘文件</span><span>${escapeHTML(object.materialized_path || "尚未生成")}</span></div>
+        <div class="kv"><span>下载</span><span>${
+          object.materialized_url
+            ? `<a class="inline-link" href="${object.materialized_url}" download>获取 h5ad</a>`
+            : "暂不可用"
+        }</span></div>
+      `,
+    }),
+    renderSidebarCard({
+      title: "数据集评估",
+      body: `
+        <div class="kv"><span>状态</span><span>${escapeHTML(formatAnalysisState(assessment.preprocessing_state))}</span></div>
+        <div class="kv"><span>矩阵层</span><span>${escapeHTML(formatList(metadata.layer_keys))}</span></div>
+        <div class="kv"><span>Obs 字段</span><span>${escapeHTML(formatList(metadata.obs_fields))}</span></div>
+        <div class="kv"><span>Var 字段</span><span>${escapeHTML(formatList(metadata.var_fields))}</span></div>
+        <div class="kv"><span>嵌入</span><span>${escapeHTML(formatList(metadata.obsm_keys))}</span></div>
+        <div class="kv"><span>Uns 键</span><span>${escapeHTML(formatList(metadata.uns_keys))}</span></div>
+        <div class="kv"><span>细胞类型</span><span>${escapeHTML(formatAnnotation(cellType))}</span></div>
+        <div class="kv"><span>聚类</span><span>${escapeHTML(formatAnnotation(cluster))}</span></div>
+        <div class="kv"><span>可执行分析</span><span>${escapeHTML(formatSkillList(assessment.available_analyses))}</span></div>
+        <div class="kv"><span>缺失条件</span><span>${escapeHTML(formatList(assessment.missing_requirements))}</span></div>
+        <div class="kv"><span>建议下一步</span><span>${escapeHTML(formatList(assessment.suggested_next_steps))}</span></div>
+      `,
+    }),
+    renderSidebarCard({
+      title: "注释候选字段",
+      body: categorical.length
+        ? categorical
+            .slice(0, 8)
+            .map(
+              (item) => `
+                <div class="kv">
+                  <span>${escapeHTML(item.field)}</span>
+                  <span>${escapeHTML(`${formatAnnotationRole(item.role)} · ${item.n_categories} 组 · ${(item.sample_values || []).join("、")}`)}</span>
+                </div>
+              `,
+            )
+            .join("")
+        : "<p class='muted'>暂未发现分类 obs 字段。</p>",
+    }),
+    renderSidebarCard({
+      title: "最近任务",
+      body: relatedJobs.length
+        ? relatedJobs
+            .slice(-3)
+            .reverse()
+            .map(
+              (job) => `
+                <div class="kv"><span>${escapeHTML(formatJobStatus(job.status))}</span><span>${escapeHTML(job.summary || "等待中...")}</span></div>
+              `,
+            )
+            .join("")
+        : "<p class='muted'>这个对象还没有关联任务。</p>",
+    }),
+  ].join("");
 }
 
 function renderPlannerPreview() {
@@ -603,38 +723,40 @@ function renderPlannerPreview() {
   }
 
   const blocks = [];
-  blocks.push(`
-    <section class="inspector-card">
-      <h3>Planner Preview</h3>
-      <div class="kv"><span>Mode</span><span>${escapeHTML(preview.planner_mode || "")}</span></div>
-      <div class="kv"><span>Active</span><span>${escapeHTML(preview.planning_request?.active_object?.label || "none")}</span></div>
-      <div class="kv"><span>Note</span><span>${escapeHTML(preview.note || "")}</span></div>
-    </section>
-  `);
+  blocks.push(
+    renderSidebarCard({
+      title: "规划预览",
+      body: `
+        <div class="kv"><span>模式</span><span>${escapeHTML(formatPlannerMode(preview.planner_mode))}</span></div>
+        <div class="kv"><span>当前对象</span><span>${escapeHTML(preview.planning_request?.active_object?.label || "无")}</span></div>
+        <div class="kv"><span>说明</span><span>${escapeHTML(preview.note || "无")}</span></div>
+      `,
+    }),
+  );
 
-  blocks.push(`
-    <section class="inspector-card">
-      <h3>Planning Request</h3>
-      <pre>${escapeHTML(JSON.stringify(preview.planning_request, null, 2))}</pre>
-    </section>
-  `);
+  blocks.push(
+    renderSidebarCard({
+      title: "规划请求",
+      body: `<pre>${escapeHTML(JSON.stringify(preview.planning_request, null, 2))}</pre>`,
+    }),
+  );
 
   if (preview.developer_instructions) {
-    blocks.push(`
-      <section class="inspector-card">
-        <h3>Developer Instructions</h3>
-        <pre>${escapeHTML(preview.developer_instructions)}</pre>
-      </section>
-    `);
+    blocks.push(
+      renderSidebarCard({
+        title: "开发者指令",
+        body: `<pre>${escapeHTML(preview.developer_instructions)}</pre>`,
+      }),
+    );
   }
 
   if (preview.request_body) {
-    blocks.push(`
-      <section class="inspector-card">
-        <h3>Planner Request Body</h3>
-        <pre>${escapeHTML(JSON.stringify(preview.request_body, null, 2))}</pre>
-      </section>
-    `);
+    blocks.push(
+      renderSidebarCard({
+        title: "规划器请求体",
+        body: `<pre>${escapeHTML(JSON.stringify(preview.request_body, null, 2))}</pre>`,
+      }),
+    );
   }
 
   container.innerHTML = blocks.join("");
@@ -663,8 +785,8 @@ async function buildArtifactCardMarkup(artifact, variant = "chat") {
       <div class="artifact-head">
         <h3>${escapeHTML(artifact.title)}</h3>
         <div class="artifact-actions">
-          <a class="inline-link" href="${artifact.url}" target="_blank" rel="noreferrer">Open</a>
-          <a class="inline-link" href="${artifact.url}" download>Download</a>
+          <a class="inline-link" href="${artifact.url}" target="_blank" rel="noreferrer">打开</a>
+          <a class="inline-link" href="${artifact.url}" download>下载</a>
         </div>
       </div>
       ${body}
@@ -683,7 +805,7 @@ async function getArtifactTextPreview(artifact) {
     appState.artifactTextCache.set(artifact.id, text);
     return text;
   } catch (error) {
-    const fallback = `Unable to load preview: ${error.message}`;
+    const fallback = `无法加载预览：${error.message}`;
     appState.artifactTextCache.set(artifact.id, fallback);
     return fallback;
   }
@@ -697,17 +819,39 @@ function bindArtifactPreviewButtons(container) {
   }
 }
 
+function bindLoadedSkillButtons(container) {
+  for (const button of container.querySelectorAll(".loaded-skill-chip")) {
+    button.addEventListener("click", () => {
+      const input = document.getElementById("messageInput");
+      input.value = button.dataset.skillPrompt || button.dataset.skillName || "";
+      input.focus();
+    });
+  }
+}
+
 function activeObject() {
   return (appState.snapshot?.objects || []).find((object) => object.id === appState.activeObjectId);
 }
 
 async function fetchJSON(url, options) {
   const response = await fetch(url, options);
+  const contentType = response.headers.get("Content-Type") || "";
+
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Request failed: ${response.status}`);
+    let message = "";
+    if (contentType.includes("application/json")) {
+      const payload = await response.json().catch(() => null);
+      message = payload?.error || payload?.message || "";
+    } else {
+      message = await response.text();
+    }
+    throw new Error(message || `请求失败：${response.status}`);
   }
-  return response.json();
+
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+  return null;
 }
 
 function escapeHTML(value) {
@@ -721,11 +865,25 @@ function escapeAttribute(value) {
   return escapeHTML(value).replaceAll('"', "&quot;");
 }
 
+function translateLabel(value, labels, fallback = "未知") {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+  return labels[value] || String(value);
+}
+
 function formatList(values) {
   if (!values || !values.length) {
-    return "none";
+    return "无";
   }
-  return values.join(", ");
+  return values.join("、");
+}
+
+function formatSkillList(values) {
+  if (!values || !values.length) {
+    return "无";
+  }
+  return values.map((value) => formatSkillName(value)).join("、");
 }
 
 function objectLabel(objectId) {
@@ -733,20 +891,56 @@ function objectLabel(objectId) {
   return object ? object.label : objectId;
 }
 
+function formatRole(role) {
+  return roleLabels[role] || role || "未知";
+}
+
 function formatSkillName(skill) {
-  return String(skill || "")
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part[0].toUpperCase() + part.slice(1))
-    .join(" ");
+  return translateLabel(skill, skillLabels, skill || "未知技能");
+}
+
+function promptForSkill(skill) {
+  return skillPrompts[skill] || skill || "";
+}
+
+function formatJobStatus(status) {
+  return translateLabel(status, jobStatusLabels, status || "未知");
+}
+
+function formatSystemMode(mode) {
+  return translateLabel(mode, systemModeLabels, mode || "未知");
+}
+
+function formatPlannerMode(mode) {
+  return translateLabel(mode, plannerModeLabels, mode || "未知");
+}
+
+function formatRuntimeMode(mode) {
+  return translateLabel(mode, runtimeModeLabels, mode || "未知");
+}
+
+function formatObjectKind(kind) {
+  return translateLabel(kind, objectKindLabels, kind || "未知类型");
+}
+
+function formatObjectState(state) {
+  return translateLabel(state, objectStateLabels, state || "未知");
+}
+
+function formatAnnotationRole(role) {
+  return translateLabel(role, annotationRoleLabels, role || "注释");
+}
+
+function formatAnalysisState(state) {
+  return translateLabel(state, analysisStateLabels, state || "未知");
 }
 
 function formatAnnotation(annotation) {
   if (!annotation) {
-    return "not detected";
+    return "未识别";
   }
-  const sample = (annotation.sample_values || []).slice(0, 4).join(", ");
-  return `${annotation.field} · ${annotation.n_categories} groups${sample ? ` · ${sample}` : ""}`;
+  const sample = (annotation.sample_values || []).slice(0, 4).join("、");
+  return `${annotation.field} · ${annotation.n_categories} 组${sample ? ` · ${sample}` : ""}`;
 }
 
 function statusPill(kind, label) {
@@ -773,9 +967,9 @@ function openImageModal(url, title) {
   const openLink = document.getElementById("imageModalOpen");
   const downloadLink = document.getElementById("imageModalDownload");
 
-  titleNode.textContent = title || "Artifact Preview";
+  titleNode.textContent = title || "结果预览";
   image.src = url;
-  image.alt = title || "Artifact Preview";
+  image.alt = title || "结果预览";
   openLink.href = url;
   downloadLink.href = url;
   downloadLink.setAttribute("download", "");
