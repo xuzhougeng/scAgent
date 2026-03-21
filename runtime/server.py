@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import os
+import math
 import shutil
 import sys
 import time
@@ -47,6 +48,31 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/scagent-mpl")
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 _ANALYSIS_MODULES: tuple[Any, Any, Any, Any, Any] | None = None
+SAFE_EXEC_BUILTINS = {
+    "abs": abs,
+    "all": all,
+    "any": any,
+    "bool": bool,
+    "dict": dict,
+    "enumerate": enumerate,
+    "Exception": Exception,
+    "float": float,
+    "int": int,
+    "isinstance": isinstance,
+    "len": len,
+    "list": list,
+    "max": max,
+    "min": min,
+    "print": print,
+    "range": range,
+    "round": round,
+    "set": set,
+    "sorted": sorted,
+    "str": str,
+    "sum": sum,
+    "tuple": tuple,
+    "zip": zip,
+}
 
 
 def analysis_modules() -> tuple[Any, Any, Any, Any, Any]:
@@ -230,29 +256,137 @@ class RuntimeState:
     def _plot_path(self, session_root: Path, skill: str, label: str) -> Path:
         return session_root / "artifacts" / f"{skill}_{slug(label)}.svg"
 
-    def _save_umap_plot(self, adata: Any, path: Path, color_by: str | None) -> None:
+    def _normalize_legend_loc(self, raw_value: Any) -> str:
+        value = str(raw_value or "best").strip().lower().replace("_", " ")
+        if value in {"on data", "best", "right", "none"}:
+            return value
+        return "best"
+
+    def _coerce_positive_float(self, raw_value: Any, default: float) -> float:
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return default
+        if not math.isfinite(value) or value <= 0:
+            return default
+        return value
+
+    def _categorical_palette_colors(self, plt: Any, np: Any, categories: list[str], palette: str | None) -> list[Any]:
+        cmap_name = str(palette or "tab20")
+        try:
+            cmap = plt.get_cmap(cmap_name)
+        except ValueError:
+            cmap = plt.get_cmap("tab20")
+
+        if len(categories) <= 1:
+            return [cmap(0.5)]
+        return [cmap(position) for position in np.linspace(0.0, 1.0, len(categories))]
+
+    def _render_categorical_umap_legend(
+        self,
+        ax: Any,
+        plt: Any,
+        np: Any,
+        coords: Any,
+        codes: Any,
+        categories: list[str],
+        colors: list[Any],
+        color_by: str,
+        legend_loc: str,
+    ) -> None:
+        if legend_loc == "none":
+            return
+
+        if legend_loc == "on data":
+            for index, label in enumerate(categories):
+                mask = codes == index
+                if not mask.any():
+                    continue
+                subset = coords[mask]
+                center_x = float(np.median(subset[:, 0]))
+                center_y = float(np.median(subset[:, 1]))
+                ax.text(
+                    center_x,
+                    center_y,
+                    str(label),
+                    fontsize=8,
+                    ha="center",
+                    va="center",
+                    color=colors[index],
+                    bbox={
+                        "boxstyle": "round,pad=0.2",
+                        "facecolor": "white",
+                        "edgecolor": colors[index],
+                        "alpha": 0.85,
+                    },
+                )
+            return
+
+        from matplotlib.lines import Line2D
+
+        handles = [
+            Line2D([0], [0], marker="o", linestyle="", markersize=6, markerfacecolor=colors[index], markeredgecolor="none")
+            for index in range(len(categories))
+        ]
+        legend_kwargs = {
+            "title": color_by,
+            "frameon": False,
+            "fontsize": 7,
+        }
+        if legend_loc == "right":
+            legend_kwargs["loc"] = "center left"
+            legend_kwargs["bbox_to_anchor"] = (1.02, 0.5)
+        else:
+            legend_kwargs["loc"] = "best"
+        ax.legend(handles, categories, **legend_kwargs)
+
+    def _save_umap_plot(
+        self,
+        adata: Any,
+        path: Path,
+        color_by: str | None,
+        *,
+        legend_loc: str = "best",
+        palette: str | None = None,
+        title: str | None = None,
+        point_size: float = 8.0,
+        figure_width: float = 6.2,
+        figure_height: float = 4.8,
+    ) -> None:
         _, _, plt, np, _ = analysis_modules()
         coords = adata.obsm.get("X_umap")
         if coords is None or len(coords.shape) != 2 or coords.shape[1] < 2:
             raise RuntimeError("当前对象缺少 `X_umap`，请先执行 run_umap。")
 
-        fig, ax = plt.subplots(figsize=(6.2, 4.8))
+        legend_loc = self._normalize_legend_loc(legend_loc)
+        point_size = self._coerce_positive_float(point_size, 8.0)
+        figure_width = self._coerce_positive_float(figure_width, 6.2)
+        figure_height = self._coerce_positive_float(figure_height, 4.8)
+        figure_title = str(title or "UMAP").strip() or "UMAP"
+
+        fig, ax = plt.subplots(figsize=(figure_width, figure_height))
         if color_by and color_by in adata.obs.columns:
             series = adata.obs[color_by]
             if getattr(series.dtype, "kind", "") in {"i", "u", "f"}:
-                scatter = ax.scatter(coords[:, 0], coords[:, 1], c=series.to_numpy(), s=8, cmap="viridis", linewidths=0)
-                fig.colorbar(scatter, ax=ax, fraction=0.045, pad=0.04)
+                cmap_name = str(palette or "viridis")
+                try:
+                    scatter = ax.scatter(coords[:, 0], coords[:, 1], c=series.to_numpy(), s=point_size, cmap=cmap_name, linewidths=0)
+                except ValueError:
+                    scatter = ax.scatter(coords[:, 0], coords[:, 1], c=series.to_numpy(), s=point_size, cmap="viridis", linewidths=0)
+                if legend_loc != "none":
+                    fig.colorbar(scatter, ax=ax, fraction=0.045, pad=0.04)
             else:
                 categories = series.astype("category")
                 codes = categories.cat.codes.to_numpy()
-                scatter = ax.scatter(coords[:, 0], coords[:, 1], c=codes, s=8, cmap="tab20", linewidths=0)
-                handles, labels = scatter.legend_elements()
-                legend_labels = list(categories.cat.categories)
-                ax.legend(handles, legend_labels[: len(handles)], title=color_by, loc="best", fontsize=7)
+                category_labels = [str(item) for item in categories.cat.categories]
+                colors = self._categorical_palette_colors(plt, np, category_labels, palette)
+                point_colors = [colors[max(code, 0)] if code >= 0 and code < len(colors) else (0.7, 0.7, 0.7, 0.8) for code in codes]
+                ax.scatter(coords[:, 0], coords[:, 1], c=point_colors, s=point_size, linewidths=0)
+                self._render_categorical_umap_legend(ax, plt, np, coords, codes, category_labels, colors, color_by, legend_loc)
         else:
-            ax.scatter(coords[:, 0], coords[:, 1], s=8, c="#2f7d4a", alpha=0.85, linewidths=0)
+            ax.scatter(coords[:, 0], coords[:, 1], s=point_size, c="#2f7d4a", alpha=0.85, linewidths=0)
 
-        ax.set_title("UMAP")
+        ax.set_title(figure_title)
         ax.set_xlabel("UMAP1")
         ax.set_ylabel("UMAP2")
         ax.spines["top"].set_visible(False)
@@ -260,6 +394,20 @@ class RuntimeState:
         fig.tight_layout()
         fig.savefig(path, format="svg")
         plt.close(fig)
+
+    def _save_custom_figure(self, figure: Any, session_root: Path, stem: str) -> Path:
+        path = session_root / "artifacts" / f"{stem}.svg"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(path, format="svg", bbox_inches="tight")
+        _, _, plt, _, _ = analysis_modules()
+        plt.close(figure)
+        return path
+
+    def _save_custom_table(self, table: Any, session_root: Path, stem: str) -> Path:
+        path = session_root / "artifacts" / f"{stem}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        table.to_csv(path, index=False)
+        return path
 
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
         skill = payload["skill"]
@@ -496,6 +644,12 @@ class RuntimeState:
             target = self._require_target(target, skill)
             adata = self._load_adata(target)
             color_by = str(params.get("color_by") or "").strip()
+            legend_loc = self._normalize_legend_loc(params.get("legend_loc"))
+            palette = str(params.get("palette") or "").strip() or None
+            title = str(params.get("title") or "").strip() or None
+            point_size = self._coerce_positive_float(params.get("point_size"), 8.0)
+            figure_width = self._coerce_positive_float(params.get("figure_width"), 6.2)
+            figure_height = self._coerce_positive_float(params.get("figure_height"), 4.8)
             if not color_by:
                 try:
                     color_by = self._cluster_field(target, adata, None)
@@ -504,9 +658,26 @@ class RuntimeState:
             if color_by and color_by not in adata.obs.columns:
                 color_by = self._cluster_field(target, adata, None)
             path = self._plot_path(session_root, skill, target.label)
-            self._save_umap_plot(adata, path, color_by or None)
+            self._save_umap_plot(
+                adata,
+                path,
+                color_by or None,
+                legend_loc=legend_loc,
+                palette=palette,
+                title=title,
+                point_size=point_size,
+                figure_width=figure_width,
+                figure_height=figure_height,
+            )
+            summary_bits = [f"已为 {target.label} 生成真实 UMAP 图。"]
+            if color_by:
+                summary_bits.append(f"着色字段：{color_by}。")
+            if legend_loc != "best":
+                summary_bits.append(f"图例位置：{legend_loc}。")
+            if title:
+                summary_bits.append(f"标题：{title}。")
             return {
-                "summary": f"已为 {target.label} 生成真实 UMAP 图。{f'着色字段：{color_by}。' if color_by else ''}",
+                "summary": "".join(summary_bits),
                 "artifacts": [
                     {
                         "kind": "plot",
@@ -516,8 +687,113 @@ class RuntimeState:
                         "summary": f"{target.label} 的真实 UMAP 散点图。",
                     }
                 ],
-                "metadata": {"placeholder_plot": False, "color_by": color_by or None},
+                "metadata": {
+                    "placeholder_plot": False,
+                    "color_by": color_by or None,
+                    "legend_loc": legend_loc,
+                    "palette": palette,
+                    "title": title,
+                    "point_size": point_size,
+                    "figure_width": figure_width,
+                    "figure_height": figure_height,
+                },
             }
+
+        if skill == "run_python_analysis":
+            target = self._require_target(target, skill)
+            _, sc, plt, np, _ = analysis_modules()
+            import pandas as pd
+
+            adata = self._load_adata(target)
+            counts_adata = self._load_counts_adata(target)
+            code = str(params.get("code") or "").strip()
+            if code == "":
+                raise RuntimeError("自定义分析缺少 code。")
+
+            output_label = str(params.get("output_label") or f"custom_{target.label}").strip() or f"custom_{target.label}"
+            persist_output = bool(params.get("persist_output"))
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            local_env: dict[str, Any] = {
+                "adata": adata,
+                "counts_adata": counts_adata,
+                "sc": sc,
+                "np": np,
+                "pd": pd,
+                "plt": plt,
+                "Path": Path,
+                "json": json,
+                "session_root": session_root,
+                "artifacts_dir": session_root / "artifacts",
+                "result_summary": "",
+                "output_adata": None,
+                "persist_output": persist_output,
+                "figure": None,
+                "result_table": None,
+            }
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                exec(code, {"__builtins__": SAFE_EXEC_BUILTINS}, local_env)
+
+            stdout_text = stdout_buffer.getvalue().strip()
+            stderr_text = stderr_buffer.getvalue().strip()
+            result_summary = str(local_env.get("result_summary") or "").strip()
+            output_adata = local_env.get("output_adata")
+            if output_adata is None and bool(local_env.get("persist_output")):
+                output_adata = local_env.get("adata")
+
+            artifacts: list[dict[str, Any]] = []
+            figure = local_env.get("figure")
+            if figure is not None and hasattr(figure, "savefig"):
+                figure_path = self._save_custom_figure(figure, session_root, f"custom_plot_{slug(output_label)}")
+                artifacts.append(
+                    {
+                        "kind": "plot",
+                        "title": f"{output_label} 的自定义图",
+                        "path": str(figure_path),
+                        "content_type": "image/svg+xml",
+                        "summary": "由自定义 Python 分析生成的图。",
+                    }
+                )
+
+            result_table = local_env.get("result_table")
+            if result_table is not None and hasattr(result_table, "to_csv"):
+                table_path = self._save_custom_table(result_table, session_root, f"custom_table_{slug(output_label)}")
+                artifacts.append(
+                    {
+                        "kind": "table",
+                        "title": f"{output_label} 的自定义表",
+                        "path": str(table_path),
+                        "content_type": "text/csv",
+                        "summary": "由自定义 Python 分析生成的表。",
+                    }
+                )
+
+            response: dict[str, Any] = {
+                "summary": result_summary or f"已完成针对 {target.label} 的自定义 Python 分析。",
+                "metadata": {
+                    "code_executed": True,
+                    "stdout": stdout_text or None,
+                    "stderr": stderr_text or None,
+                },
+            }
+
+            if output_adata is not None:
+                persisted = self._persist_adata_object(
+                    session_id=session_id,
+                    session_root=session_root,
+                    label=output_label,
+                    kind=self._default_kind_after_processing(target),
+                    adata=output_adata,
+                    summary="",
+                )
+                response["object"] = persisted["object"]
+                if not result_summary:
+                    response["summary"] = f"已完成针对 {target.label} 的自定义 Python 分析，并生成对象 {output_label}。"
+
+            if artifacts:
+                response["artifacts"] = artifacts
+
+            return response
 
         if skill == "export_h5ad":
             target = self._require_target(target, skill)
@@ -661,11 +937,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "recluster",
                     "find_markers",
                     "plot_umap",
+                    "run_python_analysis",
                     "export_h5ad",
                 ],
                 "notes": [
                     "运行时会读取真实的 h5ad 结构和注释信息。",
                     "常规预处理链、subset、recluster、marker 和 UMAP 已切到真实 AnnData/Scanpy 执行。",
+                    "当现成 tool 不够时，可通过 run_python_analysis 在内存中的 AnnData 上执行短代码。",
                     "dotplot 和 violin 仍未开放给 planner，等真实实现完成后再升为 wired。",
                 ],
             }
@@ -1042,7 +1320,7 @@ def build_dataset_assessment(metadata: dict[str, Any]) -> dict[str, Any]:
     else:
         preprocessing_state = "raw_like"
 
-    available_analyses = ["inspect_dataset", "subset_cells", "export_h5ad"]
+    available_analyses = ["inspect_dataset", "subset_cells", "run_python_analysis", "export_h5ad"]
     if has_pca or has_neighbors:
         available_analyses.append("recluster")
     if has_umap:

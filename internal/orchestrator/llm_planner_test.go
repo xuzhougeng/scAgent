@@ -148,6 +148,8 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 	}
 
 	foundStrictParams := false
+	foundPlotUMAPParams := false
+	foundCustomCodeSkill := false
 	for _, variant := range stepVariants {
 		stepPayload, ok := variant.(map[string]any)
 		if !ok {
@@ -162,7 +164,51 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 			continue
 		}
 		enumValues, ok := skillPayload["enum"].([]any)
-		if !ok || len(enumValues) != 1 || enumValues[0] != "inspect_dataset" {
+		if !ok || len(enumValues) != 1 {
+			continue
+		}
+		if enumValues[0] == "run_python_analysis" {
+			foundCustomCodeSkill = true
+		}
+		if enumValues[0] == "plot_umap" {
+			paramsPayload, ok := stepProperties["params"].(map[string]any)
+			if !ok {
+				t.Fatalf("plot_umap params schema missing")
+			}
+			paramsProperties, ok := paramsPayload["properties"].(map[string]any)
+			if !ok {
+				t.Fatalf("plot_umap params schema missing properties: %+v", paramsPayload)
+			}
+			legendLocPayload, ok := paramsProperties["legend_loc"].(map[string]any)
+			if !ok {
+				t.Fatalf("plot_umap legend_loc schema missing: %+v", paramsPayload)
+			}
+			legendLocAnyOf, ok := legendLocPayload["anyOf"].([]any)
+			if !ok || len(legendLocAnyOf) != 2 {
+				t.Fatalf("plot_umap legend_loc should allow null: %+v", legendLocPayload)
+			}
+			stringSchema, ok := legendLocAnyOf[0].(map[string]any)
+			if !ok {
+				t.Fatalf("plot_umap legend_loc first anyOf entry invalid: %+v", legendLocPayload)
+			}
+			enumPayload, ok := stringSchema["enum"].([]any)
+			if !ok || len(enumPayload) == 0 {
+				t.Fatalf("plot_umap legend_loc enum missing: %+v", legendLocPayload)
+			}
+			foundOnData := false
+			for _, candidate := range enumPayload {
+				if candidate == "on data" {
+					foundOnData = true
+					break
+				}
+			}
+			if !foundOnData {
+				t.Fatalf("plot_umap legend_loc enum missing 'on data': %+v", legendLocPayload)
+			}
+			foundPlotUMAPParams = true
+			continue
+		}
+		if enumValues[0] != "inspect_dataset" {
 			continue
 		}
 		paramsPayload, ok := stepProperties["params"].(map[string]any)
@@ -204,6 +250,12 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 
 	if !foundStrictParams {
 		t.Fatalf("did not find strict inspect_dataset params schema in planner request")
+	}
+	if !foundPlotUMAPParams {
+		t.Fatalf("did not find plot_umap params schema in planner request")
+	}
+	if !foundCustomCodeSkill {
+		t.Fatalf("did not find run_python_analysis skill in planner request schema")
 	}
 }
 

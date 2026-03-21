@@ -105,6 +105,46 @@
 2. 给 `fake planner` 增加兜底规则
    在 [internal/orchestrator/fake_planner.go](/home/xzg/project/scAgent/internal/orchestrator/fake_planner.go) 中为“预处理”等关键词返回多步 plan。
 
+## 如何保留“自主设计”空间
+
+如果 registry 里没有现成 tool，但又不希望 agent 彻底卡死，可以保留一个受控的代码兜底 tool。
+
+当前对应的是 `run_python_analysis`：
+
+- planner 仍然优先选择已有 `wired` tool
+- 只有当现成 tool 不足以表达需求时，才退到 `run_python_analysis`
+- 代码直接在内存中的 `adata` 上执行，而不是重新发明一套外部脚本流程
+
+当前约定：
+
+- runtime 会把这些变量注入执行环境：
+  - `adata`
+  - `counts_adata`
+  - `sc`
+  - `np`
+  - `pd`
+  - `plt`
+  - `session_root`
+  - `artifacts_dir`
+- 代码里可以设置：
+  - `result_summary`
+  - `output_adata`
+  - `persist_output`
+  - `figure`
+  - `result_table`
+
+其中：
+
+- `adata` 表示当前对象本身
+- `counts_adata` 表示更适合做归一化 / HVG / PCA 这类预处理的 count-safe 副本
+
+这样 agent 就有两层能力：
+
+1. 优先使用稳定、可复用的显式 tool
+2. 在必要时用短代码直接处理内存中的数据对象
+
+这比“所有需求都硬编码成固定 tool”更灵活，也比“完全自由执行任意脚本”更可控。
+
 ## 自定义 Tool 的最小检查清单
 
 - registry 已增加定义

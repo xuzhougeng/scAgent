@@ -163,3 +163,42 @@ func TestFakePlannerUsesRecentPlotContextForFollowUp(t *testing.T) {
 		t.Fatalf("expected follow-up request to reuse plot_umap, got %q", plan.Steps[0].Skill)
 	}
 }
+
+func TestFakePlannerCarriesExplicitPlotParams(t *testing.T) {
+	planner := NewFakePlanner()
+
+	plan, err := planner.Plan(context.Background(), PlanningRequest{
+		Message: "把这个图改一下，legend_loc='on data' point_size=12 title='UMAP with labels'",
+		ActiveObject: &models.ObjectMeta{
+			Metadata: map[string]any{
+				"obsm_keys": []string{"X_umap"},
+			},
+		},
+		RecentJobs: []*models.Job{
+			{
+				ID:     "job_prev",
+				Status: models.JobSucceeded,
+				Steps: []models.JobStep{
+					{Skill: "plot_umap"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run fake planner: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("unexpected step count: got %d", len(plan.Steps))
+	}
+	params := plan.Steps[0].Params
+	if params["legend_loc"] != "on data" {
+		t.Fatalf("expected legend_loc to be carried through, got %+v", params)
+	}
+	if params["title"] != "UMAP with labels" {
+		t.Fatalf("expected title to be carried through, got %+v", params)
+	}
+	pointSize, ok := params["point_size"].(float64)
+	if !ok || pointSize != 12 {
+		t.Fatalf("expected numeric point_size to be carried through, got %+v", params)
+	}
+}

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -19,6 +20,8 @@ type PlannerDebugger interface {
 
 type FakePlanner struct{}
 
+var plotAssignmentPattern = regexp.MustCompile(`(?i)\b(color_by|legend_loc|palette|title|point_size|figure_width|figure_height)\s*=\s*(?:'([^']*)'|"([^"]*)"|([^\s,;]+))`)
+
 func NewFakePlanner() *FakePlanner {
 	return &FakePlanner{}
 }
@@ -30,6 +33,7 @@ func (p *FakePlanner) Mode() string {
 func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.Plan, error) {
 	lower := strings.ToLower(request.Message)
 	steps := make([]models.PlanStep, 0, 4)
+	explicitPlotParams := parseExplicitPlotParams(request.Message)
 	wantsLegend := strings.Contains(lower, "legend") || strings.Contains(request.Message, "图例")
 	wantsPlot := strings.Contains(lower, "plot") || strings.Contains(request.Message, "画") || strings.Contains(request.Message, "绘") || wantsLegend
 	activeHasUMAP := objectHasEmbedding(request.ActiveObject, "X_umap")
@@ -41,7 +45,8 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		strings.Contains(request.Message, "改图") ||
 		strings.Contains(request.Message, "修改图") ||
 		strings.Contains(request.Message, "重画") ||
-		strings.Contains(request.Message, "不符合要求")
+		strings.Contains(request.Message, "不符合要求") ||
+		(len(explicitPlotParams) > 0 && recentPlotSkill != "")
 
 	if strings.Contains(lower, "preprocess") || strings.Contains(request.Message, "预处理") {
 		steps = append(steps,
@@ -103,13 +108,17 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 			})
 		}
 		if !hasSkill(steps, "plot_umap") {
+			plotParams := map[string]any{
+				"color_by": "leiden",
+			}
+			for key, value := range explicitPlotParams {
+				plotParams[key] = value
+			}
 			steps = append(steps, models.PlanStep{
 				ID:             stepID(len(steps) + 1),
 				Skill:          "plot_umap",
 				TargetObjectID: targetFromPrevious(steps),
-				Params: map[string]any{
-					"color_by": "leiden",
-				},
+				Params:         plotParams,
 			})
 		}
 	}
@@ -223,6 +232,50 @@ func latestRecentPlotSkill(request PlanningRequest) string {
 		}
 	}
 
+	return ""
+}
+
+func parseExplicitPlotParams(message string) map[string]any {
+	matches := plotAssignmentPattern.FindAllStringSubmatch(message, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	params := make(map[string]any, len(matches))
+	for _, match := range matches {
+		if len(match) < 5 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(match[1]))
+		value := strings.TrimSpace(firstNonEmpty(match[2], match[3], match[4]))
+		if value == "" {
+			continue
+		}
+
+		switch key {
+		case "point_size", "figure_width", "figure_height":
+			number, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				continue
+			}
+			params[key] = number
+		default:
+			params[key] = value
+		}
+	}
+
+	if len(params) == 0 {
+		return nil
+	}
+	return params
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
 	return ""
 }
 

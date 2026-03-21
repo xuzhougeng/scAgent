@@ -387,6 +387,37 @@
           "type": "string",
           "required": false,
           "description": "Obs field used for coloring."
+        },
+        "legend_loc": {
+          "type": "string",
+          "required": false,
+          "enum": ["best", "right", "none", "on data"],
+          "description": "Legend placement for categorical coloring."
+        },
+        "palette": {
+          "type": "string",
+          "required": false,
+          "description": "Matplotlib colormap name used for coloring."
+        },
+        "title": {
+          "type": "string",
+          "required": false,
+          "description": "Figure title."
+        },
+        "point_size": {
+          "type": "number",
+          "required": false,
+          "description": "Scatter point size."
+        },
+        "figure_width": {
+          "type": "number",
+          "required": false,
+          "description": "Figure width in inches."
+        },
+        "figure_height": {
+          "type": "number",
+          "required": false,
+          "description": "Figure height in inches."
         }
       },
       "output": {
@@ -794,6 +825,41 @@
       "output": {
         "new_object": "object",
         "summary": "string"
+      }
+    },
+    {
+      "name": "run_python_analysis",
+      "label": "Run custom Python analysis",
+      "category": "custom",
+      "support_level": "wired",
+      "description": "Execute a short Python analysis snippet against the in-memory AnnData object when no existing tool is sufficient.",
+      "target_kinds": ["raw_dataset", "filtered_dataset", "subset", "reclustered_subset"],
+      "input": {
+        "target_object_id": {
+          "type": "string",
+          "required": false,
+          "description": "Object to analyze. Defaults to the active object."
+        },
+        "code": {
+          "type": "string",
+          "required": true,
+          "description": "Short Python snippet executed against adata, sc, np, pd, and plt."
+        },
+        "persist_output": {
+          "type": "boolean",
+          "required": false,
+          "description": "Persist the mutated or derived AnnData object as a new object."
+        },
+        "output_label": {
+          "type": "string",
+          "required": false,
+          "description": "Label used when persisting a derived object."
+        }
+      },
+      "output": {
+        "summary": "string",
+        "new_object": "object",
+        "artifacts": "plot[]|table[]"
       }
     },
     {
