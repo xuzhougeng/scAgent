@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -110,6 +111,99 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 	}
 	if !bytes.Contains(capturedBody, []byte(`obs_fields`)) {
 		t.Fatalf("planner request missing metadata context: %s", string(capturedBody))
+	}
+
+	var requestPayload map[string]any
+	if err := json.Unmarshal(capturedBody, &requestPayload); err != nil {
+		t.Fatalf("decode planner request: %v", err)
+	}
+
+	textPayload, ok := requestPayload["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("planner request missing text payload")
+	}
+	formatPayload, ok := textPayload["format"].(map[string]any)
+	if !ok {
+		t.Fatalf("planner request missing format payload")
+	}
+	schemaPayload, ok := formatPayload["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("planner request missing schema payload")
+	}
+	propertiesPayload, ok := schemaPayload["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("planner schema missing properties")
+	}
+	stepsPayload, ok := propertiesPayload["steps"].(map[string]any)
+	if !ok {
+		t.Fatalf("planner schema missing steps")
+	}
+	itemsPayload, ok := stepsPayload["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("planner schema missing items")
+	}
+	stepVariants, ok := itemsPayload["anyOf"].([]any)
+	if !ok || len(stepVariants) == 0 {
+		t.Fatalf("planner schema missing skill variants")
+	}
+
+	foundStrictParams := false
+	for _, variant := range stepVariants {
+		stepPayload, ok := variant.(map[string]any)
+		if !ok {
+			continue
+		}
+		stepProperties, ok := stepPayload["properties"].(map[string]any)
+		if !ok {
+			continue
+		}
+		skillPayload, ok := stepProperties["skill"].(map[string]any)
+		if !ok {
+			continue
+		}
+		enumValues, ok := skillPayload["enum"].([]any)
+		if !ok || len(enumValues) != 1 || enumValues[0] != "inspect_dataset" {
+			continue
+		}
+		paramsPayload, ok := stepProperties["params"].(map[string]any)
+		if !ok {
+			t.Fatalf("inspect_dataset params schema missing")
+		}
+		if paramsPayload["additionalProperties"] != false {
+			t.Fatalf("inspect_dataset params schema must be strict: %+v", paramsPayload)
+		}
+		requiredFields, ok := paramsPayload["required"].([]any)
+		if !ok {
+			t.Fatalf("inspect_dataset params schema missing required array: %+v", paramsPayload)
+		}
+		if len(requiredFields) != 1 || requiredFields[0] != "include_fields" {
+			t.Fatalf("inspect_dataset params required must enumerate all properties: %+v", paramsPayload)
+		}
+		paramsProperties, ok := paramsPayload["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("inspect_dataset params schema missing properties: %+v", paramsPayload)
+		}
+		includeFieldsPayload, ok := paramsProperties["include_fields"].(map[string]any)
+		if !ok {
+			t.Fatalf("inspect_dataset include_fields schema missing: %+v", paramsPayload)
+		}
+		includeFieldsAnyOf, ok := includeFieldsPayload["anyOf"].([]any)
+		if !ok || len(includeFieldsAnyOf) != 2 {
+			t.Fatalf("inspect_dataset include_fields should allow null: %+v", includeFieldsPayload)
+		}
+		targetObjectPayload, ok := stepProperties["target_object_id"].(map[string]any)
+		if !ok {
+			t.Fatalf("inspect_dataset target_object_id schema missing")
+		}
+		targetObjectAnyOf, ok := targetObjectPayload["anyOf"].([]any)
+		if !ok || len(targetObjectAnyOf) != 2 {
+			t.Fatalf("inspect_dataset target_object_id should allow null: %+v", targetObjectPayload)
+		}
+		foundStrictParams = true
+	}
+
+	if !foundStrictParams {
+		t.Fatalf("did not find strict inspect_dataset params schema in planner request")
 	}
 }
 

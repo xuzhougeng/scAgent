@@ -182,7 +182,7 @@ func (p *LLMPlanner) buildRequest(requestPayload PlanningRequest) map[string]any
 				"type":   "json_schema",
 				"name":   "scagent_plan",
 				"strict": true,
-				"schema": planSchema(),
+				"schema": planSchema(p.skills.ListExecutable()),
 			},
 		},
 	}
@@ -233,7 +233,12 @@ func formatSkillInstruction(definition skill.Definition) string {
 	)
 }
 
-func planSchema() map[string]any {
+func planSchema(definitions []skill.Definition) map[string]any {
+	stepSchemas := make([]any, 0, len(definitions))
+	for _, definition := range definitions {
+		stepSchemas = append(stepSchemas, planStepSchema(definition))
+	}
+
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
@@ -242,23 +247,123 @@ func planSchema() map[string]any {
 			"steps": map[string]any{
 				"type": "array",
 				"items": map[string]any{
-					"type":                 "object",
-					"additionalProperties": false,
-					"required":             []string{"skill", "target_object_id", "params"},
-					"properties": map[string]any{
-						"skill": map[string]any{
-							"type": "string",
-						},
-						"target_object_id": map[string]any{
-							"type": "string",
-						},
-						"params": map[string]any{
-							"type":                 "object",
-							"additionalProperties": true,
+					"anyOf": stepSchemas,
+				},
+			},
+		},
+	}
+}
+
+func planStepSchema(definition skill.Definition) map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"skill", "target_object_id", "params"},
+		"properties": map[string]any{
+			"skill": map[string]any{
+				"type": "string",
+				"enum": []string{definition.Name},
+			},
+			"target_object_id": nullableSchema(map[string]any{"type": "string"}),
+			"params":           paramsSchema(definition),
+		},
+	}
+}
+
+func paramsSchema(definition skill.Definition) map[string]any {
+	properties := make(map[string]any, len(definition.Input))
+	inputNames := make([]string, 0, len(definition.Input))
+
+	for name := range definition.Input {
+		inputNames = append(inputNames, name)
+	}
+	sort.Strings(inputNames)
+
+	for _, name := range inputNames {
+		field := definition.Input[name]
+		if name == "target_object_id" {
+			continue
+		}
+
+		properties[name] = fieldSchema(field)
+	}
+
+	required := make([]string, 0, len(properties))
+	for _, name := range inputNames {
+		if name == "target_object_id" {
+			continue
+		}
+		required = append(required, name)
+	}
+
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties":           properties,
+		"required":             required,
+	}
+}
+
+func fieldSchema(field skill.FieldSchema) map[string]any {
+	var schema map[string]any
+
+	switch field.Type {
+	case "string":
+		schema = map[string]any{
+			"type": "string",
+		}
+		if len(field.Enum) > 0 {
+			schema["enum"] = field.Enum
+		}
+	case "number":
+		schema = map[string]any{
+			"type": "number",
+		}
+	case "boolean":
+		schema = map[string]any{
+			"type": "boolean",
+		}
+	case "array":
+		schema = map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type": "string",
+			},
+		}
+	case "string|number|array":
+		schema = map[string]any{
+			"anyOf": []any{
+				map[string]any{"type": "string"},
+				map[string]any{"type": "number"},
+				map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"anyOf": []any{
+							map[string]any{"type": "string"},
+							map[string]any{"type": "number"},
 						},
 					},
 				},
 			},
+		}
+	default:
+		schema = map[string]any{
+			"type": "string",
+		}
+	}
+
+	if field.Required {
+		return schema
+	}
+
+	return nullableSchema(schema)
+}
+
+func nullableSchema(schema map[string]any) map[string]any {
+	return map[string]any{
+		"anyOf": []any{
+			schema,
+			map[string]any{"type": "null"},
 		},
 	}
 }
