@@ -48,6 +48,21 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/scagent-mpl")
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 _ANALYSIS_MODULES: tuple[Any, Any, Any, Any, Any] | None = None
+SAFE_IMPORT_MODULES = {
+    "anndata",
+    "json",
+    "math",
+    "matplotlib",
+    "matplotlib.pyplot",
+    "numpy",
+    "os",
+    "pandas",
+    "pathlib",
+    "re",
+    "scanpy",
+    "scipy",
+    "scipy.sparse",
+}
 SAFE_EXEC_BUILTINS = {
     "abs": abs,
     "all": all,
@@ -73,6 +88,28 @@ SAFE_EXEC_BUILTINS = {
     "tuple": tuple,
     "zip": zip,
 }
+
+
+def safe_exec_import(name: str, globals_dict: Any = None, locals_dict: Any = None, fromlist: tuple[str, ...] = (), level: int = 0) -> Any:
+    if level != 0:
+        raise ImportError("relative imports are not allowed")
+
+    target = str(name or "").strip()
+    if target == "":
+        raise ImportError("empty import is not allowed")
+
+    allowed = False
+    for candidate in SAFE_IMPORT_MODULES:
+        if target == candidate or target.startswith(candidate + "."):
+            allowed = True
+            break
+    if not allowed:
+        raise ImportError(f"import '{target}' is not allowed")
+
+    return __import__(target, globals_dict, locals_dict, fromlist, level)
+
+
+SAFE_EXEC_BUILTINS["__import__"] = safe_exec_import
 
 
 def analysis_modules() -> tuple[Any, Any, Any, Any, Any]:

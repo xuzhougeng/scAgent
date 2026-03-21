@@ -164,6 +164,37 @@ func TestFakePlannerUsesRecentPlotContextForFollowUp(t *testing.T) {
 	}
 }
 
+func TestFakePlannerSubsetsNamedCellTypeThenPlotsUMAP(t *testing.T) {
+	planner := NewFakePlanner()
+
+	plan, err := planner.Plan(context.Background(), PlanningRequest{
+		Message: "提取B cells, 单独画UMAP",
+		ActiveObject: &models.ObjectMeta{
+			Metadata: map[string]any{
+				"obsm_keys": []string{"X_umap"},
+				"cell_type_annotation": map[string]any{
+					"sample_values": []any{"B cells", "T cells"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run fake planner: %v", err)
+	}
+	if len(plan.Steps) != 2 {
+		t.Fatalf("unexpected steps: %+v", plan.Steps)
+	}
+	if plan.Steps[0].Skill != "subset_cells" || plan.Steps[1].Skill != "plot_umap" {
+		t.Fatalf("unexpected steps: %+v", plan.Steps)
+	}
+	if plan.Steps[0].Params["value"] != "B cells" {
+		t.Fatalf("expected subset to target B cells, got %+v", plan.Steps[0].Params)
+	}
+	if plan.Steps[1].TargetObjectID != "$prev" {
+		t.Fatalf("expected plot to target subset output, got %+v", plan.Steps[1])
+	}
+}
+
 func TestFakePlannerCarriesExplicitPlotParams(t *testing.T) {
 	planner := NewFakePlanner()
 

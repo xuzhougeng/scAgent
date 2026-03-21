@@ -21,6 +21,8 @@ type PlannerDebugger interface {
 type FakePlanner struct{}
 
 var plotAssignmentPattern = regexp.MustCompile(`(?i)\b(color_by|legend_loc|palette|title|point_size|figure_width|figure_height)\s*=\s*(?:'([^']*)'|"([^"]*)"|([^\s,;]+))`)
+var englishCellTypePattern = regexp.MustCompile(`(?i)\b([a-z0-9][a-z0-9_+\- ]*cells?)\b`)
+var chineseCellTypePattern = regexp.MustCompile(`提取\s*([^\s,，。；;]+?)\s*细胞`)
 
 func NewFakePlanner() *FakePlanner {
 	return &FakePlanner{}
@@ -47,6 +49,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		strings.Contains(request.Message, "重画") ||
 		strings.Contains(request.Message, "不符合要求") ||
 		(len(explicitPlotParams) > 0 && recentPlotSkill != "")
+	cellTypeValue := inferCellTypeValue(request, request.Message)
 
 	if strings.Contains(lower, "preprocess") || strings.Contains(request.Message, "预处理") {
 		steps = append(steps,
@@ -59,9 +62,11 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		)
 	}
 
-	if strings.Contains(lower, "subset") || strings.Contains(request.Message, "拿出来") || strings.Contains(request.Message, "筛") || strings.Contains(request.Message, "cortex") {
+	if strings.Contains(lower, "subset") || strings.Contains(request.Message, "提取") || strings.Contains(request.Message, "拿出来") || strings.Contains(request.Message, "筛") || strings.Contains(request.Message, "cortex") || cellTypeValue != "" {
 		value := "cortex"
-		if !strings.Contains(lower, "cortex") && !strings.Contains(request.Message, "cortex") {
+		if cellTypeValue != "" {
+			value = cellTypeValue
+		} else if !strings.Contains(lower, "cortex") && !strings.Contains(request.Message, "cortex") {
 			value = "selected_group"
 		}
 		steps = append(steps, models.PlanStep{
@@ -233,6 +238,81 @@ func latestRecentPlotSkill(request PlanningRequest) string {
 	}
 
 	return ""
+}
+
+func inferCellTypeValue(request PlanningRequest, message string) string {
+	for _, candidate := range candidateCellTypeValues(request.ActiveObject) {
+		if strings.Contains(strings.ToLower(message), strings.ToLower(candidate)) {
+			return candidate
+		}
+	}
+
+	if match := chineseCellTypePattern.FindStringSubmatch(message); len(match) > 1 {
+		return strings.TrimSpace(match[1])
+	}
+	if match := englishCellTypePattern.FindStringSubmatch(message); len(match) > 1 {
+		return strings.TrimSpace(match[1])
+	}
+	return ""
+}
+
+func candidateCellTypeValues(object *models.ObjectMeta) []string {
+	if object == nil || object.Metadata == nil {
+		return nil
+	}
+
+	out := make([]string, 0, 8)
+	if annotation, ok := object.Metadata["cell_type_annotation"].(map[string]any); ok {
+		if values, ok := annotation["sample_values"].([]any); ok {
+			for _, value := range values {
+				if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+					out = append(out, text)
+				}
+			}
+		}
+	}
+	if fields, ok := object.Metadata["categorical_obs_fields"].([]any); ok {
+		for _, field := range fields {
+			fieldMap, ok := field.(map[string]any)
+			if !ok {
+				continue
+			}
+			role, _ := fieldMap["role"].(string)
+			if role != "cell_type" {
+				continue
+			}
+			values, ok := fieldMap["sample_values"].([]any)
+			if !ok {
+				continue
+			}
+			for _, value := range values {
+				if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+					out = append(out, text)
+				}
+			}
+		}
+	}
+	return dedupeStrings(out)
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		key := strings.ToLower(strings.TrimSpace(value))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func parseExplicitPlotParams(message string) map[string]any {
