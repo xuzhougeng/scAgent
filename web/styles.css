@@ -227,6 +227,58 @@ body {
   gap: 8px;
 }
 
+.status-section {
+  margin-top: 14px;
+}
+
+.status-section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+
+.environment-check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.environment-check {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.environment-check.ok {
+  border-color: rgba(61, 107, 75, 0.18);
+  background: rgba(61, 107, 75, 0.06);
+}
+
+.environment-check.bad {
+  border-color: rgba(171, 68, 52, 0.22);
+  background: rgba(171, 68, 52, 0.06);
+}
+
+.environment-check-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.environment-check-head strong {
+  word-break: break-word;
+}
+
+.environment-check p {
+  margin: 0;
+  word-break: break-word;
+}
+
 .status-notes p {
   margin: 8px 0 0;
 }

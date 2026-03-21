@@ -3,19 +3,38 @@
 from __future__ import annotations
 
 import csv
+import importlib
+import io
 import json
 import os
 import random
 import shutil
+import sys
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
 import h5py
 
 MAX_CATEGORY_SCAN = 50000
+
+ENVIRONMENT_PACKAGES: list[tuple[str, str, str]] = [
+    ("numpy", "numpy", "numpy"),
+    ("scipy", "scipy", "scipy"),
+    ("pandas", "pandas", "pandas"),
+    ("anndata", "anndata", "anndata"),
+    ("scanpy", "scanpy", "scanpy"),
+    ("h5py", "h5py", "h5py"),
+    ("matplotlib", "matplotlib", "matplotlib"),
+    ("scikit-learn", "sklearn", "scikit-learn"),
+    ("umap-learn", "umap", "umap-learn"),
+    ("python-igraph", "igraph", "igraph"),
+    ("leidenalg", "leidenalg", "leidenalg"),
+]
 
 
 @dataclass
@@ -37,6 +56,7 @@ class RuntimeState:
         self.counter = 0
         self.objects: dict[str, RuntimeObject] = {}
         self.sample_path = Path(os.environ.get("SCAGENT_SAMPLE_H5AD", "data/samples/pbmc3k.h5ad"))
+        self.environment_report = build_environment_report(self.sample_path)
 
     def next_ref(self, session_id: str) -> str:
         self.counter += 1
@@ -392,37 +412,33 @@ class RuntimeState:
 </svg>
 """.strip()
 
-
-STATE = RuntimeState()
-
-
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/healthz":
-            self._write_json(
-                HTTPStatus.OK,
-                {
-                    "status": "ok",
-                    "runtime_mode": "hybrid_demo",
-                    "real_h5ad_inspection": True,
-                    "real_analysis_execution": False,
-                    "executable_skills": [
-                        "inspect_dataset",
-                        "assess_dataset",
-                        "subset_cells",
-                        "recluster",
-                        "find_markers",
-                        "plot_umap",
-                        "plot_dotplot",
-                        "plot_violin",
-                        "export_h5ad",
-                    ],
-                    "notes": [
-                        "Runtime reads real h5ad structure and annotations.",
-                        "Analysis execution is still mock for subset, recluster, markers, and plots.",
-                    ],
-                },
-            )
+            payload = {
+                "status": "ok",
+                "runtime_mode": "hybrid_demo",
+                "real_h5ad_inspection": True,
+                "real_analysis_execution": False,
+                "executable_skills": [
+                    "inspect_dataset",
+                    "assess_dataset",
+                    "subset_cells",
+                    "recluster",
+                    "find_markers",
+                    "plot_umap",
+                    "plot_dotplot",
+                    "plot_violin",
+                    "export_h5ad",
+                ],
+                "notes": [
+                    "Runtime reads real h5ad structure and annotations.",
+                    "Analysis execution is still mock for subset, recluster, markers, and plots.",
+                    "plot_umap currently emits a placeholder SVG artifact instead of plotting real UMAP coordinates.",
+                ],
+            }
+            payload.update(STATE.environment_report)
+            self._write_json(HTTPStatus.OK, payload)
             return
         self._write_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
@@ -486,6 +502,76 @@ def inspect_h5ad_shape(path: Path) -> tuple[int, int]:
         n_obs = infer_axis_length(obs)
         n_vars = infer_axis_length(var)
     return n_obs, n_vars
+
+
+def build_environment_report(sample_path: Path) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+
+    for label, module_name, dist_name in ENVIRONMENT_PACKAGES:
+        try:
+            with io.StringIO() as sink, redirect_stdout(sink), redirect_stderr(sink):
+                importlib.import_module(module_name)
+            checks.append(
+                {
+                    "name": label,
+                    "ok": True,
+                    "detail": metadata.version(dist_name),
+                }
+            )
+        except Exception as exc:  # pragma: no cover - diagnostic path
+            checks.append(
+                {
+                    "name": label,
+                    "ok": False,
+                    "detail": str(exc),
+                }
+            )
+
+    sample_summary: dict[str, Any] | None = None
+    if sample_path.exists():
+        try:
+            sample_summary = inspect_sample_h5ad(sample_path)
+            checks.append(
+                {
+                    "name": "sample_h5ad",
+                    "ok": True,
+                    "detail": f"{sample_path} ({sample_summary['n_obs']} cells, {sample_summary['n_vars']} genes)",
+                }
+            )
+        except Exception as exc:  # pragma: no cover - diagnostic path
+            checks.append(
+                {
+                    "name": "sample_h5ad",
+                    "ok": False,
+                    "detail": str(exc),
+                }
+            )
+    else:
+        checks.append(
+            {
+                "name": "sample_h5ad",
+                "ok": False,
+                "detail": f"missing sample file: {sample_path}",
+            }
+        )
+
+    return {
+        "python_version": sys.version.split()[0],
+        "environment_checks": checks,
+        "sample_h5ad": sample_summary,
+    }
+
+
+def inspect_sample_h5ad(path: Path) -> dict[str, Any]:
+    metadata = inspect_h5ad_metadata(path)
+    n_obs, n_vars = inspect_h5ad_shape(path)
+    return {
+        "path": str(path),
+        "n_obs": n_obs,
+        "n_vars": n_vars,
+        "obs_fields": metadata.get("obs_fields", [])[:12],
+        "obsm_keys": metadata.get("obsm_keys", [])[:12],
+    }
 
 
 def infer_axis_length(node: Any) -> int:
@@ -738,6 +824,9 @@ def describe_annotation_summary(metadata: dict[str, Any]) -> str:
         parts.append(f"Missing: {missing[0]}")
 
     return " ".join(parts)
+
+
+STATE = RuntimeState()
 
 
 def main() -> None:

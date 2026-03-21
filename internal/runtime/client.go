@@ -94,13 +94,30 @@ type ExecuteResponse struct {
 	ActiveHint string               `json:"active_hint,omitempty"`
 }
 
+type EnvironmentCheck struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type SampleH5ADSummary struct {
+	Path      string   `json:"path"`
+	NObs      int      `json:"n_obs"`
+	NVars     int      `json:"n_vars"`
+	ObsFields []string `json:"obs_fields,omitempty"`
+	ObsmKeys  []string `json:"obsm_keys,omitempty"`
+}
+
 type HealthStatus struct {
-	Status                string   `json:"status"`
-	RuntimeMode           string   `json:"runtime_mode,omitempty"`
-	RealH5ADInspection    bool     `json:"real_h5ad_inspection"`
-	RealAnalysisExecution bool     `json:"real_analysis_execution"`
-	ExecutableSkills      []string `json:"executable_skills,omitempty"`
-	Notes                 []string `json:"notes,omitempty"`
+	Status                string             `json:"status"`
+	RuntimeMode           string             `json:"runtime_mode,omitempty"`
+	RealH5ADInspection    bool               `json:"real_h5ad_inspection"`
+	RealAnalysisExecution bool               `json:"real_analysis_execution"`
+	ExecutableSkills      []string           `json:"executable_skills,omitempty"`
+	Notes                 []string           `json:"notes,omitempty"`
+	PythonVersion         string             `json:"python_version,omitempty"`
+	EnvironmentChecks     []EnvironmentCheck `json:"environment_checks,omitempty"`
+	SampleH5AD            *SampleH5ADSummary `json:"sample_h5ad,omitempty"`
 }
 
 func (c *Client) Health(ctx context.Context) error {

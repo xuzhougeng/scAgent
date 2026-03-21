@@ -317,6 +317,13 @@ func TestStatusAPI(t *testing.T) {
 		RealH5ADInspection    bool     `json:"real_h5ad_inspection"`
 		RealAnalysisExecution bool     `json:"real_analysis_execution"`
 		ExecutableSkills      []string `json:"executable_skills"`
+		Runtime               struct {
+			PythonVersion     string `json:"python_version"`
+			EnvironmentChecks []struct {
+				Name string `json:"name"`
+				OK   bool   `json:"ok"`
+			} `json:"environment_checks"`
+		} `json:"runtime"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode status response: %v", err)
@@ -339,6 +346,12 @@ func TestStatusAPI(t *testing.T) {
 	}
 	if len(response.ExecutableSkills) == 0 {
 		t.Fatalf("expected executable skills in status payload")
+	}
+	if response.Runtime.PythonVersion == "" {
+		t.Fatalf("expected runtime python version in status payload")
+	}
+	if len(response.Runtime.EnvironmentChecks) == 0 {
+		t.Fatalf("expected runtime environment checks in status payload")
 	}
 }
 
@@ -377,6 +390,11 @@ func (f *fakeRuntime) Status(context.Context) (*runtimeclient.HealthStatus, erro
 		RuntimeMode:           "hybrid_demo",
 		RealH5ADInspection:    true,
 		RealAnalysisExecution: false,
+		PythonVersion:         "3.11.9",
+		EnvironmentChecks: []runtimeclient.EnvironmentCheck{
+			{Name: "numpy", OK: true, Detail: "1.26.4"},
+			{Name: "scanpy", OK: false, Detail: "missing optional dependency"},
+		},
 		ExecutableSkills: []string{
 			"inspect_dataset",
 			"assess_dataset",

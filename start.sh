@@ -32,7 +32,12 @@ if [[ "${SCAGENT_PLANNER_MODE}" == "llm" && -z "${SCAGENT_OPENAI_API_KEY}" ]]; t
 fi
 
 runtime_cmd=(python3 runtime/server.py)
-if [[ "${SCAGENT_USE_PIXI}" != "0" ]] && command -v pixi >/dev/null 2>&1; then
+if [[ "${SCAGENT_USE_PIXI}" != "0" ]]; then
+  if ! command -v pixi >/dev/null 2>&1; then
+    echo "SCAGENT_USE_PIXI=${SCAGENT_USE_PIXI}, but pixi was not found in PATH." >&2
+    echo "Install pixi or set SCAGENT_USE_PIXI=0 to run the runtime with python3." >&2
+    exit 1
+  fi
   runtime_cmd=(pixi run runtime)
 fi
 

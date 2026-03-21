@@ -20,6 +20,7 @@ Go control plane + Python analysis runtime + vanilla WebView-friendly frontend f
 Install Pixi itself first with the official installer, then create the pinned analysis environment:
 
 ```bash
+curl -fsSL https://pixi.sh/install.sh | sh
 pixi install
 pixi run doctor
 ```
@@ -52,7 +53,8 @@ cp .env.example .env
 `start.sh` will:
 
 - load `.env` if it exists
-- start the Python runtime through `pixi run runtime` when Pixi is available
+- require Pixi by default and start the Python runtime through `pixi run runtime`
+- fail fast when Pixi is unavailable unless you explicitly set `SCAGENT_USE_PIXI=0`
 - wait for the runtime health check
 - start the Go control plane with the configured planner mode
 

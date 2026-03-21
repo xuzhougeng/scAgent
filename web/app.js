@@ -226,7 +226,54 @@ function renderSystemStatus() {
     statusPill(status.real_analysis_execution ? "ok" : "warn", `Analysis: ${status.real_analysis_execution ? "real" : "mock"}`),
   ];
 
-  const notes = (status.notes || []).slice(0, 2);
+  const runtime = status.runtime || {};
+  const environmentChecks = runtime.environment_checks || [];
+  const sampleH5AD = runtime.sample_h5ad;
+  const notes = status.notes || [];
+
+  const environmentSection = environmentChecks.length
+    ? `
+      <div class="status-section">
+        <div class="status-section-head">
+          <strong>Environment Checks</strong>
+          <span class="muted">Python ${escapeHTML(runtime.python_version || "unknown")}</span>
+        </div>
+        <div class="environment-check-grid">
+          ${environmentChecks
+            .map(
+              (check) => `
+                <section class="environment-check ${check.ok ? "ok" : "bad"}">
+                  <div class="environment-check-head">
+                    <strong>${escapeHTML(check.name)}</strong>
+                    ${statusPill(check.ok ? "ok" : "bad", check.ok ? "OK" : "FAIL")}
+                  </div>
+                  <p class="muted">${escapeHTML(check.detail || (check.ok ? "Ready" : "Unavailable"))}</p>
+                </section>
+              `,
+            )
+            .join("")}
+        </div>
+      </div>
+    `
+    : "";
+
+  const sampleSection = sampleH5AD
+    ? `
+      <div class="status-section">
+        <div class="status-section-head">
+          <strong>Sample h5ad</strong>
+          <span class="muted">${escapeHTML(sampleH5AD.path || "")}</span>
+        </div>
+        <div class="status-detail-grid">
+          <div class="kv"><span>Cells</span><span>${sampleH5AD.n_obs ?? "unknown"}</span></div>
+          <div class="kv"><span>Genes</span><span>${sampleH5AD.n_vars ?? "unknown"}</span></div>
+          <div class="kv"><span>Obs Fields</span><span>${escapeHTML(formatList(sampleH5AD.obs_fields))}</span></div>
+          <div class="kv"><span>Embeddings</span><span>${escapeHTML(formatList(sampleH5AD.obsm_keys))}</span></div>
+        </div>
+      </div>
+    `
+    : "";
+
   container.innerHTML = `
     <section class="status-card">
       <div class="status-card-head">
@@ -238,6 +285,8 @@ function renderSystemStatus() {
         <div class="kv"><span>Runtime Mode</span><span>${escapeHTML(status.runtime_mode || "unknown")}</span></div>
         <div class="kv"><span>Executable Skills</span><span>${escapeHTML(formatList(status.executable_skills))}</span></div>
       </div>
+      ${environmentSection}
+      ${sampleSection}
       ${
         notes.length
           ? `<div class="status-notes">${notes.map((note) => `<p class="muted">${escapeHTML(note)}</p>`).join("")}</div>`
