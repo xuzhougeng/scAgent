@@ -6,10 +6,12 @@ import csv
 import importlib
 import io
 import json
+import logging
 import os
 import random
 import shutil
 import sys
+import time
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -35,6 +37,12 @@ ENVIRONMENT_PACKAGES: list[tuple[str, str, str]] = [
     ("python-igraph", "igraph", "igraph"),
     ("leidenalg", "leidenalg", "leidenalg"),
 ]
+
+logging.basicConfig(
+    level=os.environ.get("SCAGENT_LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+LOGGER = logging.getLogger("scagent.runtime")
 
 
 @dataclass
@@ -412,6 +420,16 @@ class RuntimeState:
 </svg>
 """.strip()
 
+
+def log_runtime_event(event: str, **fields: Any) -> None:
+    payload = {"event": event}
+    for key, value in fields.items():
+        if value in (None, "", [], {}):
+            continue
+        payload[key] = value
+    LOGGER.info(json.dumps(payload, ensure_ascii=False, default=str))
+
+
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/healthz":
@@ -443,31 +461,91 @@ class RequestHandler(BaseHTTPRequestHandler):
         self._write_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
     def do_POST(self) -> None:
+        payload: dict[str, Any] = {}
+        started_at = time.perf_counter()
         try:
             payload = self._read_json()
+            session_id = payload.get("session_id")
+            request_id = payload.get("request_id")
             if self.path == "/sessions/init":
+                log_runtime_event(
+                    "session_init_started",
+                    session_id=session_id,
+                    label=payload.get("label"),
+                    session_root=payload.get("session_root"),
+                )
                 session_root = Path(payload["session_root"])
                 response = STATE.create_session_root(
                     session_id=payload["session_id"],
                     label=payload.get("label", "session"),
                     session_root=session_root,
                 )
+                log_runtime_event(
+                    "session_init_finished",
+                    session_id=session_id,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                    object_label=response.get("object", {}).get("label"),
+                    n_obs=response.get("object", {}).get("n_obs"),
+                    n_vars=response.get("object", {}).get("n_vars"),
+                )
                 self._write_json(HTTPStatus.OK, response)
                 return
             if self.path == "/sessions/load_file":
+                log_runtime_event(
+                    "load_file_started",
+                    session_id=session_id,
+                    label=payload.get("label"),
+                    file_path=payload.get("file_path"),
+                )
                 response = STATE.load_file(
                     session_id=payload["session_id"],
                     file_path=Path(payload["file_path"]),
                     label=payload.get("label", ""),
                 )
+                log_runtime_event(
+                    "load_file_finished",
+                    session_id=session_id,
+                    duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                    object_label=response.get("object", {}).get("label"),
+                    n_obs=response.get("object", {}).get("n_obs"),
+                    n_vars=response.get("object", {}).get("n_vars"),
+                )
                 self._write_json(HTTPStatus.OK, response)
                 return
             if self.path == "/execute":
+                log_runtime_event(
+                    "job_started",
+                    session_id=session_id,
+                    request_id=request_id,
+                    skill=payload.get("skill"),
+                    target_backend_ref=payload.get("target_backend_ref"),
+                    params=payload.get("params"),
+                )
                 response = STATE.execute(payload)
+                log_runtime_event(
+                    "job_finished",
+                    session_id=session_id,
+                    request_id=request_id,
+                    skill=payload.get("skill"),
+                    target_backend_ref=payload.get("target_backend_ref"),
+                    duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                    artifact_count=len(response.get("artifacts", [])),
+                    output_label=response.get("object", {}).get("label"),
+                    summary=response.get("summary"),
+                )
                 self._write_json(HTTPStatus.OK, response)
                 return
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         except Exception as exc:  # noqa: BLE001
+            log_runtime_event(
+                "request_failed",
+                path=self.path,
+                session_id=payload.get("session_id"),
+                request_id=payload.get("request_id"),
+                skill=payload.get("skill"),
+                duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                error=str(exc),
+            )
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
 
     def log_message(self, format: str, *args: Any) -> None:
