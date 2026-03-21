@@ -83,8 +83,7 @@ body {
 .session-meta,
 .object-tree,
 .chat,
-.inspector-body,
-.artifacts {
+.inspector-body {
   overflow: auto;
 }
 
@@ -336,6 +335,14 @@ body {
   background: rgba(255, 255, 255, 0.82);
 }
 
+.message-user {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.message-assistant {
+  background: linear-gradient(180deg, rgba(246, 250, 242, 0.96), rgba(240, 246, 235, 0.9));
+}
+
 .message-role {
   margin-bottom: 8px;
   color: var(--accent);
@@ -351,6 +358,76 @@ body {
   word-break: break-word;
   font-family: var(--font-sans);
   line-height: 1.5;
+}
+
+.message-detail {
+  margin-top: 12px;
+}
+
+.message-job-card {
+  border: 1px solid rgba(61, 107, 75, 0.14);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.message-job-card.pending {
+  background: rgba(255, 248, 236, 0.72);
+  border-color: rgba(197, 136, 49, 0.2);
+}
+
+.message-job-card.failed {
+  background: rgba(255, 244, 242, 0.82);
+  border-color: rgba(171, 68, 52, 0.18);
+}
+
+.message-job-head,
+.message-step-head,
+.message-artifact-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.message-job-summary,
+.message-job-error {
+  margin: 10px 0 0;
+  line-height: 1.5;
+}
+
+.message-job-error {
+  color: #8b2d21;
+}
+
+.message-step-list,
+.message-artifact-group {
+  margin-top: 12px;
+}
+
+.message-step-row,
+.message-step-card {
+  border-top: 1px solid rgba(61, 107, 75, 0.1);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+.message-step-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.92rem;
+}
+
+.message-step-card p {
+  margin: 8px 0 0;
+}
+
+.message-step-meta {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.86rem;
 }
 
 .composer {
@@ -467,6 +544,12 @@ body {
   border: none;
   background: transparent;
   cursor: zoom-in;
+}
+
+.artifact-card-chat {
+  margin-top: 12px;
+  margin-bottom: 0;
+  background: rgba(255, 255, 255, 0.76);
 }
 
 .image-modal {

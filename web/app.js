@@ -6,6 +6,8 @@ const appState = {
   systemStatus: null,
   eventSource: null,
   plannerPreview: null,
+  chatRenderVersion: 0,
+  artifactTextCache: new Map(),
 };
 
 const quickActionPrompts = [
@@ -206,7 +208,6 @@ function render() {
   renderChat();
   renderInspector();
   renderPlannerPreview();
-  renderArtifacts();
 }
 
 function renderSystemStatus() {
@@ -345,7 +346,6 @@ function renderObjectTree() {
       node.addEventListener("click", () => {
         appState.activeObjectId = object.id;
         renderInspector();
-        renderArtifacts();
         renderObjectTree();
       });
       container.appendChild(node);
@@ -356,18 +356,153 @@ function renderObjectTree() {
   walk("root", 0);
 }
 
-function renderChat() {
+async function renderChat() {
   const container = document.getElementById("chat");
   const template = document.getElementById("messageTemplate");
-  container.innerHTML = "";
+  const renderVersion = ++appState.chatRenderVersion;
+  const messages = appState.snapshot?.messages || [];
+  const nodes = await Promise.all(messages.map((message) => buildMessageNode(message, template)));
 
-  for (const message of appState.snapshot?.messages || []) {
-    const node = template.content.firstElementChild.cloneNode(true);
-    node.querySelector(".message-role").textContent = message.role;
-    node.querySelector(".message-content").textContent = message.content;
+  if (renderVersion !== appState.chatRenderVersion) {
+    return;
+  }
+
+  container.innerHTML = "";
+  for (const node of nodes) {
     container.appendChild(node);
   }
+  bindArtifactPreviewButtons(container);
   container.scrollTop = container.scrollHeight;
+}
+
+async function buildMessageNode(message, template) {
+  const node = template.content.firstElementChild.cloneNode(true);
+  node.classList.add(`message-${message.role}`);
+  node.querySelector(".message-role").textContent = message.role;
+  node.querySelector(".message-content").textContent = message.content;
+
+  const detailMarkup = await buildMessageDetailMarkup(message);
+  if (detailMarkup) {
+    const detail = document.createElement("div");
+    detail.className = "message-detail";
+    detail.innerHTML = detailMarkup;
+    node.appendChild(detail);
+  }
+
+  return node;
+}
+
+async function buildMessageDetailMarkup(message) {
+  if (!appState.snapshot) {
+    return "";
+  }
+
+  if (message.role === "user") {
+    const job = (appState.snapshot.jobs || []).find((item) => item.message_id === message.id);
+    if (!job || (job.status !== "queued" && job.status !== "running")) {
+      return "";
+    }
+    return buildJobStatusMarkup(job);
+  }
+
+  if (message.role === "assistant" && message.job_id) {
+    const job = (appState.snapshot.jobs || []).find((item) => item.id === message.job_id);
+    if (!job) {
+      return "";
+    }
+    return buildJobResultMarkup(job);
+  }
+
+  return "";
+}
+
+function buildJobStatusMarkup(job) {
+  return `
+    <section class="message-job-card pending">
+      <div class="message-job-head">
+        <strong>Job Status</strong>
+        ${statusPill(job.status === "running" ? "warn" : "muted", job.status)}
+      </div>
+      <p class="message-job-summary">${escapeHTML(job.summary || "Request accepted. Waiting for planner/runtime updates.")}</p>
+      ${
+        job.steps?.length
+          ? `<div class="message-step-list">
+              ${job.steps
+                .map(
+                  (step) => `
+                    <div class="message-step-row">
+                      <span>${escapeHTML(formatSkillName(step.skill))}</span>
+                      <span>${escapeHTML(step.summary || step.status)}</span>
+                    </div>
+                  `,
+                )
+                .join("")}
+            </div>`
+          : ""
+      }
+    </section>
+  `;
+}
+
+async function buildJobResultMarkup(job) {
+  const relatedArtifacts = (appState.snapshot?.artifacts || []).filter((artifact) => artifact.job_id === job.id);
+  const artifactCards = await Promise.all(
+    relatedArtifacts.map((artifact) => buildArtifactCardMarkup(artifact, "chat")),
+  );
+
+  return `
+    <section class="message-job-card ${job.status === "failed" ? "failed" : "done"}">
+      <div class="message-job-head">
+        <strong>${job.status === "failed" ? "Job Result" : "Analysis Result"}</strong>
+        ${statusPill(statusKindForJob(job.status), job.status)}
+      </div>
+      ${
+        job.summary
+          ? `<p class="message-job-summary">${escapeHTML(job.summary)}</p>`
+          : ""
+      }
+      ${
+        job.error
+          ? `<p class="message-job-error">${escapeHTML(job.error)}</p>`
+          : ""
+      }
+      ${
+        job.steps?.length
+          ? `<div class="message-step-list">
+              ${job.steps
+                .map(
+                  (step) => `
+                    <div class="message-step-card">
+                      <div class="message-step-head">
+                        <strong>${escapeHTML(formatSkillName(step.skill))}</strong>
+                        ${statusPill(statusKindForJob(step.status), step.status)}
+                      </div>
+                      <p class="muted">${escapeHTML(step.summary || "No summary returned.")}</p>
+                      ${
+                        step.output_object_id
+                          ? `<div class="message-step-meta">Output object: ${escapeHTML(objectLabel(step.output_object_id))}</div>`
+                          : ""
+                      }
+                    </div>
+                  `,
+                )
+                .join("")}
+            </div>`
+          : ""
+      }
+      ${
+        artifactCards.length
+          ? `<div class="message-artifact-group">
+              <div class="message-artifact-head">
+                <strong>Artifacts</strong>
+                <span class="muted">${artifactCards.length} item${artifactCards.length > 1 ? "s" : ""}</span>
+              </div>
+              ${artifactCards.join("")}
+            </div>`
+          : ""
+      }
+    </section>
+  `;
 }
 
 function renderInspector() {
@@ -505,51 +640,56 @@ function renderPlannerPreview() {
   container.innerHTML = blocks.join("");
 }
 
-async function renderArtifacts() {
-  const container = document.getElementById("artifacts");
-  const object = activeObject();
-  const artifacts = (appState.snapshot?.artifacts || []).filter((artifact) =>
-    object ? artifact.object_id === object.id : true,
-  );
-
-  if (!artifacts.length) {
-    container.innerHTML = "<p class='muted'>No artifacts for the selected object.</p>";
-    return;
+async function buildArtifactCardMarkup(artifact, variant = "chat") {
+  let body = `<p class="muted">${escapeHTML(artifact.summary || artifact.content_type || "")}</p>`;
+  if (artifact.kind === "plot") {
+    body += `
+      <button
+        type="button"
+        class="artifact-preview-button"
+        data-artifact-url="${escapeAttribute(artifact.url)}"
+        data-artifact-title="${escapeAttribute(artifact.title)}"
+      >
+        <img src="${artifact.url}" alt="${escapeAttribute(artifact.title)}" />
+      </button>
+    `;
+  } else if (artifact.kind === "table" || artifact.kind === "file") {
+    const text = await getArtifactTextPreview(artifact);
+    body += `<pre>${escapeHTML(text.slice(0, 1200))}</pre>`;
   }
 
-  const cards = [];
-  for (const artifact of artifacts.slice().reverse()) {
-    let body = `<p class="muted">${artifact.summary || artifact.content_type}</p>`;
-    if (artifact.kind === "plot") {
-      body += `
-        <button
-          type="button"
-          class="artifact-preview-button"
-          data-artifact-url="${escapeAttribute(artifact.url)}"
-          data-artifact-title="${escapeAttribute(artifact.title)}"
-        >
-          <img src="${artifact.url}" alt="${escapeAttribute(artifact.title)}" />
-        </button>
-      `;
-    } else if (artifact.kind === "table" || artifact.kind === "file") {
-      const text = await fetch(artifact.url).then((response) => response.text());
-      body += `<pre>${escapeHTML(text.slice(0, 1200))}</pre>`;
-    }
-    cards.push(`
-      <section class="artifact-card">
-        <div class="artifact-head">
-          <h3>${escapeHTML(artifact.title)}</h3>
-          <div class="artifact-actions">
-            <a class="inline-link" href="${artifact.url}" target="_blank" rel="noreferrer">Open</a>
-            <a class="inline-link" href="${artifact.url}" download>Download</a>
-          </div>
+  return `
+    <section class="artifact-card artifact-card-${variant}">
+      <div class="artifact-head">
+        <h3>${escapeHTML(artifact.title)}</h3>
+        <div class="artifact-actions">
+          <a class="inline-link" href="${artifact.url}" target="_blank" rel="noreferrer">Open</a>
+          <a class="inline-link" href="${artifact.url}" download>Download</a>
         </div>
-        ${body}
-      </section>
-    `);
-  }
-  container.innerHTML = cards.join("");
+      </div>
+      ${body}
+    </section>
+  `;
+}
 
+async function getArtifactTextPreview(artifact) {
+  if (appState.artifactTextCache.has(artifact.id)) {
+    return appState.artifactTextCache.get(artifact.id);
+  }
+
+  try {
+    const response = await fetch(artifact.url);
+    const text = await response.text();
+    appState.artifactTextCache.set(artifact.id, text);
+    return text;
+  } catch (error) {
+    const fallback = `Unable to load preview: ${error.message}`;
+    appState.artifactTextCache.set(artifact.id, fallback);
+    return fallback;
+  }
+}
+
+function bindArtifactPreviewButtons(container) {
   for (const button of container.querySelectorAll(".artifact-preview-button")) {
     button.addEventListener("click", () => {
       openImageModal(button.dataset.artifactUrl, button.dataset.artifactTitle);
@@ -588,6 +728,19 @@ function formatList(values) {
   return values.join(", ");
 }
 
+function objectLabel(objectId) {
+  const object = (appState.snapshot?.objects || []).find((item) => item.id === objectId);
+  return object ? object.label : objectId;
+}
+
+function formatSkillName(skill) {
+  return String(skill || "")
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function formatAnnotation(annotation) {
   if (!annotation) {
     return "not detected";
@@ -598,6 +751,19 @@ function formatAnnotation(annotation) {
 
 function statusPill(kind, label) {
   return `<span class="status-pill ${kind}">${escapeHTML(label)}</span>`;
+}
+
+function statusKindForJob(status) {
+  switch (status) {
+    case "succeeded":
+      return "ok";
+    case "failed":
+      return "bad";
+    case "running":
+      return "warn";
+    default:
+      return "muted";
+  }
 }
 
 function openImageModal(url, title) {
