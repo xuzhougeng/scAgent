@@ -27,6 +27,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/docs/", h.handleDocContent)
 	mux.HandleFunc("/api/fake/plan", h.handleFakePlan)
 	mux.HandleFunc("/api/skills", h.handleSkills)
+	mux.HandleFunc("/api/plugins", h.handlePlugins)
 	mux.HandleFunc("/api/sessions", h.handleSessions)
 	mux.HandleFunc("/api/sessions/", h.handleSessionRoutes)
 	mux.HandleFunc("/api/messages", h.handleMessages)
@@ -54,6 +55,46 @@ func (h *Handler) handleSkills(w http.ResponseWriter, r *http.Request) {
 		"skills":       h.service.Skills(),
 		"planner_mode": h.service.PlannerMode(),
 	})
+}
+
+func (h *Handler) handlePlugins(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		plugins, err := h.service.PluginBundles()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"plugins": plugins,
+			"skills":  h.service.Skills(),
+		})
+	case http.MethodPost:
+		if err := r.ParseMultipartForm(256 << 20); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid multipart plugin upload"})
+			return
+		}
+
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing plugin bundle file"})
+			return
+		}
+		defer file.Close()
+
+		pluginBundle, err := h.service.UploadPluginBundle(header.Filename, file)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"plugin": pluginBundle,
+			"skills": h.service.Skills(),
+		})
+	default:
+		writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
+	}
 }
 
 func (h *Handler) handleFakePlan(w http.ResponseWriter, r *http.Request) {

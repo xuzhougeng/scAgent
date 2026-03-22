@@ -164,3 +164,101 @@
 - 让复合任务由 planner 组合，而不是把所有需求都塞进一个超大 tool
 
 这样扩展性最好，后续 agent 才能真正“按已注册能力自主选择和编排”。
+
+## Skill Hub 插件包
+
+除了直接改仓库里的 `skills/registry.json`，现在还支持通过 `Skill Hub` 动态加载插件包。
+
+插件包的最小结构：
+
+```text
+my-plugin.zip
+├── plugin.json
+└── plugin.py
+```
+
+其中：
+
+- `plugin.json`
+  描述插件 id、说明和要注册的 skill
+- `plugin.py`
+  真实执行逻辑
+
+最小示例：
+
+```json
+{
+  "id": "demo-plugin",
+  "name": "Demo Plugin",
+  "description": "A minimal Skill Hub plugin.",
+  "skills": [
+    {
+      "name": "demo_plot",
+      "label": "Demo Plot",
+      "category": "visualization",
+      "support_level": "wired",
+      "description": "Create a demo plugin plot.",
+      "target_kinds": ["raw_dataset", "filtered_dataset", "subset", "reclustered_subset"],
+      "input": {
+        "target_object_id": {
+          "type": "string",
+          "required": false,
+          "description": "Object to plot."
+        }
+      },
+      "output": {
+        "artifacts": "plot[]",
+        "summary": "string"
+      },
+      "runtime": {
+        "kind": "python",
+        "entrypoint": "plugin.py",
+        "callable": "run"
+      }
+    }
+  ]
+}
+```
+
+`plugin.py` 里需要定义入口函数，例如：
+
+```python
+def run(context):
+    fig = context["plt"].figure(figsize=(4, 3))
+    ax = fig.add_subplot(111)
+    ax.scatter(context["adata"].obsm["X_umap"][:, 0], context["adata"].obsm["X_umap"][:, 1], s=6)
+    artifact = context["save_figure"](
+        fig,
+        "demo_plugin_plot",
+        title="Demo Plugin Plot",
+        summary="由 Skill Hub 插件生成。",
+    )
+    return {
+        "summary": "插件绘图完成。",
+        "artifacts": [artifact],
+    }
+```
+
+当前插件入口会拿到这些常用对象：
+
+- `context["adata"]`
+- `context["counts_adata"]`
+- `context["params"]`
+- `context["target"]`
+- `context["sc"]`
+- `context["np"]`
+- `context["plt"]`
+- `context["persist_adata"]`
+- `context["save_figure"]`
+- `context["save_table"]`
+
+上传方式：
+
+- Web 端左侧 `Skill Hub` 卡片上传 zip
+- 或者手动把插件目录放到 `data/skill-hub/plugins/`
+
+系统行为：
+
+- Go 侧会自动重新加载 registry
+- Python runtime 会在执行时动态扫描插件目录
+- 不需要重启就可以在当前分析过程中新增 skill

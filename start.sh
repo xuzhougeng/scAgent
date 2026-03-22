@@ -17,6 +17,7 @@ fi
 : "${SCAGENT_RUNTIME_URL:=http://${SCAGENT_RUNTIME_HOST}:${SCAGENT_RUNTIME_PORT}}"
 : "${SCAGENT_PLANNER_MODE:=fake}"
 : "${SCAGENT_SKILLS_PATH:=skills/registry.json}"
+: "${SCAGENT_PLUGIN_DIR:=data/skill-hub/plugins}"
 : "${SCAGENT_DOCS_DIR:=docs}"
 : "${SCAGENT_DATA_DIR:=data}"
 : "${SCAGENT_WEB_DIR:=web}"
@@ -32,6 +33,7 @@ fi
 export NUMBA_CACHE_DIR="${SCAGENT_NUMBA_CACHE_DIR}"
 export MPLCONFIGDIR="${SCAGENT_MPLCONFIGDIR}"
 export MPLBACKEND="${MPLBACKEND:-Agg}"
+export SCAGENT_PLUGIN_DIR
 
 resolve_pixi_bin() {
   if [[ -n "${SCAGENT_PIXI_BIN}" ]]; then
@@ -110,6 +112,7 @@ go run ./cmd/scagent \
   -addr "${SCAGENT_ADDR}" \
   -runtime-url "${SCAGENT_RUNTIME_URL}" \
   -skills-path "${SCAGENT_SKILLS_PATH}" \
+  -plugin-dir "${SCAGENT_PLUGIN_DIR}" \
   -docs-dir "${SCAGENT_DOCS_DIR}" \
   -data-dir "${SCAGENT_DATA_DIR}" \
   -web-dir "${SCAGENT_WEB_DIR}" \

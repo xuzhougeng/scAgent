@@ -69,6 +69,7 @@ func NewService(store *session.Store, skills *skill.Registry, runtimeClient runt
 }
 
 func (s *Service) Skills() []skill.Definition {
+	_ = s.refreshSkills()
 	return s.skills.List()
 }
 
@@ -80,6 +81,18 @@ func (s *Service) PlannerMode() string {
 }
 
 func (s *Service) Status(ctx context.Context) *SystemStatus {
+	if err := s.refreshSkills(); err != nil {
+		return &SystemStatus{
+			SystemMode:       "demo",
+			Summary:          "当前处于演示模式：技能注册表加载失败。",
+			PlannerMode:      s.PlannerMode(),
+			PlannerReady:     s.planner != nil,
+			LLMLoaded:        s.PlannerMode() == "llm",
+			RuntimeConnected: false,
+			Notes:            []string{err.Error()},
+		}
+	}
+
 	status := &SystemStatus{
 		PlannerMode:  s.PlannerMode(),
 		PlannerReady: s.planner != nil,
@@ -122,11 +135,17 @@ func (s *Service) Status(ctx context.Context) *SystemStatus {
 }
 
 func (s *Service) PreviewPlan(ctx context.Context, message string) (models.Plan, error) {
+	if err := s.refreshSkills(); err != nil {
+		return models.Plan{}, err
+	}
 	plan, _, err := s.buildExecutablePlan(ctx, PlanningRequest{Message: message})
 	return plan, err
 }
 
 func (s *Service) PreviewFakePlan(ctx context.Context, message string) (models.Plan, error) {
+	if err := s.refreshSkills(); err != nil {
+		return models.Plan{}, err
+	}
 	planner := NewFakePlanner()
 	plan, err := planner.Plan(ctx, PlanningRequest{Message: message})
 	if err != nil {
@@ -140,6 +159,9 @@ func (s *Service) PreviewFakePlan(ctx context.Context, message string) (models.P
 }
 
 func (s *Service) PreviewPlannerDebug(ctx context.Context, sessionID, message string) (*PlannerDebugPreview, error) {
+	if err := s.refreshSkills(); err != nil {
+		return nil, err
+	}
 	sessionRecord, ok := s.store.GetSession(sessionID)
 	if !ok {
 		return nil, fmt.Errorf("未找到会话 %q", sessionID)
@@ -526,6 +548,9 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 }
 
 func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningRequest) (models.Plan, string, error) {
+	if err := s.refreshSkills(); err != nil {
+		return models.Plan{}, "", err
+	}
 	plan, err := s.planner.Plan(ctx, request)
 	if err != nil {
 		if s.PlannerMode() != "llm" {

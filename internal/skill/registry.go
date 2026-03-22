@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
+	"sync"
 
 	"scagent/internal/models"
 )
@@ -25,38 +28,93 @@ type Definition struct {
 	TargetKinds  []models.ObjectKind    `json:"target_kinds"`
 	Input        map[string]FieldSchema `json:"input"`
 	Output       map[string]string      `json:"output"`
+	Runtime      map[string]any         `json:"runtime,omitempty"`
+	Source       string                 `json:"source,omitempty"`
+	BundleID     string                 `json:"bundle_id,omitempty"`
 }
 
 type registryFile struct {
 	Skills []Definition `json:"skills"`
 }
 
+type PluginBundle struct {
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Version     string       `json:"version,omitempty"`
+	Description string       `json:"description,omitempty"`
+	SourcePath  string       `json:"source_path,omitempty"`
+	Skills      []Definition `json:"skills"`
+}
+
+type pluginBundleFile struct {
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Version     string       `json:"version,omitempty"`
+	Description string       `json:"description,omitempty"`
+	Skills      []Definition `json:"skills"`
+}
+
 type Registry struct {
-	skills map[string]Definition
+	mu        sync.RWMutex
+	basePath  string
+	pluginDir string
+	skills    map[string]Definition
+	bundles   map[string]PluginBundle
 }
 
 func LoadRegistry(path string) (*Registry, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read skills registry: %w", err)
-	}
+	return LoadRegistryWithPlugins(path, "")
+}
 
-	var file registryFile
-	if err := json.Unmarshal(data, &file); err != nil {
-		return nil, fmt.Errorf("decode skills registry: %w", err)
-	}
-
+func LoadRegistryWithPlugins(path, pluginDir string) (*Registry, error) {
 	registry := &Registry{
-		skills: make(map[string]Definition, len(file.Skills)),
+		basePath:  path,
+		pluginDir: pluginDir,
+		skills:    make(map[string]Definition),
+		bundles:   make(map[string]PluginBundle),
 	}
-	for _, definition := range file.Skills {
-		registry.skills[definition.Name] = definition
+	if err := registry.Reload(); err != nil {
+		return nil, err
 	}
-
 	return registry, nil
 }
 
+func (r *Registry) Reload() error {
+	if r == nil {
+		return nil
+	}
+
+	baseSkills, err := loadBaseSkills(r.basePath)
+	if err != nil {
+		return err
+	}
+	pluginSkills, bundles, err := loadPluginBundles(r.pluginDir)
+	if err != nil {
+		return err
+	}
+
+	merged := make(map[string]Definition, len(baseSkills)+len(pluginSkills))
+	for name, definition := range baseSkills {
+		merged[name] = definition
+	}
+	for name, definition := range pluginSkills {
+		if _, exists := merged[name]; exists {
+			return fmt.Errorf("duplicate skill %q from plugin bundle", name)
+		}
+		merged[name] = definition
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.skills = merged
+	r.bundles = bundles
+	return nil
+}
+
 func (r *Registry) List() []Definition {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	out := make([]Definition, 0, len(r.skills))
 	for _, definition := range r.skills {
 		out = append(out, definition)
@@ -68,6 +126,9 @@ func (r *Registry) List() []Definition {
 }
 
 func (r *Registry) ListExecutable() []Definition {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	out := make([]Definition, 0, len(r.skills))
 	for _, definition := range r.skills {
 		if definition.SupportLevel == "" || definition.SupportLevel == "wired" {
@@ -81,11 +142,31 @@ func (r *Registry) ListExecutable() []Definition {
 }
 
 func (r *Registry) Get(name string) (Definition, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	definition, ok := r.skills[name]
 	return definition, ok
 }
 
+func (r *Registry) Bundles() []PluginBundle {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]PluginBundle, 0, len(r.bundles))
+	for _, bundle := range r.bundles {
+		out = append(out, bundle)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
 func (r *Registry) ValidatePlan(plan models.Plan) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	if len(plan.Steps) == 0 {
 		return fmt.Errorf("plan has no steps")
 	}
@@ -116,4 +197,138 @@ func (r *Registry) ValidatePlan(plan models.Plan) error {
 	}
 
 	return nil
+}
+
+func LoadPluginBundleFile(path string) (*PluginBundle, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read plugin bundle: %w", err)
+	}
+	return decodePluginBundleFile(path, data)
+}
+
+func loadBaseSkills(path string) (map[string]Definition, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read skills registry: %w", err)
+	}
+
+	var file registryFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, fmt.Errorf("decode skills registry: %w", err)
+	}
+
+	skills := make(map[string]Definition, len(file.Skills))
+	for _, definition := range file.Skills {
+		definition.Source = "builtin"
+		if strings.TrimSpace(definition.Name) == "" {
+			return nil, fmt.Errorf("encountered builtin skill without name")
+		}
+		skills[definition.Name] = definition
+	}
+	return skills, nil
+}
+
+func loadPluginBundles(pluginDir string) (map[string]Definition, map[string]PluginBundle, error) {
+	skills := make(map[string]Definition)
+	bundles := make(map[string]PluginBundle)
+	if strings.TrimSpace(pluginDir) == "" {
+		return skills, bundles, nil
+	}
+
+	info, err := os.Stat(pluginDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return skills, bundles, nil
+		}
+		return nil, nil, fmt.Errorf("stat plugin directory: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, nil, fmt.Errorf("plugin directory %q is not a directory", pluginDir)
+	}
+
+	manifestPaths := make([]string, 0, 8)
+	err = filepath.Walk(pluginDir, func(path string, fileInfo os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if fileInfo.IsDir() {
+			return nil
+		}
+		if strings.EqualFold(fileInfo.Name(), "plugin.json") {
+			manifestPaths = append(manifestPaths, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("walk plugin directory: %w", err)
+	}
+	sort.Strings(manifestPaths)
+
+	for _, manifestPath := range manifestPaths {
+		bundle, err := LoadPluginBundleFile(manifestPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, exists := bundles[bundle.ID]; exists {
+			return nil, nil, fmt.Errorf("duplicate plugin bundle id %q", bundle.ID)
+		}
+		bundles[bundle.ID] = *bundle
+		for _, definition := range bundle.Skills {
+			if _, exists := skills[definition.Name]; exists {
+				return nil, nil, fmt.Errorf("duplicate plugin skill %q", definition.Name)
+			}
+			skills[definition.Name] = definition
+		}
+	}
+
+	return skills, bundles, nil
+}
+
+func decodePluginBundleFile(path string, data []byte) (*PluginBundle, error) {
+	var file pluginBundleFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, fmt.Errorf("decode plugin bundle %q: %w", path, err)
+	}
+
+	bundleID := strings.TrimSpace(file.ID)
+	if bundleID == "" {
+		bundleID = filepath.Base(filepath.Dir(path))
+	}
+	if bundleID == "" || bundleID == "." {
+		return nil, fmt.Errorf("plugin bundle %q is missing id", path)
+	}
+
+	bundle := &PluginBundle{
+		ID:          bundleID,
+		Name:        strings.TrimSpace(file.Name),
+		Version:     strings.TrimSpace(file.Version),
+		Description: strings.TrimSpace(file.Description),
+		SourcePath:  path,
+		Skills:      make([]Definition, 0, len(file.Skills)),
+	}
+	if bundle.Name == "" {
+		bundle.Name = bundle.ID
+	}
+
+	for _, definition := range file.Skills {
+		if strings.TrimSpace(definition.Name) == "" {
+			return nil, fmt.Errorf("plugin bundle %q contains a skill without name", path)
+		}
+		runtimeConfig := definition.Runtime
+		if len(runtimeConfig) == 0 {
+			return nil, fmt.Errorf("plugin skill %q in %q is missing runtime config", definition.Name, path)
+		}
+		entrypoint, ok := runtimeConfig["entrypoint"]
+		if !ok || strings.TrimSpace(fmt.Sprint(entrypoint)) == "" {
+			return nil, fmt.Errorf("plugin skill %q in %q is missing runtime.entrypoint", definition.Name, path)
+		}
+		definition.Source = "plugin"
+		definition.BundleID = bundle.ID
+		bundle.Skills = append(bundle.Skills, definition)
+	}
+	sort.Slice(bundle.Skills, func(i, j int) bool {
+		return bundle.Skills[i].Name < bundle.Skills[j].Name
+	})
+	return bundle, nil
 }

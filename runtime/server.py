@@ -49,6 +49,24 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/scagent-mpl")
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 _ANALYSIS_MODULES: tuple[Any, Any, Any, Any, Any] | None = None
+BUILTIN_EXECUTABLE_SKILLS = [
+    "inspect_dataset",
+    "assess_dataset",
+    "normalize_total",
+    "log1p_transform",
+    "select_hvg",
+    "run_pca",
+    "compute_neighbors",
+    "run_umap",
+    "prepare_umap",
+    "subset_cells",
+    "recluster",
+    "find_markers",
+    "plot_umap",
+    "plot_gene_umap",
+    "run_python_analysis",
+    "export_h5ad",
+]
 SAFE_IMPORT_MODULES = {
     "anndata",
     "json",
@@ -156,11 +174,49 @@ class RuntimeState:
         self.counter = 0
         self.objects: dict[str, RuntimeObject] = {}
         self.sample_path = Path(os.environ.get("SCAGENT_SAMPLE_H5AD", "data/samples/pbmc3k.h5ad"))
+        self.plugin_root = Path(os.environ.get("SCAGENT_PLUGIN_DIR", "data/skill-hub/plugins"))
         self.environment_report = build_environment_report(self.sample_path)
 
     def next_ref(self, session_id: str) -> str:
         self.counter += 1
         return f"py:{session_id}:adata_{self.counter}"
+
+    def load_plugin_skills(self) -> dict[str, dict[str, Any]]:
+        skills: dict[str, dict[str, Any]] = {}
+        if not self.plugin_root.exists():
+            return skills
+
+        for manifest_path in sorted(self.plugin_root.rglob("plugin.json")):
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+
+            bundle_id = str(payload.get("id") or manifest_path.parent.name).strip() or manifest_path.parent.name
+            for skill_payload in payload.get("skills", []):
+                if not isinstance(skill_payload, dict):
+                    continue
+                skill_name = str(skill_payload.get("name") or "").strip()
+                if skill_name == "":
+                    continue
+                runtime_payload = skill_payload.get("runtime") or {}
+                if not isinstance(runtime_payload, dict):
+                    runtime_payload = {}
+                kind = str(runtime_payload.get("kind") or "python").strip().lower()
+                if kind != "python":
+                    continue
+                entrypoint_name = str(runtime_payload.get("entrypoint") or "plugin.py").strip() or "plugin.py"
+                callable_name = str(runtime_payload.get("callable") or "run").strip() or "run"
+                entrypoint_path = (manifest_path.parent / entrypoint_name).resolve()
+                skills[skill_name] = {
+                    "bundle_id": bundle_id,
+                    "manifest_path": manifest_path,
+                    "entrypoint": entrypoint_path,
+                    "callable": callable_name,
+                    "definition": skill_payload,
+                }
+
+        return skills
 
     def create_session_root(self, session_id: str, label: str, session_root: Path) -> dict[str, Any]:
         objects_dir = session_root / "objects"
@@ -572,6 +628,135 @@ class RuntimeState:
         path.parent.mkdir(parents=True, exist_ok=True)
         table.to_csv(path, index=False)
         return path
+
+    def _plugin_object_context(self, target: RuntimeObject | None) -> dict[str, Any] | None:
+        if target is None:
+            return None
+        return {
+            "backend_ref": target.backend_ref,
+            "label": target.label,
+            "kind": target.kind,
+            "n_obs": target.n_obs,
+            "n_vars": target.n_vars,
+            "state": target.state,
+            "materialized_path": target.materialized_path,
+            "metadata": target.metadata,
+        }
+
+    def _execute_plugin_skill(
+        self,
+        skill_name: str,
+        payload: dict[str, Any],
+        target: RuntimeObject | None,
+        session_root: Path,
+    ) -> dict[str, Any] | None:
+        plugin = self.load_plugin_skills().get(skill_name)
+        if plugin is None:
+            return None
+
+        entrypoint = Path(plugin["entrypoint"])
+        if not entrypoint.exists():
+            raise RuntimeError(f"插件技能 `{skill_name}` 缺少入口脚本：{entrypoint.name}")
+
+        session_id = str(payload.get("session_id") or "")
+        params = payload.get("params") or {}
+        adata = self._load_adata(target) if target is not None else None
+        counts_adata = self._load_counts_adata(target) if target is not None else None
+        _, sc, plt, np, _ = analysis_modules()
+
+        def persist_adata(label: str, output_adata: Any, *, kind: str | None = None) -> dict[str, Any]:
+            if target is None:
+                raise RuntimeError("当前插件技能没有可持久化的目标对象。")
+            persisted = self._persist_adata_object(
+                session_id=session_id,
+                session_root=session_root,
+                label=str(label or f"{skill_name}_{target.label}"),
+                kind=kind or self._default_kind_after_processing(target),
+                adata=output_adata,
+                summary="",
+            )
+            return persisted["object"]
+
+        def save_figure(figure: Any, stem: str, *, title: str = "", summary: str = "") -> dict[str, Any]:
+            figure_path = self._save_custom_figure(figure, session_root, stem or f"{skill_name}_{slug(target.label if target else skill_name)}")
+            return {
+                "kind": "plot",
+                "title": title or f"{skill_name} 输出图",
+                "path": str(figure_path),
+                "content_type": "image/svg+xml",
+                "summary": summary or "由 Skill Hub 插件生成的图。",
+            }
+
+        def save_table(table: Any, stem: str, *, title: str = "", summary: str = "") -> dict[str, Any]:
+            table_path = self._save_custom_table(table, session_root, stem or f"{skill_name}_{slug(target.label if target else skill_name)}")
+            return {
+                "kind": "table",
+                "title": title or f"{skill_name} 输出表",
+                "path": str(table_path),
+                "content_type": "text/csv",
+                "summary": summary or "由 Skill Hub 插件生成的表。",
+            }
+
+        context = {
+            "skill_name": skill_name,
+            "bundle_id": plugin["bundle_id"],
+            "params": params,
+            "session_id": session_id,
+            "request_id": payload.get("request_id"),
+            "target": self._plugin_object_context(target),
+            "adata": adata,
+            "counts_adata": counts_adata,
+            "sc": sc,
+            "np": np,
+            "plt": plt,
+            "json": json,
+            "Path": Path,
+            "session_root": session_root,
+            "artifacts_dir": session_root / "artifacts",
+            "plugin_dir": entrypoint.parent,
+            "persist_adata": persist_adata,
+            "save_figure": save_figure,
+            "save_table": save_table,
+        }
+
+        exec_env: dict[str, Any] = {
+            "__builtins__": SAFE_EXEC_BUILTINS,
+            "context": context,
+            "adata": adata,
+            "counts_adata": counts_adata,
+            "sc": sc,
+            "np": np,
+            "plt": plt,
+            "json": json,
+            "Path": Path,
+        }
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+            exec(entrypoint.read_text(encoding="utf-8"), exec_env, exec_env)
+            handler = exec_env.get(str(plugin["callable"]))
+            if not callable(handler):
+                raise RuntimeError(f"插件技能 `{skill_name}` 未定义可调用入口 `{plugin['callable']}`。")
+            response = handler(context)
+
+        if response is None:
+            response = {}
+        if not isinstance(response, dict):
+            raise RuntimeError(f"插件技能 `{skill_name}` 返回值必须是 dict。")
+
+        metadata = response.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata["plugin_bundle_id"] = plugin["bundle_id"]
+        metadata["plugin_skill"] = skill_name
+        stdout_text = stdout_buffer.getvalue().strip()
+        stderr_text = stderr_buffer.getvalue().strip()
+        if stdout_text:
+            metadata["stdout"] = stdout_text
+        if stderr_text:
+            metadata["stderr"] = stderr_text
+        response["metadata"] = metadata
+        return response
 
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
         skill = payload["skill"]
@@ -1008,6 +1193,10 @@ class RuntimeState:
 
             return response
 
+        plugin_response = self._execute_plugin_skill(skill, payload, target, session_root)
+        if plugin_response is not None:
+            return plugin_response
+
         if skill == "export_h5ad":
             target = self._require_target(target, skill)
             export_path = session_root / "objects" / f"{slug(target.label)}.h5ad"
@@ -1131,34 +1320,23 @@ def log_runtime_event(event: str, **fields: Any) -> None:
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/healthz":
+            plugin_skills = STATE.load_plugin_skills()
+            executable_skills = dedupe_list(BUILTIN_EXECUTABLE_SKILLS + sorted(plugin_skills.keys()))
+            notes = [
+                "运行时会读取真实的 h5ad 结构和注释信息。",
+                "常规预处理链、subset、recluster、marker 和 UMAP 已切到真实 AnnData/Scanpy 执行。",
+                "当现成 tool 不够时，可通过 run_python_analysis 在内存中的 AnnData 上执行短代码。",
+                "dotplot 和 violin 仍未开放给 planner，等真实实现完成后再升为 wired。",
+            ]
+            if plugin_skills:
+                notes.append(f"Skill Hub 已加载 {len(plugin_skills)} 个插件技能，可在当前会话中直接调用。")
             payload = {
                 "status": "ok",
                 "runtime_mode": "live",
                 "real_h5ad_inspection": True,
                 "real_analysis_execution": True,
-                "executable_skills": [
-                    "inspect_dataset",
-                    "assess_dataset",
-                    "normalize_total",
-                    "log1p_transform",
-                    "select_hvg",
-                    "run_pca",
-                    "compute_neighbors",
-                    "run_umap",
-                    "prepare_umap",
-                    "subset_cells",
-                    "recluster",
-                    "find_markers",
-                    "plot_umap",
-                    "run_python_analysis",
-                    "export_h5ad",
-                ],
-                "notes": [
-                    "运行时会读取真实的 h5ad 结构和注释信息。",
-                    "常规预处理链、subset、recluster、marker 和 UMAP 已切到真实 AnnData/Scanpy 执行。",
-                    "当现成 tool 不够时，可通过 run_python_analysis 在内存中的 AnnData 上执行短代码。",
-                    "dotplot 和 violin 仍未开放给 planner，等真实实现完成后再升为 wired。",
-                ],
+                "executable_skills": executable_skills,
+                "notes": notes,
             }
             payload.update(STATE.environment_report)
             self._write_json(HTTPStatus.OK, payload)

@@ -1,8 +1,11 @@
 package orchestrator
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -167,6 +170,60 @@ func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
 	}
 	if len(request.RecentArtifacts) != 1 || request.RecentArtifacts[0].ID != "art_prev" {
 		t.Fatalf("unexpected recent artifacts: %+v", request.RecentArtifacts)
+	}
+}
+
+func TestUploadPluginBundleRegistersSkills(t *testing.T) {
+	dataRoot := t.TempDir()
+	registry, err := skill.LoadRegistryWithPlugins(skillsRegistryPath(), filepath.Join(dataRoot, "skill-hub", "plugins"))
+	if err != nil {
+		t.Fatalf("load skills registry with plugin dir: %v", err)
+	}
+
+	service := NewService(session.NewStore(), registry, nil, NewFakePlanner(), dataRoot)
+
+	var buffer bytes.Buffer
+	archiveWriter := zip.NewWriter(&buffer)
+	manifest, err := archiveWriter.Create("plugin.json")
+	if err != nil {
+		t.Fatalf("create manifest entry: %v", err)
+	}
+	_, _ = manifest.Write([]byte(`{
+		"id": "demo-hub",
+		"name": "Demo Hub",
+		"skills": [
+			{
+				"name": "demo_runtime_skill",
+				"label": "Demo Runtime Skill",
+				"category": "custom",
+				"support_level": "wired",
+				"description": "Uploaded from test bundle.",
+				"target_kinds": ["raw_dataset"],
+				"input": {},
+				"output": {"summary": "string"},
+				"runtime": {"entrypoint": "plugin.py"}
+			}
+		]
+	}`))
+	script, err := archiveWriter.Create("plugin.py")
+	if err != nil {
+		t.Fatalf("create script entry: %v", err)
+	}
+	_, _ = script.Write([]byte("def run(context):\n    return {'summary': 'ok'}\n"))
+	if err := archiveWriter.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+
+	bundle, err := service.UploadPluginBundle("demo-hub.zip", bytes.NewReader(buffer.Bytes()))
+	if err != nil {
+		t.Fatalf("upload plugin bundle: %v", err)
+	}
+	if bundle.ID != "demo-hub" {
+		t.Fatalf("unexpected bundle id: %q", bundle.ID)
+	}
+
+	if _, ok := service.skills.Get("demo_runtime_skill"); !ok {
+		t.Fatalf("expected uploaded plugin skill to be registered")
 	}
 }
 

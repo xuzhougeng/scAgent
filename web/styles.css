@@ -100,6 +100,11 @@ body {
   flex-shrink: 0;
 }
 
+.skill-hub {
+  margin-top: 12px;
+  flex-shrink: 0;
+}
+
 .object-tree {
   flex: 1;
   min-height: 0;
@@ -174,6 +179,62 @@ body {
   border: 1px solid var(--border);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.74);
+}
+
+.plugin-upload-form {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plugin-hub-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.plugin-card {
+  border: 1px solid rgba(61, 107, 75, 0.1);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.plugin-card p {
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+
+.plugin-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plugin-skill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.plugin-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(61, 107, 75, 0.1);
+  color: var(--accent-deep);
+  font-size: 0.84rem;
 }
 
 .system-status {
@@ -843,6 +904,10 @@ body {
   }
 
   .upload-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .plugin-upload-form {
     grid-template-columns: 1fr;
   }
 
