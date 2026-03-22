@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -308,14 +309,14 @@ func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string
 	cmd := strings.ToLower(parts[0])
 
 	switch cmd {
-	case "/help":
+	case "/help", "/h":
 		return "可用命令:\n" +
 			"/status — 查看当前会话状态\n" +
-			"/list — 列出所有工作区（别名 /workspaces）\n" +
-			"/switch <workspace_id> — 切换到指定工作区\n" +
+			"/l — 列出所有工作区\n" +
+			"/s <序号> — 切换到指定工作区（如 /s 1）\n" +
 			"/new — 创建新工作区+会话\n" +
-			"/reset — 重置会话映射（在当前工作区新建对话）\n" +
-			"/help — 显示此帮助"
+			"/reset — 重置会话映射\n" +
+			"/h — 显示此帮助"
 
 	case "/status":
 		b.mu.Lock()
@@ -336,7 +337,7 @@ func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string
 			snapshot.Session.ID, ws.ID, ws.Label,
 			len(snapshot.Objects), len(snapshot.Messages))
 
-	case "/workspaces", "/list":
+	case "/workspaces", "/list", "/l":
 		wsList := b.service.ListWorkspaces()
 		if wsList == nil || len(wsList.Workspaces) == 0 {
 			return "暂无工作区。发送任意消息将自动创建。"
@@ -354,16 +355,28 @@ func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string
 					marker = "→ "
 				}
 			}
-			sb.WriteString(fmt.Sprintf("%s%d. %s (%s)\n", marker, i+1, ws.ID, ws.Label))
+			label := ws.Label
+			if label == "" {
+				label = ws.ID
+			}
+			sb.WriteString(fmt.Sprintf("%s%d. %s\n", marker, i+1, label))
 		}
-		sb.WriteString("\n用 /switch <workspace_id> 切换")
+		sb.WriteString("\n用 /s <序号> 切换，如 /s 1")
 		return sb.String()
 
-	case "/switch":
+	case "/switch", "/s":
 		if len(parts) < 2 {
-			return "用法: /switch <workspace_id>\n用 /workspaces 查看可用工作区"
+			return "用法: /s <序号>\n用 /l 查看工作区列表"
 		}
 		targetWS := parts[1]
+		// Support switching by index number (e.g., /s 1)
+		if idx, err := strconv.Atoi(targetWS); err == nil {
+			wsList := b.service.ListWorkspaces()
+			if wsList == nil || idx < 1 || idx > len(wsList.Workspaces) {
+				return fmt.Sprintf("无效序号 %d，用 /l 查看列表", idx)
+			}
+			targetWS = wsList.Workspaces[idx-1].ID
+		}
 		label := fmt.Sprintf("%s-%s", b.config.SessionLabel, truncate(fromUserID, 12))
 		snapshot, err := b.service.CreateConversation(ctx, targetWS, label)
 		if err != nil {
