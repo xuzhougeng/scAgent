@@ -609,8 +609,37 @@ body {
 }
 
 .message-step-list,
-.message-artifact-group {
+.message-artifact-group,
+.message-checkpoint-group {
   margin-top: 12px;
+}
+
+.message-checkpoint-head,
+.message-checkpoint-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.message-checkpoint-list {
+  margin-top: 10px;
+}
+
+.message-checkpoint-card {
+  border-top: 1px solid rgba(61, 107, 75, 0.1);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+.message-checkpoint-card:first-child {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.message-checkpoint-card p {
+  margin: 8px 0 0;
 }
 
 .message-plan-details {

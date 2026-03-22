@@ -206,6 +206,7 @@ func (p *LLMPlanner) instructions(requestPayload PlanningRequest) string {
 		"If the user provides explicit plotting kwargs such as legend_loc='on data' or point_size=12, copy them into params when the selected skill supports them.",
 		"If the user asks to isolate a cell type or annotation group and then visualize it, prefer subset_cells followed by plot_umap instead of run_python_analysis whenever the request can be expressed with obs_field/op/value.",
 		"Treat recent_messages, recent_jobs, and recent_artifacts as conversation context for follow-up requests such as '把这个图改一下' or '把图例加上'.",
+		"If a running or recent job already completed part of the same request, continue from the current object state and avoid repeating already completed steps unless repeating them is clearly necessary.",
 		"Use run_python_analysis only as a last resort when no existing wired skill can satisfy the request; keep the generated code short, deterministic, and focused on adata/scanpy operations.",
 		"When using run_python_analysis, adata is the current object and counts_adata is a count-safe copy for preprocessing-style code.",
 		"Never return an empty steps array.",

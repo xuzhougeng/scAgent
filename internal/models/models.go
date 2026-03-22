@@ -127,6 +127,7 @@ type JobStep struct {
 	ID                     string         `json:"id"`
 	Skill                  string         `json:"skill"`
 	TargetObjectID         string         `json:"target_object_id,omitempty"`
+	Params                 map[string]any `json:"params,omitempty"`
 	ResolvedTargetObjectID string         `json:"resolved_target_object_id,omitempty"`
 	Status                 JobStatus      `json:"status"`
 	Summary                string         `json:"summary,omitempty"`
@@ -137,18 +138,28 @@ type JobStep struct {
 	FinishedAt             *time.Time     `json:"finished_at,omitempty"`
 }
 
+type JobCheckpoint struct {
+	Kind      string    `json:"kind,omitempty"`
+	Tone      string    `json:"tone,omitempty"`
+	Title     string    `json:"title"`
+	Label     string    `json:"label,omitempty"`
+	Summary   string    `json:"summary,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Job struct {
-	ID         string     `json:"id"`
-	SessionID  string     `json:"session_id"`
-	MessageID  string     `json:"message_id"`
-	Status     JobStatus  `json:"status"`
-	Summary    string     `json:"summary,omitempty"`
-	Plan       *Plan      `json:"plan,omitempty"`
-	Steps      []JobStep  `json:"steps,omitempty"`
-	Error      string     `json:"error,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	ID          string          `json:"id"`
+	SessionID   string          `json:"session_id"`
+	MessageID   string          `json:"message_id"`
+	Status      JobStatus       `json:"status"`
+	Summary     string          `json:"summary,omitempty"`
+	Plan        *Plan           `json:"plan,omitempty"`
+	Steps       []JobStep       `json:"steps,omitempty"`
+	Checkpoints []JobCheckpoint `json:"checkpoints,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	StartedAt   *time.Time      `json:"started_at,omitempty"`
+	FinishedAt  *time.Time      `json:"finished_at,omitempty"`
 }
 
 type SessionSnapshot struct {

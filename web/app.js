@@ -557,11 +557,16 @@ async function renderChat() {
 
 async function buildMessageNode(message, template) {
   const node = template.content.firstElementChild.cloneNode(true);
+  const content = node.querySelector(".message-content");
   node.classList.add(`message-${message.role}`);
   node.querySelector(".message-role").textContent = formatRole(message.role);
-  node.querySelector(".message-content").textContent = message.content;
 
   const detailMarkup = await buildMessageDetailMarkup(message);
+  if (shouldRenderMessageContent(message, detailMarkup)) {
+    content.textContent = message.content;
+  } else {
+    content.remove();
+  }
   if (detailMarkup) {
     const detail = document.createElement("div");
     detail.className = "message-detail";
@@ -604,6 +609,7 @@ function buildJobStatusMarkup(job) {
         ${statusPill(job.status === "running" ? "warn" : "muted", formatJobStatus(job.status))}
       </div>
       <p class="message-job-summary">${escapeHTML(job.summary || "请求已接收，等待规划器和运行时返回更新。")}</p>
+      ${buildCheckpointMarkup(job)}
       ${buildPlanMarkup(job)}
       ${
         job.steps?.length
@@ -630,6 +636,7 @@ async function buildJobResultMarkup(job) {
   const artifactCards = await Promise.all(
     relatedArtifacts.map((artifact) => buildArtifactCardMarkup(artifact, "chat")),
   );
+  const showSummary = shouldRenderJobSummary(job);
 
   return `
     <section class="message-job-card ${job.status === "failed" ? "failed" : "done"}">
@@ -638,7 +645,7 @@ async function buildJobResultMarkup(job) {
         ${statusPill(statusKindForJob(job.status), formatJobStatus(job.status))}
       </div>
       ${
-        job.summary
+        showSummary && job.summary
           ? `<p class="message-job-summary">${escapeHTML(job.summary)}</p>`
           : ""
       }
@@ -647,6 +654,7 @@ async function buildJobResultMarkup(job) {
           ? `<p class="message-job-error">${escapeHTML(job.error)}</p>`
           : ""
       }
+      ${buildCheckpointMarkup(job)}
       ${buildPlanMarkup(job)}
       ${
         job.steps?.length
@@ -685,6 +693,66 @@ async function buildJobResultMarkup(job) {
       }
     </section>
   `;
+}
+
+function buildCheckpointMarkup(job) {
+  const checkpoints = job.checkpoints || [];
+  if (!checkpoints.length) {
+    return "";
+  }
+
+  return `
+    <div class="message-checkpoint-group">
+      <div class="message-checkpoint-head">
+        <strong>执行检查点</strong>
+        <span class="muted">${escapeHTML(`${checkpoints.length} 条`)}</span>
+      </div>
+      <div class="message-checkpoint-list">
+        ${checkpoints
+          .map(
+            (checkpoint) => `
+              <div class="message-checkpoint-card">
+                <div class="message-checkpoint-title">
+                  <strong>${escapeHTML(checkpoint.title || "检查点")}</strong>
+                  ${statusPill(normalizeCheckpointTone(checkpoint.tone), checkpoint.label || "已记录")}
+                </div>
+                ${
+                  checkpoint.summary
+                    ? `<p class="muted">${escapeHTML(checkpoint.summary)}</p>`
+                    : ""
+                }
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function shouldRenderMessageContent(message, detailMarkup) {
+  if (message.role === "assistant" && message.job_id && detailMarkup) {
+    return false;
+  }
+  return true;
+}
+
+function shouldRenderJobSummary(job) {
+  if (!job.summary) {
+    return false;
+  }
+
+  const steps = job.steps || [];
+  if (steps.length !== 1) {
+    return true;
+  }
+
+  const stepSummary = (steps[0]?.summary || "").trim();
+  if (!stepSummary) {
+    return true;
+  }
+
+  return job.summary.trim() !== stepSummary;
 }
 
 function buildPlanMarkup(job) {
@@ -1066,6 +1134,18 @@ function statusKindForJob(status) {
       return "bad";
     case "running":
       return "warn";
+    default:
+      return "muted";
+  }
+}
+
+function normalizeCheckpointTone(tone) {
+  switch (tone) {
+    case "ok":
+    case "warn":
+    case "bad":
+    case "muted":
+      return tone;
     default:
       return "muted";
   }

@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"scagent/internal/models"
+	runtimeclient "scagent/internal/runtime"
 	"scagent/internal/session"
 	"scagent/internal/skill"
 )
@@ -32,6 +34,89 @@ func (p failingLLMPlanner) Plan(context.Context, PlanningRequest) (models.Plan, 
 
 func (p failingLLMPlanner) Mode() string {
 	return "llm"
+}
+
+type scriptedPlanner struct {
+	mode     string
+	plans    []models.Plan
+	errs     map[int]error
+	requests []PlanningRequest
+}
+
+func (p *scriptedPlanner) Plan(_ context.Context, request PlanningRequest) (models.Plan, error) {
+	callIndex := len(p.requests)
+	p.requests = append(p.requests, request)
+	if err := p.errs[callIndex]; err != nil {
+		return models.Plan{}, err
+	}
+	if callIndex >= len(p.plans) {
+		return models.Plan{}, errors.New("unexpected planner call")
+	}
+	return p.plans[callIndex], nil
+}
+
+func (p *scriptedPlanner) Mode() string {
+	if p.mode != "" {
+		return p.mode
+	}
+	return "llm"
+}
+
+type sequentialRuntime struct {
+	nextBackendRef int
+}
+
+type scriptedEvaluator struct {
+	results  []*CompletionEvaluation
+	errs     map[int]error
+	requests []EvaluationRequest
+}
+
+func (e *scriptedEvaluator) Evaluate(_ context.Context, request EvaluationRequest) (*CompletionEvaluation, error) {
+	callIndex := len(e.requests)
+	e.requests = append(e.requests, request)
+	if err := e.errs[callIndex]; err != nil {
+		return nil, err
+	}
+	if callIndex >= len(e.results) {
+		return &CompletionEvaluation{}, nil
+	}
+	return e.results[callIndex], nil
+}
+
+func (e *scriptedEvaluator) Mode() string {
+	return "fake"
+}
+
+func (r *sequentialRuntime) Health(context.Context) error {
+	return nil
+}
+
+func (r *sequentialRuntime) Status(context.Context) (*runtimeclient.HealthStatus, error) {
+	return &runtimeclient.HealthStatus{}, nil
+}
+
+func (r *sequentialRuntime) InitSession(context.Context, runtimeclient.InitSessionRequest) (*runtimeclient.InitSessionResponse, error) {
+	return nil, errors.New("unexpected init session call")
+}
+
+func (r *sequentialRuntime) LoadFile(context.Context, runtimeclient.LoadFileRequest) (*runtimeclient.LoadFileResponse, error) {
+	return nil, errors.New("unexpected load file call")
+}
+
+func (r *sequentialRuntime) Execute(_ context.Context, payload runtimeclient.ExecuteRequest) (*runtimeclient.ExecuteResponse, error) {
+	r.nextBackendRef++
+	return &runtimeclient.ExecuteResponse{
+		Summary: "done " + payload.Skill,
+		Object: &runtimeclient.ObjectDescriptor{
+			BackendRef: "backend_" + strconv.Itoa(r.nextBackendRef),
+			Kind:       models.ObjectFilteredDataset,
+			Label:      payload.Skill + "_result",
+			State:      models.ObjectResident,
+			InMemory:   true,
+			Metadata:   map[string]any{},
+		},
+	}, nil
 }
 
 func TestBuildExecutablePlanFallsBackWhenLLMReturnsEmptyPlan(t *testing.T) {
@@ -173,6 +258,250 @@ func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
 	}
 }
 
+func TestRunJobReplansRemainingStepsFromCurrentState(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	now := time.Now().UTC()
+	sessionRecord := store.CreateSession("test")
+	sessionRecord.ActiveObjectID = "obj_active"
+	store.SaveSession(sessionRecord)
+	store.SaveObject(&models.ObjectMeta{
+		ID:             "obj_active",
+		SessionID:      sessionRecord.ID,
+		Label:          "pbmc3k",
+		Kind:           models.ObjectRawDataset,
+		BackendRef:     "backend_seed",
+		State:          models.ObjectResident,
+		InMemory:       true,
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	})
+	store.SaveJob(&models.Job{
+		ID:        "job_replan",
+		SessionID: sessionRecord.ID,
+		Status:    models.JobQueued,
+		CreatedAt: now,
+	})
+
+	planner := &scriptedPlanner{
+		mode: "llm",
+		plans: []models.Plan{
+			{
+				Steps: []models.PlanStep{
+					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active", Params: map[string]any{"target_sum": 1e4}},
+				},
+			},
+			{
+				Steps: []models.PlanStep{
+					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active", Params: map[string]any{"target_sum": 1e4}},
+					{ID: "step_2", Skill: "log1p_transform", TargetObjectID: "$prev"},
+				},
+			},
+			{
+				Steps: []models.PlanStep{
+					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active", Params: map[string]any{"target_sum": 1e4}},
+					{ID: "step_2", Skill: "log1p_transform", TargetObjectID: "$prev"},
+					{ID: "step_3", Skill: "run_pca", TargetObjectID: "$prev"},
+				},
+			},
+			{
+				Steps: []models.PlanStep{
+					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active", Params: map[string]any{"target_sum": 1e4}},
+					{ID: "step_2", Skill: "log1p_transform", TargetObjectID: "$prev"},
+					{ID: "step_3", Skill: "run_pca", TargetObjectID: "$prev"},
+				},
+			},
+		},
+	}
+	service := NewService(store, registry, &sequentialRuntime{}, planner, t.TempDir())
+
+	service.runJob(context.Background(), sessionRecord.ID, "job_replan", "完成常规的数据预处理")
+
+	job, ok := store.GetJob("job_replan")
+	if !ok {
+		t.Fatalf("expected job to exist after run")
+	}
+	if job.Status != models.JobSucceeded {
+		t.Fatalf("expected job to succeed, got %s (%s)", job.Status, job.Error)
+	}
+	if len(job.Steps) != 3 {
+		t.Fatalf("expected 3 executed steps after replanning, got %+v", job.Steps)
+	}
+
+	wantSkills := []string{"normalize_total", "log1p_transform", "run_pca"}
+	for index, want := range wantSkills {
+		if job.Steps[index].Skill != want {
+			t.Fatalf("unexpected skill at %d: got %q want %q", index, job.Steps[index].Skill, want)
+		}
+	}
+
+	if len(planner.requests) < 2 {
+		t.Fatalf("expected replanning requests, got %d", len(planner.requests))
+	}
+	if !jobHasCheckpoint(job, "检查点重规划", "已更新计划") {
+		t.Fatalf("expected checkpoint replan update to be recorded, got %+v", job.Checkpoints)
+	}
+	replanRequest := planner.requests[1]
+	if len(replanRequest.RecentJobs) == 0 {
+		t.Fatalf("expected current running job in replanning context")
+	}
+	currentJob := replanRequest.RecentJobs[len(replanRequest.RecentJobs)-1]
+	if currentJob.Status != models.JobRunning {
+		t.Fatalf("expected running current job context, got %+v", currentJob)
+	}
+	if len(currentJob.Steps) != 1 || currentJob.Steps[0].Skill != "normalize_total" {
+		t.Fatalf("expected completed step in replanning context, got %+v", currentJob.Steps)
+	}
+}
+
+func TestRunJobStopsWhenEvaluatorMarksRequestComplete(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	now := time.Now().UTC()
+	sessionRecord := store.CreateSession("test")
+	sessionRecord.ActiveObjectID = "obj_active"
+	store.SaveSession(sessionRecord)
+	store.SaveObject(&models.ObjectMeta{
+		ID:             "obj_active",
+		SessionID:      sessionRecord.ID,
+		Label:          "pbmc3k",
+		Kind:           models.ObjectRawDataset,
+		BackendRef:     "backend_seed",
+		State:          models.ObjectResident,
+		InMemory:       true,
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	})
+	store.SaveJob(&models.Job{
+		ID:        "job_eval_complete",
+		SessionID: sessionRecord.ID,
+		Status:    models.JobQueued,
+		CreatedAt: now,
+	})
+
+	planner := &scriptedPlanner{
+		mode: "llm",
+		plans: []models.Plan{
+			{
+				Steps: []models.PlanStep{
+					{ID: "step_1", Skill: "assess_dataset", TargetObjectID: "$active"},
+				},
+			},
+			{
+				Steps: []models.PlanStep{
+					{ID: "step_1", Skill: "assess_dataset", TargetObjectID: "$active"},
+					{ID: "step_2", Skill: "normalize_total", TargetObjectID: "$prev"},
+				},
+			},
+		},
+	}
+	evaluator := &scriptedEvaluator{
+		results: []*CompletionEvaluation{
+			{Completed: true, Reason: "评估结果已满足当前请求。"},
+		},
+	}
+	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, evaluator, t.TempDir())
+
+	service.runJob(context.Background(), sessionRecord.ID, "job_eval_complete", "评估一下当前数据集")
+
+	job, ok := store.GetJob("job_eval_complete")
+	if !ok {
+		t.Fatalf("expected job to exist after run")
+	}
+	if job.Status != models.JobSucceeded {
+		t.Fatalf("expected job to succeed, got %s (%s)", job.Status, job.Error)
+	}
+	if len(job.Steps) != 1 || job.Steps[0].Skill != "assess_dataset" {
+		t.Fatalf("expected evaluator to stop after assess_dataset, got %+v", job.Steps)
+	}
+	if job.Summary != "评估结果已满足当前请求。" {
+		t.Fatalf("unexpected completion summary: %q", job.Summary)
+	}
+	if len(planner.requests) != 1 {
+		t.Fatalf("expected evaluator to prevent checkpoint replanning, got %d planner calls", len(planner.requests))
+	}
+	if len(evaluator.requests) != 1 {
+		t.Fatalf("expected one evaluator call, got %d", len(evaluator.requests))
+	}
+	if !jobHasCheckpoint(job, "完成判定", "已满足请求") {
+		t.Fatalf("expected completion checkpoint to be recorded, got %+v", job.Checkpoints)
+	}
+}
+
+func TestRunJobKeepsOriginalRemainingStepsWhenCheckpointReplanFails(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	now := time.Now().UTC()
+	sessionRecord := store.CreateSession("test")
+	sessionRecord.ActiveObjectID = "obj_active"
+	store.SaveSession(sessionRecord)
+	store.SaveObject(&models.ObjectMeta{
+		ID:             "obj_active",
+		SessionID:      sessionRecord.ID,
+		Label:          "pbmc3k",
+		Kind:           models.ObjectRawDataset,
+		BackendRef:     "backend_seed",
+		State:          models.ObjectResident,
+		InMemory:       true,
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	})
+	store.SaveJob(&models.Job{
+		ID:        "job_keep_plan",
+		SessionID: sessionRecord.ID,
+		Status:    models.JobQueued,
+		CreatedAt: now,
+	})
+
+	planner := &scriptedPlanner{
+		mode: "fake",
+		plans: []models.Plan{
+			{
+				Steps: []models.PlanStep{
+					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active"},
+					{ID: "step_2", Skill: "log1p_transform", TargetObjectID: "$prev"},
+				},
+			},
+		},
+		errs: map[int]error{
+			1: errors.New("checkpoint replan failed"),
+			2: errors.New("checkpoint replan failed"),
+		},
+	}
+	service := NewService(store, registry, &sequentialRuntime{}, planner, t.TempDir())
+
+	service.runJob(context.Background(), sessionRecord.ID, "job_keep_plan", "完成常规的数据预处理")
+
+	job, ok := store.GetJob("job_keep_plan")
+	if !ok {
+		t.Fatalf("expected job to exist after run")
+	}
+	if job.Status != models.JobSucceeded {
+		t.Fatalf("expected job to succeed, got %s (%s)", job.Status, job.Error)
+	}
+	if len(job.Steps) != 2 {
+		t.Fatalf("expected original remaining steps to continue after replan failure, got %+v", job.Steps)
+	}
+	if job.Steps[0].Skill != "normalize_total" || job.Steps[1].Skill != "log1p_transform" {
+		t.Fatalf("unexpected executed steps: %+v", job.Steps)
+	}
+	if !jobHasCheckpoint(job, "检查点重规划", "沿用原计划") {
+		t.Fatalf("expected fallback replan checkpoint to be recorded, got %+v", job.Checkpoints)
+	}
+}
+
 func TestUploadPluginBundleRegistersSkills(t *testing.T) {
 	dataRoot := t.TempDir()
 	registry, err := skill.LoadRegistryWithPluginsAndState(
@@ -258,4 +587,16 @@ func TestSetPluginBundleEnabledDisablesBuiltinBundle(t *testing.T) {
 
 func ptrTime(value time.Time) *time.Time {
 	return &value
+}
+
+func jobHasCheckpoint(job *models.Job, title, label string) bool {
+	if job == nil {
+		return false
+	}
+	for _, checkpoint := range job.Checkpoints {
+		if checkpoint.Title == title && checkpoint.Label == label {
+			return true
+		}
+	}
+	return false
 }

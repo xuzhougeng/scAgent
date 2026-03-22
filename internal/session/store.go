@@ -262,6 +262,9 @@ func cloneJob(in *models.Job) *models.Job {
 			out.Steps[i] = cloneJobStep(step)
 		}
 	}
+	if len(in.Checkpoints) > 0 {
+		out.Checkpoints = append([]models.JobCheckpoint(nil), in.Checkpoints...)
+	}
 	return &out
 }
 
@@ -278,6 +281,12 @@ func clonePlanStep(in models.PlanStep) models.PlanStep {
 
 func cloneJobStep(in models.JobStep) models.JobStep {
 	out := in
+	if len(in.Params) > 0 {
+		out.Params = make(map[string]any, len(in.Params))
+		for key, value := range in.Params {
+			out.Params[key] = value
+		}
+	}
 	if len(in.ArtifactIDs) > 0 {
 		out.ArtifactIDs = append([]string(nil), in.ArtifactIDs...)
 	}

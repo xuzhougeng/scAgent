@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -18,11 +19,12 @@ import (
 )
 
 type Service struct {
-	store    *session.Store
-	skills   *skill.Registry
-	runtime  runtime.Service
-	planner  Planner
-	dataRoot string
+	store     *session.Store
+	skills    *skill.Registry
+	runtime   runtime.Service
+	planner   Planner
+	evaluator Evaluator
+	dataRoot  string
 }
 
 type PlanningRequest struct {
@@ -59,12 +61,20 @@ type SystemStatus struct {
 }
 
 func NewService(store *session.Store, skills *skill.Registry, runtimeClient runtime.Service, planner Planner, dataRoot string) *Service {
+	return NewServiceWithEvaluator(store, skills, runtimeClient, planner, NewFakeEvaluator(), dataRoot)
+}
+
+func NewServiceWithEvaluator(store *session.Store, skills *skill.Registry, runtimeClient runtime.Service, planner Planner, evaluator Evaluator, dataRoot string) *Service {
+	if evaluator == nil {
+		evaluator = NewFakeEvaluator()
+	}
 	return &Service{
-		store:    store,
-		skills:   skills,
-		runtime:  runtimeClient,
-		planner:  planner,
-		dataRoot: dataRoot,
+		store:     store,
+		skills:    skills,
+		runtime:   runtimeClient,
+		planner:   planner,
+		evaluator: evaluator,
+		dataRoot:  dataRoot,
 	}
 }
 
@@ -404,20 +414,33 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 	job.Plan = &plan
 	if fallbackNote != "" {
 		job.Summary = fallbackNote
+		s.appendJobCheckpoint(job, "planning", "warn", "初始规划", "规则兜底", fallbackNote)
 	} else {
 		job.Summary = "编排器已接受执行计划。"
+		s.appendJobCheckpoint(
+			job,
+			"planning",
+			"muted",
+			"初始规划",
+			"已生成计划",
+			fmt.Sprintf("已生成初始执行计划，共 %d 步。", len(plan.Steps)),
+		)
 	}
 	s.store.SaveJob(job)
 	s.publishJob(sessionID, jobID)
 
 	prevObjectID := sessionRecord.ActiveObjectID
 	stepSummaries := make([]string, 0, len(plan.Steps))
+	pendingPlan := clonePlan(plan)
+	completionReason := ""
 
-	for _, step := range plan.Steps {
+	for len(pendingPlan.Steps) > 0 {
+		step := pendingPlan.Steps[0]
 		stepResult := models.JobStep{
 			ID:             step.ID,
 			Skill:          step.Skill,
 			TargetObjectID: step.TargetObjectID,
+			Params:         cloneParams(step.Params),
 			Status:         models.JobRunning,
 			StartedAt:      time.Now().UTC(),
 		}
@@ -520,6 +543,104 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		sessionRecord.UpdatedAt = finishedAt
 		sessionRecord.LastAccessedAt = finishedAt
 		s.store.SaveSession(sessionRecord)
+
+		evaluation, evalErr := s.evaluateCompletion(ctx, sessionRecord, job, message)
+		jobCompleted := false
+		switch {
+		case evalErr != nil:
+			s.appendJobCheckpoint(
+				job,
+				"completion",
+				"warn",
+				"完成判定",
+				"跳过判定",
+				"完成判定暂时失败，继续按现有计划执行。",
+			)
+		case evaluation != nil && evaluation.Completed:
+			s.appendJobCheckpoint(
+				job,
+				"completion",
+				"ok",
+				"完成判定",
+				"已满足请求",
+				defaultCheckpointSummary(evaluation.Reason, "执行结果已满足当前请求。"),
+			)
+			if strings.TrimSpace(evaluation.Reason) != "" {
+				completionReason = evaluation.Reason
+				job.Summary = evaluation.Reason
+			}
+			mergedPlan := mergeExecutedAndPendingPlan(job.Steps, models.Plan{})
+			job.Plan = &mergedPlan
+			s.store.SaveJob(job)
+			s.publishJob(sessionID, jobID)
+			s.publishSnapshot(sessionID)
+			jobCompleted = true
+		case evaluation != nil:
+			s.appendJobCheckpoint(
+				job,
+				"completion",
+				"warn",
+				"完成判定",
+				"继续执行",
+				defaultCheckpointSummary(evaluation.Reason, "当前请求尚未完成，需要继续执行或重规划。"),
+			)
+		}
+		if jobCompleted {
+			break
+		}
+
+		remainingPlan := clonePlanWithSteps(pendingPlan.Steps[1:])
+		replannedPlan, replanNote, replanErr := s.replanRemainingSteps(ctx, sessionRecord, job, message)
+		switch {
+		case replanErr == nil && len(replannedPlan.Steps) > 0:
+			pendingPlan = replannedPlan
+			if plansEquivalent(replannedPlan, remainingPlan) {
+				s.appendJobCheckpoint(
+					job,
+					"replan",
+					"muted",
+					"检查点重规划",
+					"计划不变",
+					fmt.Sprintf("检查点已确认后续 %d 步仍可继续执行。", len(replannedPlan.Steps)),
+				)
+			} else {
+				s.appendJobCheckpoint(
+					job,
+					"replan",
+					"ok",
+					"检查点重规划",
+					"已更新计划",
+					joinCheckpointSummary(replanNote, fmt.Sprintf("已根据最新对象状态更新剩余计划，当前还有 %d 步待执行。", len(replannedPlan.Steps))),
+				)
+			}
+			if replanNote != "" {
+				job.Summary = replanNote
+			}
+		case replanErr != nil && len(remainingPlan.Steps) > 0:
+			pendingPlan = remainingPlan
+			s.appendJobCheckpoint(
+				job,
+				"replan",
+				"warn",
+				"检查点重规划",
+				"沿用原计划",
+				joinCheckpointSummary(replanErr.Error(), "检查点重规划失败，继续沿用原剩余计划。"),
+			)
+		case replanErr == nil && len(remainingPlan.Steps) > 0:
+			pendingPlan = remainingPlan
+			s.appendJobCheckpoint(
+				job,
+				"replan",
+				"muted",
+				"检查点重规划",
+				"沿用原计划",
+				"检查点未生成新的剩余步骤，继续沿用原计划。",
+			)
+		default:
+			pendingPlan = remainingPlan
+		}
+		mergedPlan := mergeExecutedAndPendingPlan(job.Steps, pendingPlan)
+		job.Plan = &mergedPlan
 		s.store.SaveJob(job)
 		s.publishJob(sessionID, jobID)
 		s.publishSnapshot(sessionID)
@@ -528,7 +649,11 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 	finishedAt := time.Now().UTC()
 	job.Status = models.JobSucceeded
 	job.FinishedAt = &finishedAt
-	job.Summary = strings.Join(stepSummaries, " ")
+	if completionReason != "" {
+		job.Summary = completionReason
+	} else {
+		job.Summary = strings.Join(stepSummaries, " ")
+	}
 	s.store.SaveJob(job)
 
 	s.store.AddMessage(&models.Message{
@@ -545,6 +670,29 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 	s.store.SaveSession(sessionRecord)
 	s.publishJob(sessionID, jobID)
 	s.publishSnapshot(sessionID)
+}
+
+func (s *Service) evaluateCompletion(ctx context.Context, sessionRecord *models.Session, job *models.Job, message string) (*CompletionEvaluation, error) {
+	if s == nil || s.evaluator == nil {
+		return nil, nil
+	}
+	request, err := s.buildEvaluationRequest(sessionRecord, message, job)
+	if err != nil {
+		return nil, err
+	}
+	return s.evaluator.Evaluate(ctx, request)
+}
+
+func (s *Service) replanRemainingSteps(ctx context.Context, sessionRecord *models.Session, job *models.Job, message string) (models.Plan, string, error) {
+	request, err := s.buildExecutionPlanningRequest(sessionRecord, message, job)
+	if err != nil {
+		return models.Plan{}, "", err
+	}
+	plan, note, err := s.buildExecutablePlan(ctx, request)
+	if err != nil {
+		return models.Plan{}, "", err
+	}
+	return trimCompletedPlanPrefix(plan, job.Steps), note, nil
 }
 
 func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningRequest) (models.Plan, string, error) {
@@ -599,6 +747,7 @@ func (s *Service) failJob(sessionID, jobID string, err error) {
 	job.Status = models.JobFailed
 	job.Error = err.Error()
 	job.FinishedAt = &finishedAt
+	s.appendJobCheckpoint(job, "execution", "warn", "执行失败", "已终止", err.Error())
 	s.store.SaveJob(job)
 
 	s.store.AddMessage(&models.Message{
@@ -690,6 +839,20 @@ func backendRef(object *models.ObjectMeta) string {
 	return object.BackendRef
 }
 
+func (s *Service) appendJobCheckpoint(job *models.Job, kind, tone, title, label, summary string) {
+	if job == nil {
+		return
+	}
+	job.Checkpoints = append(job.Checkpoints, models.JobCheckpoint{
+		Kind:      kind,
+		Tone:      tone,
+		Title:     title,
+		Label:     label,
+		Summary:   summary,
+		CreatedAt: time.Now().UTC(),
+	})
+}
+
 func objectID(object *models.ObjectMeta) string {
 	if object == nil {
 		return ""
@@ -719,6 +882,35 @@ func (s *Service) buildPlanningRequest(sessionRecord *models.Session, message st
 		RecentMessages:  trimRecentMessages(snapshot.Messages, message, 6),
 		RecentJobs:      trimRecentJobs(snapshot.Jobs, 3),
 		RecentArtifacts: trimRecentArtifacts(snapshot.Artifacts, 4),
+	}, nil
+}
+
+func (s *Service) buildExecutionPlanningRequest(sessionRecord *models.Session, message string, currentJob *models.Job) (PlanningRequest, error) {
+	request, err := s.buildPlanningRequest(sessionRecord, message)
+	if err != nil {
+		return PlanningRequest{}, err
+	}
+	if currentJob == nil || len(currentJob.Steps) == 0 {
+		return request, nil
+	}
+	request.RecentJobs = append(request.RecentJobs, cloneJobForPlanning(currentJob))
+	return request, nil
+}
+
+func (s *Service) buildEvaluationRequest(sessionRecord *models.Session, message string, currentJob *models.Job) (EvaluationRequest, error) {
+	request, err := s.buildExecutionPlanningRequest(sessionRecord, message, currentJob)
+	if err != nil {
+		return EvaluationRequest{}, err
+	}
+	return EvaluationRequest{
+		Message:         request.Message,
+		Session:         request.Session,
+		ActiveObject:    request.ActiveObject,
+		Objects:         request.Objects,
+		RecentMessages:  request.RecentMessages,
+		RecentJobs:      request.RecentJobs,
+		RecentArtifacts: request.RecentArtifacts,
+		CurrentJob:      cloneJobForPlanning(currentJob),
 	}, nil
 }
 
@@ -792,4 +984,185 @@ func trimRecentArtifacts(artifacts []*models.Artifact, limit int) []*models.Arti
 		start = 0
 	}
 	return artifacts[start:]
+}
+
+func clonePlan(in models.Plan) models.Plan {
+	return clonePlanWithSteps(in.Steps)
+}
+
+func clonePlanWithSteps(steps []models.PlanStep) models.Plan {
+	if len(steps) == 0 {
+		return models.Plan{}
+	}
+	out := models.Plan{
+		Steps: make([]models.PlanStep, len(steps)),
+	}
+	for i, step := range steps {
+		out.Steps[i] = clonePlanStepData(step)
+	}
+	return out
+}
+
+func clonePlanStepData(in models.PlanStep) models.PlanStep {
+	out := in
+	out.Params = cloneParams(in.Params)
+	return out
+}
+
+func cloneParams(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneJobForPlanning(in *models.Job) *models.Job {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if len(in.Steps) > 0 {
+		out.Steps = make([]models.JobStep, len(in.Steps))
+		for i, step := range in.Steps {
+			out.Steps[i] = cloneJobStepForPlanning(step)
+		}
+	}
+	if len(in.Checkpoints) > 0 {
+		out.Checkpoints = append([]models.JobCheckpoint(nil), in.Checkpoints...)
+	}
+	return &out
+}
+
+func cloneJobStepForPlanning(in models.JobStep) models.JobStep {
+	out := in
+	out.Params = cloneParams(in.Params)
+	if len(in.ArtifactIDs) > 0 {
+		out.ArtifactIDs = append([]string(nil), in.ArtifactIDs...)
+	}
+	if len(in.Metadata) > 0 {
+		out.Metadata = cloneParams(in.Metadata)
+	}
+	return out
+}
+
+func mergeExecutedAndPendingPlan(executed []models.JobStep, pending models.Plan) models.Plan {
+	merged := models.Plan{
+		Steps: make([]models.PlanStep, 0, len(executed)+len(pending.Steps)),
+	}
+	for _, step := range executed {
+		merged.Steps = append(merged.Steps, models.PlanStep{
+			ID:             step.ID,
+			Skill:          step.Skill,
+			TargetObjectID: step.TargetObjectID,
+			Params:         cloneParams(step.Params),
+		})
+	}
+	for _, step := range pending.Steps {
+		merged.Steps = append(merged.Steps, clonePlanStepData(step))
+	}
+	return merged
+}
+
+func trimCompletedPlanPrefix(plan models.Plan, executed []models.JobStep) models.Plan {
+	if len(plan.Steps) == 0 || len(executed) == 0 {
+		return clonePlan(plan)
+	}
+
+	maxDrop := min(len(plan.Steps), len(executed))
+	bestDrop := 0
+	for drop := maxDrop; drop > 0; drop-- {
+		if executedSequenceContainsPrefix(executed, plan.Steps[:drop]) {
+			bestDrop = drop
+			break
+		}
+	}
+	return clonePlanWithSteps(plan.Steps[bestDrop:])
+}
+
+func executedSequenceContainsPrefix(executed []models.JobStep, prefix []models.PlanStep) bool {
+	if len(prefix) == 0 {
+		return true
+	}
+	if len(executed) < len(prefix) {
+		return false
+	}
+	for start := 0; start+len(prefix) <= len(executed); start++ {
+		if matchingExecutedWindow(executed[start:start+len(prefix)], prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchingExecutedWindow(executed []models.JobStep, prefix []models.PlanStep) bool {
+	for i := range prefix {
+		if !planStepMatchesJobStep(prefix[i], executed[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func planStepMatchesJobStep(planStep models.PlanStep, jobStep models.JobStep) bool {
+	return planStep.Skill == jobStep.Skill &&
+		planStep.TargetObjectID == jobStep.TargetObjectID &&
+		mapsEqual(planStep.Params, jobStep.Params)
+}
+
+func mapsEqual(left, right map[string]any) bool {
+	if len(left) == 0 && len(right) == 0 {
+		return true
+	}
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		rightValue, ok := right[key]
+		if !ok || !reflect.DeepEqual(leftValue, rightValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func plansEquivalent(left, right models.Plan) bool {
+	if len(left.Steps) != len(right.Steps) {
+		return false
+	}
+	for index := range left.Steps {
+		if !planStepMatchesPlanStep(left.Steps[index], right.Steps[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func planStepMatchesPlanStep(left, right models.PlanStep) bool {
+	return left.Skill == right.Skill &&
+		left.TargetObjectID == right.TargetObjectID &&
+		mapsEqual(left.Params, right.Params)
+}
+
+func defaultCheckpointSummary(summary, fallback string) string {
+	if strings.TrimSpace(summary) != "" {
+		return summary
+	}
+	return fallback
+}
+
+func joinCheckpointSummary(primary, fallback string) string {
+	primary = strings.TrimSpace(primary)
+	fallback = strings.TrimSpace(fallback)
+	switch {
+	case primary == "":
+		return fallback
+	case fallback == "":
+		return primary
+	default:
+		return primary + " " + fallback
+	}
 }
