@@ -259,9 +259,9 @@ class RuntimeState:
             return BUILTIN_BUNDLE_ID not in self.load_disabled_bundles()
         return skill_name in self.load_plugin_skills()
 
-    def create_session_root(self, session_id: str, label: str, session_root: Path) -> dict[str, Any]:
-        objects_dir = session_root / "objects"
-        artifacts_dir = session_root / "artifacts"
+    def create_workspace_root(self, session_id: str, label: str, workspace_root: Path) -> dict[str, Any]:
+        objects_dir = workspace_root / "objects"
+        artifacts_dir = workspace_root / "artifacts"
         objects_dir.mkdir(parents=True, exist_ok=True)
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -394,7 +394,7 @@ class RuntimeState:
     def _persist_adata_object(
         self,
         session_id: str,
-        session_root: Path,
+        workspace_root: Path,
         label: str,
         kind: str,
         adata: Any,
@@ -402,7 +402,7 @@ class RuntimeState:
     ) -> dict[str, Any]:
         backend_ref = self.next_ref(session_id)
         suffix = backend_ref.split(":")[-1]
-        materialized_path = session_root / "objects" / f"{slug(label)}_{slug(suffix)}.h5ad"
+        materialized_path = workspace_root / "objects" / f"{slug(label)}_{slug(suffix)}.h5ad"
         materialized_path.parent.mkdir(parents=True, exist_ok=True)
         adata.write_h5ad(materialized_path)
 
@@ -503,8 +503,8 @@ class RuntimeState:
             "n_comps": max_comps,
         }
 
-    def _plot_path(self, session_root: Path, skill: str, label: str) -> Path:
-        path = session_root / "artifacts" / f"{skill}_{slug(label)}.svg"
+    def _plot_path(self, workspace_root: Path, skill: str, label: str) -> Path:
+        path = workspace_root / "artifacts" / f"{skill}_{slug(label)}.svg"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -771,16 +771,16 @@ class RuntimeState:
         fig.savefig(path, format="svg")
         plt.close(fig)
 
-    def _save_custom_figure(self, figure: Any, session_root: Path, stem: str) -> Path:
-        path = session_root / "artifacts" / f"{stem}.svg"
+    def _save_custom_figure(self, figure: Any, workspace_root: Path, stem: str) -> Path:
+        path = workspace_root / "artifacts" / f"{stem}.svg"
         path.parent.mkdir(parents=True, exist_ok=True)
         figure.savefig(path, format="svg", bbox_inches="tight")
         _, _, plt, _, _ = analysis_modules()
         plt.close(figure)
         return path
 
-    def _save_custom_table(self, table: Any, session_root: Path, stem: str) -> Path:
-        path = session_root / "artifacts" / f"{stem}.csv"
+    def _save_custom_table(self, table: Any, workspace_root: Path, stem: str) -> Path:
+        path = workspace_root / "artifacts" / f"{stem}.csv"
         path.parent.mkdir(parents=True, exist_ok=True)
         table.to_csv(path, index=False)
         return path
@@ -804,7 +804,7 @@ class RuntimeState:
         skill_name: str,
         payload: dict[str, Any],
         target: RuntimeObject | None,
-        session_root: Path,
+        workspace_root: Path,
     ) -> dict[str, Any] | None:
         plugin = self.load_plugin_skills().get(skill_name)
         if plugin is None:
@@ -825,7 +825,7 @@ class RuntimeState:
                 raise RuntimeError("当前插件技能没有可持久化的目标对象。")
             persisted = self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=str(label or f"{skill_name}_{target.label}"),
                 kind=kind or self._default_kind_after_processing(target),
                 adata=output_adata,
@@ -834,7 +834,7 @@ class RuntimeState:
             return persisted["object"]
 
         def save_figure(figure: Any, stem: str, *, title: str = "", summary: str = "") -> dict[str, Any]:
-            figure_path = self._save_custom_figure(figure, session_root, stem or f"{skill_name}_{slug(target.label if target else skill_name)}")
+            figure_path = self._save_custom_figure(figure, workspace_root, stem or f"{skill_name}_{slug(target.label if target else skill_name)}")
             return {
                 "kind": "plot",
                 "title": title or f"{skill_name} 输出图",
@@ -844,7 +844,7 @@ class RuntimeState:
             }
 
         def save_table(table: Any, stem: str, *, title: str = "", summary: str = "") -> dict[str, Any]:
-            table_path = self._save_custom_table(table, session_root, stem or f"{skill_name}_{slug(target.label if target else skill_name)}")
+            table_path = self._save_custom_table(table, workspace_root, stem or f"{skill_name}_{slug(target.label if target else skill_name)}")
             return {
                 "kind": "table",
                 "title": title or f"{skill_name} 输出表",
@@ -867,8 +867,8 @@ class RuntimeState:
             "plt": plt,
             "json": json,
             "Path": Path,
-            "session_root": session_root,
-            "artifacts_dir": session_root / "artifacts",
+            "workspace_root": workspace_root,
+            "artifacts_dir": workspace_root / "artifacts",
             "plugin_dir": entrypoint.parent,
             "persist_adata": persist_adata,
             "save_figure": save_figure,
@@ -917,7 +917,7 @@ class RuntimeState:
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
         skill = payload["skill"]
         session_id = payload["session_id"]
-        session_root = Path(payload["session_root"])
+        workspace_root = Path(payload["workspace_root"])
         target = self.objects.get(payload.get("target_backend_ref", ""))
         params = payload.get("params", {})
 
@@ -929,6 +929,7 @@ class RuntimeState:
             metadata = target.metadata or {}
             return {
                 "summary": f"{target.label}：{target.n_obs} 个细胞，{target.n_vars} 个基因，状态为 {format_object_state_zh(target.state)}。{describe_annotation_summary(metadata)}",
+                "facts": build_inspect_dataset_facts(target),
                 "metadata": {
                     "available_obs": metadata.get("obs_fields", []),
                     "available_embeddings": metadata.get("obsm_keys", []),
@@ -947,7 +948,7 @@ class RuntimeState:
             sc.pp.normalize_total(adata, target_sum=target_sum)
             return self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=f"normalized_{target.label}",
                 kind=self._default_kind_after_processing(target),
                 adata=adata,
@@ -961,7 +962,7 @@ class RuntimeState:
             sc.pp.log1p(adata)
             return self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=f"log1p_{target.label}",
                 kind=self._default_kind_after_processing(target),
                 adata=adata,
@@ -988,7 +989,7 @@ class RuntimeState:
             n_hvg = int(adata.var.get("highly_variable", []).sum()) if "highly_variable" in adata.var else 0
             return self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=f"hvg_{target.label}",
                 kind=self._default_kind_after_processing(target),
                 adata=adata,
@@ -1006,7 +1007,7 @@ class RuntimeState:
             sc.pp.pca(adata, n_comps=max_comps)
             return self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=f"pca_{target.label}",
                 kind=self._default_kind_after_processing(target),
                 adata=adata,
@@ -1027,7 +1028,7 @@ class RuntimeState:
                 sc.pp.neighbors(adata, n_neighbors=n_neighbors, n_pcs=min(30, adata.obsm["X_pca"].shape[1]))
             return self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=f"neighbors_{target.label}",
                 kind=self._default_kind_after_processing(target),
                 adata=adata,
@@ -1044,7 +1045,7 @@ class RuntimeState:
             sc.tl.umap(adata, min_dist=min_dist)
             return self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=f"umap_{target.label}",
                 kind=self._default_kind_after_processing(target),
                 adata=adata,
@@ -1063,7 +1064,7 @@ class RuntimeState:
             sc.tl.umap(adata)
             return self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=f"prepared_{target.label}",
                 kind=self._default_kind_after_processing(target),
                 adata=adata,
@@ -1084,7 +1085,7 @@ class RuntimeState:
             subset_label = f"subset_{obs_field}_{slug(str(value)) or 'selected'}"
             return self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=subset_label,
                 kind="subset",
                 adata=subset,
@@ -1106,7 +1107,7 @@ class RuntimeState:
             subset_label = f"subcluster_{obs_field}_{slug(str(value)) or 'selected'}"
             return self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=subset_label,
                 kind="reclustered_subset",
                 adata=analyzed_subset,
@@ -1128,7 +1129,7 @@ class RuntimeState:
             sc.tl.leiden(adata, resolution=float(resolution), key_added="leiden")
             return self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=f"reclustered_{target.label}",
                 kind="reclustered_subset",
                 adata=adata,
@@ -1141,7 +1142,7 @@ class RuntimeState:
             analyzed_subset, workflow = self._run_subcluster_workflow(adata, params)
             return self._persist_adata_object(
                 session_id=session_id,
-                session_root=session_root,
+                workspace_root=workspace_root,
                 label=f"reanalyzed_{target.label}",
                 kind="reclustered_subset",
                 adata=analyzed_subset,
@@ -1157,7 +1158,7 @@ class RuntimeState:
             adata = self._load_adata(target)
             groupby = self._cluster_field(target, adata, str(params.get("groupby") or ""))
             adata.obs[groupby] = adata.obs[groupby].astype("category")
-            path = session_root / "artifacts" / f"markers_{slug(target.label)}.csv"
+            path = workspace_root / "artifacts" / f"markers_{slug(target.label)}.csv"
             sc.tl.rank_genes_groups(adata, groupby=groupby, method="wilcoxon", use_raw=adata.raw is not None)
             markers = sc.get.rank_genes_groups_df(adata, group=None)
             markers.to_csv(path, index=False)
@@ -1192,7 +1193,7 @@ class RuntimeState:
                     color_by = ""
             if color_by and color_by not in adata.obs.columns:
                 raise RuntimeError(f"`{color_by}` 不是 obs 字段；如果要按基因表达着色，请使用 plot_gene_umap。")
-            path = self._plot_path(session_root, skill, target.label)
+            path = self._plot_path(workspace_root, skill, target.label)
             self._save_umap_plot(
                 adata,
                 path,
@@ -1246,7 +1247,7 @@ class RuntimeState:
             resolved_genes: list[dict[str, str]] = []
             for requested_gene in requested_genes:
                 display_gene, gene_key, expression, source = self._resolve_gene_expression(adata, requested_gene, layer_name)
-                path = self._plot_path(session_root, skill, f"{target.label}_{display_gene}")
+                path = self._plot_path(workspace_root, skill, f"{target.label}_{display_gene}")
                 self._save_gene_umap_plot(adata, path, display_gene, expression)
                 artifacts.append(
                     {
@@ -1304,9 +1305,11 @@ class RuntimeState:
                 "plt": plt,
                 "Path": Path,
                 "json": json,
-                "session_root": session_root,
-                "artifacts_dir": session_root / "artifacts",
+                "workspace_root": workspace_root,
+                "artifacts_dir": workspace_root / "artifacts",
                 "result_summary": "",
+                "result_text": "",
+                "result_value": None,
                 "output_adata": None,
                 "persist_output": persist_output,
                 "figure": None,
@@ -1319,6 +1322,8 @@ class RuntimeState:
             stdout_text = stdout_buffer.getvalue().strip()
             stderr_text = stderr_buffer.getvalue().strip()
             result_summary = str(exec_env.get("result_summary") or "").strip()
+            result_text = str(exec_env.get("result_text") or "").strip()
+            result_value = exec_env.get("result_value")
             output_adata = exec_env.get("output_adata")
             if output_adata is None and bool(exec_env.get("persist_output")):
                 output_adata = exec_env.get("adata")
@@ -1328,7 +1333,7 @@ class RuntimeState:
             if figure is None and plt.get_fignums():
                 figure = plt.gcf()
             if figure is not None and hasattr(figure, "savefig"):
-                figure_path = self._save_custom_figure(figure, session_root, f"custom_plot_{slug(output_label)}")
+                figure_path = self._save_custom_figure(figure, workspace_root, f"custom_plot_{slug(output_label)}")
                 artifacts.append(
                     {
                         "kind": "plot",
@@ -1341,7 +1346,7 @@ class RuntimeState:
 
             result_table = exec_env.get("result_table")
             if result_table is not None and hasattr(result_table, "to_csv"):
-                table_path = self._save_custom_table(result_table, session_root, f"custom_table_{slug(output_label)}")
+                table_path = self._save_custom_table(result_table, workspace_root, f"custom_table_{slug(output_label)}")
                 artifacts.append(
                     {
                         "kind": "table",
@@ -1352,8 +1357,25 @@ class RuntimeState:
                     }
                 )
 
+            facts = build_custom_analysis_facts(
+                output_label=output_label,
+                result_value=result_value,
+                result_text=result_text,
+                result_summary=result_summary,
+                stdout_text=stdout_text,
+                result_table=result_table,
+                output_adata=output_adata,
+                artifacts=artifacts,
+            )
+
             response: dict[str, Any] = {
-                "summary": result_summary or f"已完成针对 {target.label} 的自定义 Python 分析。",
+                "summary": default_custom_analysis_summary(
+                    target_label=target.label,
+                    output_label=output_label,
+                    facts=facts,
+                    generated_object=output_adata is not None,
+                ),
+                "facts": facts,
                 "metadata": {
                     "code_executed": True,
                     "stdout": stdout_text or None,
@@ -1364,14 +1386,14 @@ class RuntimeState:
             if output_adata is not None:
                 persisted = self._persist_adata_object(
                     session_id=session_id,
-                    session_root=session_root,
+                    workspace_root=workspace_root,
                     label=output_label,
                     kind=self._default_kind_after_processing(target),
                     adata=output_adata,
                     summary="",
                 )
                 response["object"] = persisted["object"]
-                if not result_summary:
+                if not result_summary and not result_text and facts.get("result_value") is None:
                     response["summary"] = f"已完成针对 {target.label} 的自定义 Python 分析，并生成对象 {output_label}。"
 
             if artifacts:
@@ -1379,13 +1401,13 @@ class RuntimeState:
 
             return response
 
-        plugin_response = self._execute_plugin_skill(skill, payload, target, session_root)
+        plugin_response = self._execute_plugin_skill(skill, payload, target, workspace_root)
         if plugin_response is not None:
             return plugin_response
 
         if skill == "export_h5ad":
             target = self._require_target(target, skill)
-            export_path = session_root / "objects" / f"{slug(target.label)}.h5ad"
+            export_path = workspace_root / "objects" / f"{slug(target.label)}.h5ad"
             shutil.copy2(target.materialized_path, export_path)
             target.materialized_path = str(export_path)
             target.state = "materialized"
@@ -1544,13 +1566,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "session_init_started",
                     session_id=session_id,
                     label=payload.get("label"),
-                    session_root=payload.get("session_root"),
+                    workspace_root=payload.get("workspace_root"),
                 )
-                session_root = Path(payload["session_root"])
-                response = STATE.create_session_root(
+                workspace_root = Path(payload["workspace_root"])
+                response = STATE.create_workspace_root(
                     session_id=payload["session_id"],
                     label=payload.get("label", "session"),
-                    session_root=session_root,
+                    workspace_root=workspace_root,
                 )
                 log_runtime_event(
                     "session_init_finished",
@@ -2009,6 +2031,139 @@ def describe_annotation_summary(metadata: dict[str, Any]) -> str:
         parts.append(f"缺失条件：{missing[0]}")
 
     return " ".join(parts)
+
+
+def build_inspect_dataset_facts(target: RuntimeObject) -> dict[str, Any]:
+    metadata = target.metadata or {}
+    assessment = metadata.get("assessment") or {}
+    cluster = metadata.get("cluster_annotation") or {}
+    cell_type = metadata.get("cell_type_annotation") or {}
+    return {
+        "object_label": target.label,
+        "cell_count": target.n_obs,
+        "gene_count": target.n_vars,
+        "object_state": target.state,
+        "has_umap": bool(assessment.get("has_umap")),
+        "has_pca": bool(assessment.get("has_pca")),
+        "has_neighbors": bool(assessment.get("has_neighbors")),
+        "preprocessing_state": assessment.get("preprocessing_state"),
+        "cluster_field": cluster.get("field"),
+        "cluster_count": cluster.get("n_categories"),
+        "cell_type_field": cell_type.get("field"),
+        "cell_type_count": cell_type.get("n_categories"),
+    }
+
+
+def build_custom_analysis_facts(
+    *,
+    output_label: str,
+    result_value: Any,
+    result_text: str,
+    result_summary: str,
+    stdout_text: str,
+    result_table: Any,
+    output_adata: Any,
+    artifacts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    scalar_value = normalize_custom_scalar(result_value)
+    if scalar_value is None:
+        scalar_value = infer_scalar_from_stdout(stdout_text)
+
+    facts: dict[str, Any] = {
+        "analysis_kind": "custom_python",
+        "output_label": output_label,
+        "generated_object": output_adata is not None,
+        "artifact_count": len(artifacts),
+        "table_generated": result_table is not None,
+        "stdout_text": stdout_text or None,
+    }
+    if scalar_value is not None:
+        facts["result_value"] = scalar_value
+    if result_text:
+        facts["result_text"] = result_text
+    if result_summary:
+        facts["result_summary"] = result_summary
+    if result_table is not None:
+        facts["table_rows"] = safe_table_length(result_table)
+        facts["table_columns"] = safe_table_columns(result_table)
+    if output_adata is not None:
+        facts["generated_object_label"] = output_label
+    return facts
+
+
+def default_custom_analysis_summary(*, target_label: str, output_label: str, facts: dict[str, Any], generated_object: bool) -> str:
+    if facts.get("result_summary"):
+        return str(facts["result_summary"])
+    if facts.get("result_text"):
+        return str(facts["result_text"])
+    if facts.get("result_value") is not None:
+        return f"{output_label} = {format_scalar_value(facts['result_value'])}。"
+    if facts.get("table_generated"):
+        return f"已完成针对 {target_label} 的自定义 Python 分析，并生成结果表 {output_label}。"
+    if generated_object:
+        return f"已完成针对 {target_label} 的自定义 Python 分析，并生成对象 {output_label}。"
+    return f"已完成针对 {target_label} 的自定义 Python 分析。"
+
+
+def normalize_custom_scalar(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, bool, int, float)):
+        return value
+    if hasattr(value, "item"):
+        try:
+            item = value.item()
+            if isinstance(item, (str, bool, int, float)):
+                return item
+        except Exception:
+            return None
+    return None
+
+
+def infer_scalar_from_stdout(stdout_text: str) -> Any:
+    text = stdout_text.strip()
+    if text == "" or "\n" in text:
+        return None
+    if re.fullmatch(r"-?\d+", text):
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    if re.fullmatch(r"-?\d+\.\d+", text):
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
+
+
+def safe_table_length(table: Any) -> int | None:
+    try:
+        return int(len(table))
+    except Exception:
+        return None
+
+
+def safe_table_columns(table: Any) -> list[str] | None:
+    columns = getattr(table, "columns", None)
+    if columns is None:
+        return None
+    try:
+        return [str(value) for value in list(columns)[:12]]
+    except Exception:
+        return None
+
+
+def format_scalar_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return f"{value:g}"
+    return str(value)
 
 
 STATE = RuntimeState()

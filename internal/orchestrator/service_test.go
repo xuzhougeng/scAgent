@@ -73,10 +73,23 @@ type restoringRuntime struct {
 	execCalls   []runtimeclient.ExecuteRequest
 }
 
+type scalarResultRuntime struct {
+	ensureCalls []runtimeclient.EnsureObjectRequest
+	execCalls   []runtimeclient.ExecuteRequest
+}
+
 type scriptedEvaluator struct {
 	results  []*CompletionEvaluation
 	errs     map[int]error
 	requests []EvaluationRequest
+}
+
+type scriptedAnswerer struct {
+	directAnswer string
+	directOK     bool
+	directErr    error
+	response     *ResponseComposeResult
+	requests     []PlanningRequest
 }
 
 func (e *scriptedEvaluator) Evaluate(_ context.Context, request EvaluationRequest) (*CompletionEvaluation, error) {
@@ -93,6 +106,25 @@ func (e *scriptedEvaluator) Evaluate(_ context.Context, request EvaluationReques
 
 func (e *scriptedEvaluator) Mode() string {
 	return "fake"
+}
+
+func (a *scriptedAnswerer) BuildDirectAnswer(_ context.Context, request PlanningRequest) (string, bool, error) {
+	a.requests = append(a.requests, request)
+	if a.directErr != nil {
+		return "", false, a.directErr
+	}
+	return a.directAnswer, a.directOK, nil
+}
+
+func (a *scriptedAnswerer) BuildInvestigationResponse(_ context.Context, request ResponseComposeRequest) (*ResponseComposeResult, error) {
+	if a.response != nil {
+		return a.response, nil
+	}
+	return NewNoopAnswerer().BuildInvestigationResponse(context.Background(), request)
+}
+
+func (a *scriptedAnswerer) BuildFailureAnswer(err error) string {
+	return NewNoopAnswerer().BuildFailureAnswer(err)
 }
 
 func (r *sequentialRuntime) Health(context.Context) error {
@@ -179,62 +211,78 @@ func (r *restoringRuntime) Execute(_ context.Context, payload runtimeclient.Exec
 	}, nil
 }
 
-func TestBuildExecutablePlanFallsBackWhenLLMReturnsEmptyPlan(t *testing.T) {
+func (r *scalarResultRuntime) Health(context.Context) error {
+	return nil
+}
+
+func (r *scalarResultRuntime) Status(context.Context) (*runtimeclient.HealthStatus, error) {
+	return &runtimeclient.HealthStatus{}, nil
+}
+
+func (r *scalarResultRuntime) InitSession(context.Context, runtimeclient.InitSessionRequest) (*runtimeclient.InitSessionResponse, error) {
+	return nil, errors.New("unexpected init session call")
+}
+
+func (r *scalarResultRuntime) LoadFile(context.Context, runtimeclient.LoadFileRequest) (*runtimeclient.LoadFileResponse, error) {
+	return nil, errors.New("unexpected load file call")
+}
+
+func (r *scalarResultRuntime) EnsureObject(_ context.Context, payload runtimeclient.EnsureObjectRequest) (*runtimeclient.EnsureObjectResponse, error) {
+	r.ensureCalls = append(r.ensureCalls, payload)
+	return &runtimeclient.EnsureObjectResponse{
+		Object:  payload.Object,
+		Summary: "already available",
+	}, nil
+}
+
+func (r *scalarResultRuntime) Execute(_ context.Context, payload runtimeclient.ExecuteRequest) (*runtimeclient.ExecuteResponse, error) {
+	r.execCalls = append(r.execCalls, payload)
+	return &runtimeclient.ExecuteResponse{
+		Summary: "已完成针对 pbmc3k 的自定义 Python 分析。",
+		Facts: map[string]any{
+			"analysis_kind": "custom_python",
+			"result_value":  float64(4848644),
+			"stdout_text":   "4848644",
+		},
+		Metadata: map[string]any{
+			"stdout": "4848644",
+		},
+	}, nil
+}
+
+func TestBuildExecutablePlanRejectsEmptyLLMPlan(t *testing.T) {
 	registry, err := skill.LoadRegistry(skillsRegistryPath())
 	if err != nil {
 		t.Fatalf("load skills registry: %v", err)
 	}
 
 	service := NewService(session.NewStore(), registry, nil, emptyLLMPlanner{}, t.TempDir())
-	plan, info, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
+	_, err = service.buildExecutablePlan(context.Background(), PlanningRequest{
 		Message: "完成常规的数据预处理",
 	})
-	if err != nil {
-		t.Fatalf("build executable plan: %v", err)
+	if err == nil {
+		t.Fatalf("expected empty LLM plan to be rejected")
 	}
-	if !info.UsedFallback || info.Note == "" {
-		t.Fatalf("expected fallback note when LLM returns empty plan")
-	}
-
-	wantSkills := []string{
-		"normalize_total",
-		"log1p_transform",
-		"select_hvg",
-		"run_pca",
-		"compute_neighbors",
-		"run_umap",
-	}
-	if len(plan.Steps) != len(wantSkills) {
-		t.Fatalf("unexpected step count: got %d want %d", len(plan.Steps), len(wantSkills))
-	}
-	for index, want := range wantSkills {
-		if plan.Steps[index].Skill != want {
-			t.Fatalf("unexpected skill at %d: got %q want %q", index, plan.Steps[index].Skill, want)
-		}
+	if !strings.Contains(err.Error(), "plan has no steps") {
+		t.Fatalf("expected validation error for empty plan, got %v", err)
 	}
 }
 
-func TestBuildExecutablePlanFallsBackWhenLLMRequestFails(t *testing.T) {
+func TestBuildExecutablePlanReturnsPlannerErrorWhenLLMRequestFails(t *testing.T) {
 	registry, err := skill.LoadRegistry(skillsRegistryPath())
 	if err != nil {
 		t.Fatalf("load skills registry: %v", err)
 	}
 
 	service := NewService(session.NewStore(), registry, nil, failingLLMPlanner{}, t.TempDir())
-	plan, info, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
+	_, err = service.buildExecutablePlan(context.Background(), PlanningRequest{
 		Message: "完成常规的数据预处理",
 	})
-	if err != nil {
-		t.Fatalf("build executable plan: %v", err)
+	if err == nil {
+		t.Fatalf("expected planner request failure to be returned")
 	}
-	if !info.UsedFallback || info.Note == "" {
-		t.Fatalf("expected fallback note when LLM request fails")
-	}
-	if info.PlannerError == "" {
-		t.Fatalf("expected original planner error in fallback info")
-	}
-	if len(plan.Steps) == 0 || plan.Steps[0].Skill != "normalize_total" {
-		t.Fatalf("unexpected fallback plan: %+v", plan.Steps)
+	if !strings.Contains(err.Error(), "planner request failed") {
+		t.Fatalf("expected original planner error, got %v", err)
 	}
 }
 
@@ -327,6 +375,65 @@ func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
 	}
 }
 
+func TestSubmitMessageAnswersSimpleDatasetQuestionWithoutJob(t *testing.T) {
+	store := session.NewStore()
+	answerer := &scriptedAnswerer{
+		directAnswer: "当前对象 pbmc3k 有 2638 个细胞。",
+		directOK:     true,
+	}
+	service := NewServiceWithComponents(store, nil, nil, NewFakePlanner(), NewFakeEvaluator(), answerer, t.TempDir())
+
+	sessionRecord := store.CreateSession("test")
+	now := time.Now().UTC()
+	sessionRecord.ActiveObjectID = "obj_active"
+	store.SaveSession(sessionRecord)
+
+	workspaceRecord, ok := store.GetWorkspace(sessionRecord.WorkspaceID)
+	if !ok {
+		t.Fatalf("expected workspace to exist")
+	}
+	workspaceRecord.ActiveObjectID = "obj_active"
+	store.SaveWorkspace(workspaceRecord)
+
+	store.SaveObject(&models.ObjectMeta{
+		ID:        "obj_active",
+		SessionID: sessionRecord.ID,
+		Label:     "pbmc3k",
+		Kind:      models.ObjectRawDataset,
+		NObs:      2638,
+		NVars:     1838,
+		Metadata: map[string]any{
+			"obsm_keys": []string{"X_umap"},
+			"assessment": map[string]any{
+				"has_umap": true,
+			},
+		},
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	})
+
+	job, snapshot, err := service.SubmitMessage(context.Background(), sessionRecord.ID, "有多少细胞")
+	if err != nil {
+		t.Fatalf("submit message: %v", err)
+	}
+	if job != nil {
+		t.Fatalf("expected direct answer without job, got %+v", job)
+	}
+	if len(snapshot.Jobs) != 0 {
+		t.Fatalf("expected no jobs in snapshot, got %+v", snapshot.Jobs)
+	}
+	lastMessage := snapshot.Messages[len(snapshot.Messages)-1]
+	if lastMessage.Role != models.MessageAssistant {
+		t.Fatalf("expected assistant reply, got %+v", lastMessage)
+	}
+	if lastMessage.Content != "当前对象 pbmc3k 有 2638 个细胞。" {
+		t.Fatalf("unexpected assistant content: %q", lastMessage.Content)
+	}
+	if len(answerer.requests) != 1 {
+		t.Fatalf("expected answerer to receive one semantic direct-answer request, got %d", len(answerer.requests))
+	}
+}
+
 func TestBuildExecutablePlanInheritsMissingLegendFromRecentPlotContext(t *testing.T) {
 	registry, err := skill.LoadRegistry(skillsRegistryPath())
 	if err != nil {
@@ -352,7 +459,7 @@ func TestBuildExecutablePlanInheritsMissingLegendFromRecentPlotContext(t *testin
 	}
 	service := NewService(session.NewStore(), registry, nil, planner, t.TempDir())
 
-	plan, _, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
+	plan, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
 		Message: "把这个图改一下",
 		RecentJobs: []*models.Job{
 			{
@@ -406,7 +513,7 @@ func TestBuildExecutablePlanKeepsPlannerLegendChoiceWhenProvided(t *testing.T) {
 	}
 	service := NewService(session.NewStore(), registry, nil, planner, t.TempDir())
 
-	plan, _, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
+	plan, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
 		Message: "把图例放右边",
 		RecentJobs: []*models.Job{
 			{
@@ -456,12 +563,7 @@ func TestRunJobReplansRemainingStepsFromCurrentState(t *testing.T) {
 		CreatedAt:      now,
 		LastAccessedAt: now,
 	})
-	store.SaveJob(&models.Job{
-		ID:        "job_replan",
-		SessionID: sessionRecord.ID,
-		Status:    models.JobQueued,
-		CreatedAt: now,
-	})
+	store.SaveJob(newQueuedInvestigationJob("job_replan", sessionRecord.ID, now))
 
 	planner := &scriptedPlanner{
 		mode: "llm",
@@ -493,7 +595,7 @@ func TestRunJobReplansRemainingStepsFromCurrentState(t *testing.T) {
 			},
 		},
 	}
-	service := NewService(store, registry, &sequentialRuntime{}, planner, t.TempDir())
+	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, NewFakeEvaluator(), t.TempDir())
 
 	service.runJob(context.Background(), sessionRecord.ID, "job_replan", "完成常规的数据预处理")
 
@@ -559,12 +661,7 @@ func TestRunJobStopsWhenEvaluatorMarksRequestComplete(t *testing.T) {
 		CreatedAt:      now,
 		LastAccessedAt: now,
 	})
-	store.SaveJob(&models.Job{
-		ID:        "job_eval_complete",
-		SessionID: sessionRecord.ID,
-		Status:    models.JobQueued,
-		CreatedAt: now,
-	})
+	store.SaveJob(newQueuedInvestigationJob("job_eval_complete", sessionRecord.ID, now))
 
 	planner := &scriptedPlanner{
 		mode: "llm",
@@ -615,6 +712,110 @@ func TestRunJobStopsWhenEvaluatorMarksRequestComplete(t *testing.T) {
 	}
 }
 
+func TestRunJobRespondsFromStructuredEvidenceAfterInvestigation(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	now := time.Now().UTC()
+	sessionRecord := store.CreateSession("test")
+	sessionRecord.ActiveObjectID = "obj_active"
+	store.SaveSession(sessionRecord)
+	store.SaveObject(&models.ObjectMeta{
+		ID:             "obj_active",
+		SessionID:      sessionRecord.ID,
+		Label:          "pbmc3k",
+		Kind:           models.ObjectRawDataset,
+		BackendRef:     "backend_seed",
+		State:          models.ObjectResident,
+		InMemory:       true,
+		NObs:           2638,
+		NVars:          1838,
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	})
+	store.SaveJob(newQueuedInvestigationJob("job_scalar_result", sessionRecord.ID, now))
+
+	planner := &scriptedPlanner{
+		mode: "llm",
+		plans: []models.Plan{
+			{
+				Steps: []models.PlanStep{
+					{
+						ID:             "step_1",
+						Skill:          "run_python_analysis",
+						TargetObjectID: "$active",
+						Params: map[string]any{
+							"code":            "result_value = int(adata.n_obs * adata.n_vars)",
+							"output_label":    "cell_gene_product",
+							"persist_output":  false,
+							"result_summary":  "",
+							"result_text":     "",
+							"result_value":    nil,
+							"result_metadata": nil,
+						},
+					},
+				},
+			},
+		},
+	}
+	evaluator := &scriptedEvaluator{
+		results: []*CompletionEvaluation{
+			{Completed: true},
+		},
+	}
+	runtimeStub := &scalarResultRuntime{}
+	service := NewServiceWithEvaluator(store, registry, runtimeStub, planner, evaluator, t.TempDir())
+
+	service.runJob(context.Background(), sessionRecord.ID, "job_scalar_result", "细胞x基因=？")
+
+	job, ok := store.GetJob("job_scalar_result")
+	if !ok {
+		t.Fatalf("expected job to exist after run")
+	}
+	if job.Status != models.JobSucceeded {
+		t.Fatalf("expected job to succeed, got %s (%s)", job.Status, job.Error)
+	}
+	if len(job.Steps) != 1 {
+		t.Fatalf("expected one executed step, got %+v", job.Steps)
+	}
+	if got := renderEvidenceValue(job.Steps[0].Facts["result_value"]); got != "4848644" {
+		t.Fatalf("expected structured scalar result to be captured, got %q", got)
+	}
+	if job.CurrentPhase != models.JobPhaseRespond {
+		t.Fatalf("expected current phase to end at respond, got %q", job.CurrentPhase)
+	}
+	if len(job.Phases) != 3 {
+		t.Fatalf("expected three job phases, got %+v", job.Phases)
+	}
+	if job.Phases[0].Kind != models.JobPhaseDecide || job.Phases[0].Status != models.JobPhaseCompleted {
+		t.Fatalf("unexpected decide phase: %+v", job.Phases[0])
+	}
+	if job.Phases[1].Kind != models.JobPhaseInvestigate || job.Phases[1].Status != models.JobPhaseCompleted {
+		t.Fatalf("unexpected investigate phase: %+v", job.Phases[1])
+	}
+	if job.Phases[2].Kind != models.JobPhaseRespond || job.Phases[2].Status != models.JobPhaseCompleted {
+		t.Fatalf("unexpected respond phase: %+v", job.Phases[2])
+	}
+
+	snapshot, err := store.Snapshot(sessionRecord.ID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	lastMessage := snapshot.Messages[len(snapshot.Messages)-1]
+	if lastMessage.Role != models.MessageAssistant {
+		t.Fatalf("expected assistant message, got %+v", lastMessage)
+	}
+	if lastMessage.Content != "结果是 4848644。" {
+		t.Fatalf("expected final answer to come from structured evidence, got %q", lastMessage.Content)
+	}
+	if len(runtimeStub.execCalls) != 1 || runtimeStub.execCalls[0].Skill != "run_python_analysis" {
+		t.Fatalf("expected one run_python_analysis execution, got %+v", runtimeStub.execCalls)
+	}
+}
+
 func TestRunJobKeepsOriginalRemainingStepsWhenCheckpointReplanFails(t *testing.T) {
 	registry, err := skill.LoadRegistry(skillsRegistryPath())
 	if err != nil {
@@ -637,12 +838,7 @@ func TestRunJobKeepsOriginalRemainingStepsWhenCheckpointReplanFails(t *testing.T
 		CreatedAt:      now,
 		LastAccessedAt: now,
 	})
-	store.SaveJob(&models.Job{
-		ID:        "job_keep_plan",
-		SessionID: sessionRecord.ID,
-		Status:    models.JobQueued,
-		CreatedAt: now,
-	})
+	store.SaveJob(newQueuedInvestigationJob("job_keep_plan", sessionRecord.ID, now))
 
 	planner := &scriptedPlanner{
 		mode: "fake",
@@ -659,7 +855,7 @@ func TestRunJobKeepsOriginalRemainingStepsWhenCheckpointReplanFails(t *testing.T
 			2: errors.New("checkpoint replan failed"),
 		},
 	}
-	service := NewService(store, registry, &sequentialRuntime{}, planner, t.TempDir())
+	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, NewFakeEvaluator(), t.TempDir())
 
 	service.runJob(context.Background(), sessionRecord.ID, "job_keep_plan", "完成常规的数据预处理")
 
@@ -722,12 +918,7 @@ func TestRunJobRehydratesSharedActiveObjectBeforeExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	store.SaveJob(&models.Job{
-		ID:        "job_rehydrate",
-		SessionID: followupSession.ID,
-		Status:    models.JobQueued,
-		CreatedAt: now,
-	})
+	store.SaveJob(newQueuedInvestigationJob("job_rehydrate", followupSession.ID, now))
 
 	planner := &scriptedPlanner{
 		mode: "llm",
@@ -768,7 +959,7 @@ func TestRunJobRehydratesSharedActiveObjectBeforeExecution(t *testing.T) {
 	}
 }
 
-func TestRunJobRecordsPlannerFallbackErrorAndIncompleteStatus(t *testing.T) {
+func TestRunJobFailsCleanlyWhenPlannerIsUnavailable(t *testing.T) {
 	registry, err := skill.LoadRegistry(skillsRegistryPath())
 	if err != nil {
 		t.Fatalf("load skills registry: %v", err)
@@ -790,12 +981,7 @@ func TestRunJobRecordsPlannerFallbackErrorAndIncompleteStatus(t *testing.T) {
 		CreatedAt:      now,
 		LastAccessedAt: now,
 	})
-	store.SaveJob(&models.Job{
-		ID:        "job_fallback_incomplete",
-		SessionID: sessionRecord.ID,
-		Status:    models.JobQueued,
-		CreatedAt: now,
-	})
+	store.SaveJob(newQueuedInvestigationJob("job_fallback_incomplete", sessionRecord.ID, now))
 
 	evaluator := &scriptedEvaluator{
 		results: []*CompletionEvaluation{
@@ -810,30 +996,35 @@ func TestRunJobRecordsPlannerFallbackErrorAndIncompleteStatus(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected job to exist after run")
 	}
-	if job.Status != models.JobIncomplete {
-		t.Fatalf("expected job to be incomplete, got %s (%s)", job.Status, job.Error)
+	if job.Status != models.JobFailed {
+		t.Fatalf("expected job to fail, got %s (%s)", job.Status, job.Error)
 	}
-	if job.Summary != "柱状图和统计结果都还没有生成。" {
-		t.Fatalf("unexpected incomplete summary: %q", job.Summary)
+	if job.Error != "规划器暂时不可用，本次执行未开始。请稍后重试。" {
+		t.Fatalf("unexpected public planner error: %q", job.Error)
 	}
 	if len(job.Checkpoints) == 0 {
-		t.Fatalf("expected planning checkpoint to be recorded")
+		t.Fatalf("expected failure checkpoint to be recorded")
 	}
-	planningCheckpoint := job.Checkpoints[0]
-	if planningCheckpoint.Title != "初始规划" || planningCheckpoint.Label != "规则兜底" {
-		t.Fatalf("unexpected planning checkpoint: %+v", planningCheckpoint)
+	failureCheckpoint := job.Checkpoints[0]
+	if failureCheckpoint.Title != "执行失败" || failureCheckpoint.Label != "已终止" {
+		t.Fatalf("unexpected failure checkpoint: %+v", failureCheckpoint)
 	}
-	if planningCheckpoint.Metadata == nil {
-		t.Fatalf("expected planning checkpoint metadata, got %+v", planningCheckpoint)
+	if failureCheckpoint.Metadata == nil {
+		t.Fatalf("expected failure checkpoint metadata, got %+v", failureCheckpoint)
 	}
-	if planningCheckpoint.Metadata["planner_error"] == "" {
-		t.Fatalf("expected planner_error in checkpoint metadata, got %+v", planningCheckpoint.Metadata)
+	if failureCheckpoint.Metadata["raw_error"] == "" {
+		t.Fatalf("expected raw_error in checkpoint metadata, got %+v", failureCheckpoint.Metadata)
 	}
-	if planningCheckpoint.Metadata["fallback_reason"] != "planner_request_failed" {
-		t.Fatalf("unexpected fallback_reason: %+v", planningCheckpoint.Metadata)
+	if strings.Contains(failureCheckpoint.Summary, "context deadline exceeded") {
+		t.Fatalf("expected public checkpoint summary to hide raw planner error, got %q", failureCheckpoint.Summary)
 	}
-	if !strings.Contains(planningCheckpoint.Summary, "原始错误：") {
-		t.Fatalf("expected planning checkpoint summary to expose original error, got %q", planningCheckpoint.Summary)
+	snapshot, err := store.Snapshot(sessionRecord.ID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	lastMessage := snapshot.Messages[len(snapshot.Messages)-1]
+	if lastMessage.Role != models.MessageAssistant || lastMessage.Content != "规划器暂时不可用，本次执行未开始。请稍后重试。" {
+		t.Fatalf("unexpected assistant failure message: %+v", lastMessage)
 	}
 }
 
@@ -922,6 +1113,19 @@ func TestSetPluginBundleEnabledDisablesBuiltinBundle(t *testing.T) {
 
 func ptrTime(value time.Time) *time.Time {
 	return &value
+}
+
+func newQueuedInvestigationJob(id, sessionID string, now time.Time) *models.Job {
+	job := &models.Job{
+		ID:           id,
+		SessionID:    sessionID,
+		Status:       models.JobQueued,
+		CurrentPhase: models.JobPhaseInvestigate,
+		Summary:      "当前上下文不足以直接回答，开始收集相关信息。",
+		CreatedAt:    now,
+	}
+	initializeInvestigationPhases(job, now)
+	return job
 }
 
 func jobHasCheckpoint(job *models.Job, title, label string) bool {

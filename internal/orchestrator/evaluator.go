@@ -46,7 +46,10 @@ type EvaluatorConfig struct {
 
 func NewEvaluator(config EvaluatorConfig) (Evaluator, error) {
 	mode := strings.ToLower(strings.TrimSpace(config.Mode))
-	if mode == "" || mode == "fake" {
+	if mode == "" {
+		return nil, fmt.Errorf("evaluator mode is required")
+	}
+	if mode == "fake" {
 		return NewFakeEvaluator(), nil
 	}
 	if mode != "llm" {
@@ -62,37 +65,21 @@ func NewEvaluator(config EvaluatorConfig) (Evaluator, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &FallbackEvaluator{
-		primary:  primary,
-		fallback: NewFakeEvaluator(),
-	}, nil
+	return primary, nil
 }
 
-type FallbackEvaluator struct {
-	primary  Evaluator
-	fallback Evaluator
+type NoopEvaluator struct{}
+
+func NewNoopEvaluator() *NoopEvaluator {
+	return &NoopEvaluator{}
 }
 
-func (e *FallbackEvaluator) Mode() string {
-	if e == nil || e.primary == nil {
-		return "fake"
-	}
-	return e.primary.Mode()
+func (e *NoopEvaluator) Mode() string {
+	return "noop"
 }
 
-func (e *FallbackEvaluator) Evaluate(ctx context.Context, request EvaluationRequest) (*CompletionEvaluation, error) {
-	if e == nil || e.primary == nil {
-		if e != nil && e.fallback != nil {
-			return e.fallback.Evaluate(ctx, request)
-		}
-		return &CompletionEvaluation{}, nil
-	}
-
-	result, err := e.primary.Evaluate(ctx, request)
-	if err == nil || e.fallback == nil {
-		return result, err
-	}
-	return e.fallback.Evaluate(ctx, request)
+func (e *NoopEvaluator) Evaluate(context.Context, EvaluationRequest) (*CompletionEvaluation, error) {
+	return nil, nil
 }
 
 type FakeEvaluator struct{}
@@ -416,22 +403,36 @@ func formatCurrentJobContext(job *models.Job) string {
 	}
 	stepParts := make([]string, 0, len(job.Steps))
 	for _, step := range job.Steps {
-		stepParts = append(stepParts, fmt.Sprintf(
-			"{id=%s skill=%s status=%s target=%s params=%s summary=%s output=%s}",
-			step.ID,
-			step.Skill,
-			step.Status,
-			step.TargetObjectID,
-			compactJSON(mustMarshalJSON(step.Params)),
-			truncateText(step.Summary, 120),
-			step.OutputObjectID,
+		details := []string{
+			"id=" + step.ID,
+			"skill=" + step.Skill,
+			"status=" + string(step.Status),
+			"target=" + step.TargetObjectID,
+			"params=" + compactJSON(mustMarshalJSON(step.Params)),
+			"summary=" + truncateText(step.Summary, 120),
+			"output=" + step.OutputObjectID,
+		}
+		if len(step.Facts) > 0 {
+			details = append(details, "facts="+compactJSON(mustMarshalJSON(step.Facts)))
+		}
+		stepParts = append(stepParts, "{"+strings.Join(details, " ")+"}")
+	}
+	phaseParts := make([]string, 0, len(job.Phases))
+	for _, phase := range job.Phases {
+		phaseParts = append(phaseParts, fmt.Sprintf(
+			"{kind=%s status=%s summary=%s}",
+			phase.Kind,
+			phase.Status,
+			truncateText(phase.Summary, 120),
 		))
 	}
 	return fmt.Sprintf(
-		"id=%s | status=%s | summary=%s | steps=%s",
+		"id=%s | status=%s | current_phase=%s | summary=%s | phases=%s | steps=%s",
 		job.ID,
 		job.Status,
+		job.CurrentPhase,
 		truncateText(job.Summary, 200),
+		strings.Join(phaseParts, "; "),
 		strings.Join(stepParts, "; "),
 	)
 }

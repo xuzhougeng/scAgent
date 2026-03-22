@@ -549,6 +549,12 @@ func cloneJob(in *models.Job) *models.Job {
 			out.Steps[i] = cloneJobStep(step)
 		}
 	}
+	if len(in.Phases) > 0 {
+		out.Phases = make([]models.JobPhase, len(in.Phases))
+		for i, phase := range in.Phases {
+			out.Phases[i] = cloneJobPhase(phase)
+		}
+	}
 	if len(in.Checkpoints) > 0 {
 		out.Checkpoints = append([]models.JobCheckpoint(nil), in.Checkpoints...)
 	}
@@ -580,6 +586,23 @@ func cloneJobStep(in models.JobStep) models.JobStep {
 	if len(in.ArtifactIDs) > 0 {
 		out.ArtifactIDs = append([]string(nil), in.ArtifactIDs...)
 	}
+	if len(in.Facts) > 0 {
+		out.Facts = make(map[string]any, len(in.Facts))
+		for key, value := range in.Facts {
+			out.Facts[key] = value
+		}
+	}
+	if len(in.Metadata) > 0 {
+		out.Metadata = make(map[string]any, len(in.Metadata))
+		for key, value := range in.Metadata {
+			out.Metadata[key] = value
+		}
+	}
+	return out
+}
+
+func cloneJobPhase(in models.JobPhase) models.JobPhase {
+	out := in
 	if len(in.Metadata) > 0 {
 		out.Metadata = make(map[string]any, len(in.Metadata))
 		for key, value := range in.Metadata {

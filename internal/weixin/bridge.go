@@ -251,7 +251,7 @@ func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextTok
 	}
 
 	// Submit message
-	job, _, err := b.service.SubmitMessage(ctx, sessionID, text)
+	job, snapshot, err := b.service.SubmitMessage(ctx, sessionID, text)
 	if err != nil {
 		// Session may be stale — retry with new session
 		log.Printf("[weixin] submit failed for %s, recreating: %v", sessionID, err)
@@ -261,12 +261,23 @@ func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextTok
 			_ = b.client.SendTextMessage(ctx, fromUserID, "系统错误，请稍后重试", contextToken)
 			return
 		}
-		job, _, err = b.service.SubmitMessage(ctx, sessionID, text)
+		job, snapshot, err = b.service.SubmitMessage(ctx, sessionID, text)
 		if err != nil {
 			log.Printf("[weixin] submit retry failed: %v", err)
 			_ = b.client.SendTextMessage(ctx, fromUserID, fmt.Sprintf("提交失败: %v", err), contextToken)
 			return
 		}
+	}
+
+	if job == nil {
+		reply := latestAssistantMessage(snapshot)
+		if reply == "" {
+			reply = "已收到请求。"
+		}
+		if err := b.client.SendTextMessage(ctx, fromUserID, reply, contextToken); err != nil {
+			log.Printf("[weixin] send direct reply error to %s: %v", fromUserID, err)
+		}
+		return
 	}
 
 	// Wait for job completion via event subscription
@@ -276,6 +287,19 @@ func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextTok
 	} else {
 		log.Printf("[weixin] replied to %s (%d chars)", fromUserID, len(reply))
 	}
+}
+
+func latestAssistantMessage(snapshot *models.SessionSnapshot) string {
+	if snapshot == nil {
+		return ""
+	}
+	for index := len(snapshot.Messages) - 1; index >= 0; index-- {
+		message := snapshot.Messages[index]
+		if message != nil && message.Role == models.MessageAssistant {
+			return strings.TrimSpace(message.Content)
+		}
+	}
+	return ""
 }
 
 // handleSlashCommand processes /commands from WeChat. Returns reply text, or "" if not a recognized command.

@@ -74,11 +74,11 @@ Current boundary:
 
 - This persists metadata and history, not Python runtime memory.
 - `backend_ref` still points to an in-memory runtime object.
-- If the Python runtime restarts, automatic object rehydration / reload is not complete yet.
+- Runtime object rehydration is handled explicitly before execution; persisted metadata still remains separate from Python process memory.
 
 ## Go -> Python
 
-The runtime request field is still named `session_root` for compatibility, but it now points to the workspace root directory under `data/workspaces/{workspace_id}`.
+The runtime request field is `workspace_root`, which points to the workspace root directory under `data/workspaces/{workspace_id}`.
 
 ### `POST /sessions/init`
 
@@ -87,7 +87,7 @@ The runtime request field is still named `session_root` for compatibility, but i
   "session_id": "sess_000001",
   "dataset_id": "ds_000002",
   "label": "PBMC3K test session",
-  "session_root": "/abs/path/data/workspaces/ws_000001"
+  "workspace_root": "/abs/path/data/workspaces/ws_000001"
 }
 ```
 
@@ -120,7 +120,7 @@ Response:
   "params": {
     "resolution": 0.6
   },
-  "session_root": "/abs/path/data/workspaces/ws_000001"
+  "workspace_root": "/abs/path/data/workspaces/ws_000001"
 }
 ```
 
@@ -186,7 +186,7 @@ Returns one markdown document payload:
 
 ### `POST /api/fake/plan`
 
-Preview the deterministic fake planner without touching the runtime:
+Preview the deterministic fake planner without touching the runtime. This endpoint is retained as a debug aid.
 
 ```json
 {
@@ -198,7 +198,7 @@ Response:
 
 ```json
 {
-  "planner_mode": "fake",
+  "planner_mode": "llm",
   "plan": {
     "steps": [
       {
@@ -245,8 +245,8 @@ Response shape:
 }
 ```
 
-In `fake` mode this is mainly object context plus a note.
-In `llm` mode it also includes the prompt/request preview built from the current `.h5ad` metadata.
+In `llm` mode this includes the prompt/request preview built from the current `.h5ad` metadata.
+In `fake` mode it mainly contains object context plus a note.
 
 ### `GET /api/skills`
 
@@ -254,7 +254,7 @@ Returns the current registry snapshot and planner mode:
 
 ```json
 {
-  "planner_mode": "fake",
+  "planner_mode": "llm",
   "skills": []
 }
 ```

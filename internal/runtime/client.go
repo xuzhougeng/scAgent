@@ -37,10 +37,10 @@ func NewClient(baseURL string) *Client {
 }
 
 type InitSessionRequest struct {
-	SessionID   string `json:"session_id"`
-	DatasetID   string `json:"dataset_id"`
-	Label       string `json:"label"`
-	SessionRoot string `json:"session_root"`
+	SessionID     string `json:"session_id"`
+	DatasetID     string `json:"dataset_id"`
+	Label         string `json:"label"`
+	WorkspaceRoot string `json:"workspace_root"`
 }
 
 type ObjectDescriptor struct {
@@ -95,13 +95,14 @@ type ExecuteRequest struct {
 	Skill            string         `json:"skill"`
 	TargetBackendRef string         `json:"target_backend_ref,omitempty"`
 	Params           map[string]any `json:"params,omitempty"`
-	SessionRoot      string         `json:"session_root"`
+	WorkspaceRoot    string         `json:"workspace_root"`
 }
 
 type ExecuteResponse struct {
 	Summary    string               `json:"summary"`
 	Object     *ObjectDescriptor    `json:"object,omitempty"`
 	Artifacts  []ArtifactDescriptor `json:"artifacts,omitempty"`
+	Facts      map[string]any       `json:"facts,omitempty"`
 	Metadata   map[string]any       `json:"metadata,omitempty"`
 	ActiveHint string               `json:"active_hint,omitempty"`
 }

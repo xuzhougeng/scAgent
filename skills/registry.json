@@ -21,6 +21,7 @@
       },
       "output": {
         "summary": "string",
+        "facts": "object",
         "metadata": "object"
       }
     },
@@ -40,6 +41,7 @@
       },
       "output": {
         "summary": "string",
+        "facts": "object",
         "metadata": "object"
       }
     },
@@ -952,6 +954,7 @@
       },
       "output": {
         "summary": "string",
+        "facts": "object",
         "new_object": "object",
         "artifacts": "plot[]|table[]"
       }

@@ -42,6 +42,24 @@ const (
 	JobFailed     JobStatus = "failed"
 )
 
+type JobPhaseKind string
+
+const (
+	JobPhaseDecide      JobPhaseKind = "decide"
+	JobPhaseInvestigate JobPhaseKind = "investigate"
+	JobPhaseRespond     JobPhaseKind = "respond"
+)
+
+type JobPhaseStatus string
+
+const (
+	JobPhasePending   JobPhaseStatus = "pending"
+	JobPhaseRunning   JobPhaseStatus = "running"
+	JobPhaseCompleted JobPhaseStatus = "completed"
+	JobPhaseSkipped   JobPhaseStatus = "skipped"
+	JobPhaseFailed    JobPhaseStatus = "failed"
+)
+
 type ArtifactKind string
 
 const (
@@ -148,6 +166,7 @@ type JobStep struct {
 	Summary                string         `json:"summary,omitempty"`
 	OutputObjectID         string         `json:"output_object_id,omitempty"`
 	ArtifactIDs            []string       `json:"artifact_ids,omitempty"`
+	Facts                  map[string]any `json:"facts,omitempty"`
 	Metadata               map[string]any `json:"metadata,omitempty"`
 	StartedAt              time.Time      `json:"started_at"`
 	FinishedAt             *time.Time     `json:"finished_at,omitempty"`
@@ -163,20 +182,32 @@ type JobCheckpoint struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 
+type JobPhase struct {
+	Kind       JobPhaseKind   `json:"kind"`
+	Title      string         `json:"title"`
+	Status     JobPhaseStatus `json:"status"`
+	Summary    string         `json:"summary,omitempty"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
+	StartedAt  *time.Time     `json:"started_at,omitempty"`
+	FinishedAt *time.Time     `json:"finished_at,omitempty"`
+}
+
 type Job struct {
-	ID          string          `json:"id"`
-	WorkspaceID string          `json:"workspace_id,omitempty"`
-	SessionID   string          `json:"session_id"`
-	MessageID   string          `json:"message_id"`
-	Status      JobStatus       `json:"status"`
-	Summary     string          `json:"summary,omitempty"`
-	Plan        *Plan           `json:"plan,omitempty"`
-	Steps       []JobStep       `json:"steps,omitempty"`
-	Checkpoints []JobCheckpoint `json:"checkpoints,omitempty"`
-	Error       string          `json:"error,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	StartedAt   *time.Time      `json:"started_at,omitempty"`
-	FinishedAt  *time.Time      `json:"finished_at,omitempty"`
+	ID           string          `json:"id"`
+	WorkspaceID  string          `json:"workspace_id,omitempty"`
+	SessionID    string          `json:"session_id"`
+	MessageID    string          `json:"message_id"`
+	Status       JobStatus       `json:"status"`
+	CurrentPhase JobPhaseKind    `json:"current_phase,omitempty"`
+	Summary      string          `json:"summary,omitempty"`
+	Plan         *Plan           `json:"plan,omitempty"`
+	Steps        []JobStep       `json:"steps,omitempty"`
+	Phases       []JobPhase      `json:"phases,omitempty"`
+	Checkpoints  []JobCheckpoint `json:"checkpoints,omitempty"`
+	Error        string          `json:"error,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	StartedAt    *time.Time      `json:"started_at,omitempty"`
+	FinishedAt   *time.Time      `json:"finished_at,omitempty"`
 }
 
 type WorkingMemory struct {

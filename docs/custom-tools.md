@@ -12,7 +12,7 @@
    实现真实执行逻辑，返回对象、artifact 和 summary。
 3. planner
    `LLM planner` 会读取 registry 里的 `wired` tool 自动选择；
-   `fake planner` 只会走少量关键词规则，需要手动补启发式。
+   调整规划稳定性时，优先补充 workflow hint、上下文表示和测试，而不是再加新的规则兜底。
 
 ## `support_level` 怎么用
 
@@ -59,14 +59,14 @@
 - 如果会生成新对象：
   调用 `_persist_adata_object(...)` 写回新的 `.h5ad`
 - 如果会生成图或表：
-  在 `session_root / artifacts` 下写 artifact 文件
+  在 `workspace_root / artifacts` 下写 artifact 文件
 - 返回：
   - `summary`
   - `object` 可选
   - `artifacts` 可选
   - `metadata` 可选
 
-这里的 `session_root` 是历史命名，当前实际上传入的是 workspace 根目录。
+这里的 `workspace_root` 就是当前 workspace 的根目录。
 
 ## 让 agent 自动选择
 
@@ -104,8 +104,8 @@
 
 1. 给 `LLM planner` 增加 workflow hint
    在 [internal/orchestrator/llm_planner.go](/home/xzg/project/scAgent/internal/orchestrator/llm_planner.go) 的 `instructions()` 里补充“遇到常规预处理时如何拆步骤”。
-2. 给 `fake planner` 增加兜底规则
-   在 [internal/orchestrator/fake_planner.go](/home/xzg/project/scAgent/internal/orchestrator/fake_planner.go) 中为“预处理”等关键词返回多步 plan。
+2. 增加规划与执行测试
+   用真实的 planning context、step facts 和 follow-up case 固化期望行为，避免再退回关键词规则。
 
 ## 如何保留“自主设计”空间
 
@@ -126,10 +126,8 @@
   - `np`
   - `pd`
   - `plt`
-  - `session_root`
+  - `workspace_root`
   - `artifacts_dir`
-
-其中 `session_root` 现在语义上等于当前 workspace 的根目录。
 - 代码里可以设置：
   - `result_summary`
   - `output_adata`

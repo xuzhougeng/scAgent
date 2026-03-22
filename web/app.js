@@ -115,10 +115,18 @@ const jobStatusLabels = {
   queued: "排队中",
   pending: "等待中",
   running: "运行中",
-  succeeded: "成功",
-  incomplete: "未完成",
+  succeeded: "本次执行成功",
+  incomplete: "本次执行未完成",
   failed: "失败",
   canceled: "已取消",
+};
+
+const jobPhaseStatusLabels = {
+  pending: "等待中",
+  running: "进行中",
+  completed: "已完成",
+  skipped: "已跳过",
+  failed: "失败",
 };
 
 const objectKindLabels = {
@@ -1331,7 +1339,7 @@ async function buildMessageNode(message, template) {
   node.querySelector(".message-role").textContent = formatRole(message.role);
 
   const detailMarkup = await buildMessageDetailMarkup(message);
-  if (shouldRenderMessageContent(message, detailMarkup)) {
+  if (String(message.content || "").trim()) {
     content.textContent = message.content;
   } else {
     content.remove();
@@ -1364,7 +1372,7 @@ async function buildMessageDetailMarkup(message) {
     if (!job) {
       return "";
     }
-    return buildJobResultMarkup(job);
+    return buildJobResultMarkup(job, message);
   }
 
   return "";
@@ -1377,6 +1385,7 @@ function buildJobStatusMarkup(job) {
         <strong>任务状态</strong>
         ${statusPill(statusKindForJob(job.status), formatJobStatus(job.status))}
       </div>
+      ${buildJobPhasesMarkup(job)}
       <p class="message-job-summary">${escapeHTML(job.summary || "请求已接收，等待规划器和运行时返回更新。")}</p>
       ${buildCheckpointMarkup(job)}
       ${buildPlanMarkup(job)}
@@ -1400,21 +1409,22 @@ function buildJobStatusMarkup(job) {
   `;
 }
 
-async function buildJobResultMarkup(job) {
+async function buildJobResultMarkup(job, assistantMessage) {
   const relatedArtifacts = (appState.snapshot?.artifacts || []).filter((artifact) => artifact.job_id === job.id);
   const artifactCards = await Promise.all(
     relatedArtifacts.map((artifact) => buildArtifactCardMarkup(artifact, "chat")),
   );
-  const showSummary = shouldRenderJobSummary(job);
+  const showSummary = shouldRenderJobSummary(job, assistantMessage?.content || "");
   const cardClass = job.status === "failed" ? "failed" : job.status === "incomplete" ? "incomplete" : "done";
-  const title = job.status === "succeeded" ? "分析结果" : "任务结果";
+  const detailMarkup = buildJobExecutionDetailsMarkup(job);
 
   return `
     <section class="message-job-card ${cardClass}">
       <div class="message-job-head">
-        <strong>${title}</strong>
+        <strong>任务详情</strong>
         ${statusPill(statusKindForJob(job.status), formatJobStatus(job.status))}
       </div>
+      ${buildJobPhasesMarkup(job)}
       ${
         showSummary && job.summary
           ? `<p class="message-job-summary">${escapeHTML(job.summary)}</p>`
@@ -1423,32 +1433,6 @@ async function buildJobResultMarkup(job) {
       ${
         job.error
           ? `<p class="message-job-error">${escapeHTML(job.error)}</p>`
-          : ""
-      }
-      ${buildCheckpointMarkup(job)}
-      ${buildPlanMarkup(job)}
-      ${
-        job.steps?.length
-          ? `<div class="message-step-list">
-              ${job.steps
-                .map(
-                  (step) => `
-                    <div class="message-step-card">
-                      <div class="message-step-head">
-                        <strong>${escapeHTML(formatSkillName(step.skill))}</strong>
-                        ${statusPill(statusKindForJob(step.status), formatJobStatus(step.status))}
-                      </div>
-                      <p class="muted">${escapeHTML(step.summary || "未返回摘要。")}</p>
-                      ${
-                        step.output_object_id
-                          ? `<div class="message-step-meta">输出对象：${escapeHTML(objectLabel(step.output_object_id))}</div>`
-                          : ""
-                      }
-                    </div>
-                  `,
-                )
-                .join("")}
-            </div>`
           : ""
       }
       ${
@@ -1462,7 +1446,44 @@ async function buildJobResultMarkup(job) {
             </div>`
           : ""
       }
+      ${detailMarkup}
     </section>
+  `;
+}
+
+function buildJobPhasesMarkup(job) {
+  const phases = job.phases || [];
+  if (!phases.length) {
+    return "";
+  }
+
+  return `
+    <div class="message-phase-group">
+      <div class="message-checkpoint-head">
+        <strong>执行阶段</strong>
+        <span class="muted">${escapeHTML(`${phases.length} 个`)}</span>
+      </div>
+      <div class="message-phase-list">
+        ${phases
+          .map((phase) => {
+            const activeClass = phase.kind === job.current_phase ? " active" : "";
+            return `
+              <div class="message-phase-card${activeClass}">
+                <div class="message-checkpoint-title">
+                  <strong>${escapeHTML(phase.title || formatJobPhaseKind(phase.kind))}</strong>
+                  ${statusPill(statusKindForPhase(phase.status), formatJobPhaseStatus(phase.status))}
+                </div>
+                ${
+                  phase.summary
+                    ? `<p class="muted">${escapeHTML(phase.summary)}</p>`
+                    : ""
+                }
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    </div>
   `;
 }
 
@@ -1501,15 +1522,44 @@ function buildCheckpointMarkup(job) {
   `;
 }
 
-function shouldRenderMessageContent(message, detailMarkup) {
-  if (message.role === "assistant" && message.job_id && detailMarkup) {
-    return false;
-  }
-  return true;
+function formatJobPhaseStatus(status) {
+  return translateLabel(status, jobPhaseStatusLabels, status || "未知");
 }
 
-function shouldRenderJobSummary(job) {
+function formatJobPhaseKind(kind) {
+  switch (kind) {
+    case "decide":
+      return "快速判断";
+    case "investigate":
+      return "信息收集";
+    case "respond":
+      return "确认与回答";
+    default:
+      return kind || "阶段";
+  }
+}
+
+function statusKindForPhase(status) {
+  switch (status) {
+    case "completed":
+      return "ok";
+    case "running":
+      return "warn";
+    case "failed":
+      return "error";
+    case "skipped":
+      return "muted";
+    default:
+      return "muted";
+  }
+}
+
+function shouldRenderJobSummary(job, assistantContent = "") {
   if (!job.summary) {
+    return false;
+  }
+
+  if (job.summary.trim() === String(assistantContent || "").trim()) {
     return false;
   }
 
@@ -1524,6 +1574,52 @@ function shouldRenderJobSummary(job) {
   }
 
   return job.summary.trim() !== stepSummary;
+}
+
+function buildJobExecutionDetailsMarkup(job) {
+  const checkpointsMarkup = buildCheckpointMarkup(job);
+  const planMarkup = buildPlanMarkup(job);
+  const stepMarkup =
+    job.steps?.length
+      ? `<div class="message-step-list">
+          ${job.steps
+            .map(
+              (step) => `
+                <div class="message-step-card">
+                  <div class="message-step-head">
+                    <strong>${escapeHTML(formatSkillName(step.skill))}</strong>
+                    ${statusPill(statusKindForJob(step.status), formatJobStatus(step.status))}
+                  </div>
+                  <p class="muted">${escapeHTML(step.summary || "未返回摘要。")}</p>
+                  ${
+                    step.output_object_id
+                      ? `<div class="message-step-meta">输出对象：${escapeHTML(objectLabel(step.output_object_id))}</div>`
+                      : ""
+                  }
+                </div>
+              `,
+            )
+            .join("")}
+        </div>`
+      : "";
+
+  if (!checkpointsMarkup && !planMarkup && !stepMarkup) {
+    return "";
+  }
+
+  return `
+    <details class="message-plan-details message-job-details">
+      <summary>
+        <span>查看任务详情</span>
+        <span class="message-plan-summary">计划与执行记录</span>
+      </summary>
+      <div class="message-job-extra">
+        ${checkpointsMarkup}
+        ${planMarkup}
+        ${stepMarkup}
+      </div>
+    </details>
+  `;
 }
 
 function buildPlanMarkup(job) {

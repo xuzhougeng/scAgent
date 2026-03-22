@@ -214,6 +214,26 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 		if !ok {
 			continue
 		}
+		requiredFields, ok := stepPayload["required"].([]any)
+		if !ok {
+			t.Fatalf("plan step schema missing required fields: %+v", stepPayload)
+		}
+		if len(requiredFields) != 4 {
+			t.Fatalf("plan step schema required must enumerate every property: %+v", stepPayload)
+		}
+		requiredFieldNames := make(map[string]struct{}, len(requiredFields))
+		for _, requiredField := range requiredFields {
+			name, ok := requiredField.(string)
+			if !ok {
+				t.Fatalf("plan step schema required contains non-string value: %+v", requiredFields)
+			}
+			requiredFieldNames[name] = struct{}{}
+		}
+		for _, field := range []string{"skill", "target_object_id", "params", "memory_refs"} {
+			if _, ok := requiredFieldNames[field]; !ok {
+				t.Fatalf("plan step schema required missing %q: %+v", field, requiredFields)
+			}
+		}
 		skillPayload, ok := stepProperties["skill"].(map[string]any)
 		if !ok {
 			continue
@@ -283,7 +303,7 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 		if paramsPayload["additionalProperties"] != false {
 			t.Fatalf("inspect_dataset params schema must be strict: %+v", paramsPayload)
 		}
-		requiredFields, ok := paramsPayload["required"].([]any)
+		requiredFields, ok = paramsPayload["required"].([]any)
 		if !ok {
 			t.Fatalf("inspect_dataset params schema missing required array: %+v", paramsPayload)
 		}

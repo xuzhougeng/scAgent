@@ -1048,8 +1048,31 @@ body.is-resizing {
 
 .message-step-list,
 .message-artifact-group,
-.message-checkpoint-group {
+.message-checkpoint-group,
+.message-phase-group {
   margin-top: 12px;
+}
+
+.message-phase-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.message-phase-card {
+  border: 1px solid rgba(61, 107, 75, 0.1);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.message-phase-card.active {
+  border-color: rgba(61, 107, 75, 0.24);
+  background: rgba(243, 249, 239, 0.8);
+}
+
+.message-phase-card p {
+  margin: 8px 0 0;
 }
 
 .message-checkpoint-head,
@@ -1117,6 +1140,15 @@ body.is-resizing {
 
 .message-plan-list {
   padding: 0 10px 10px;
+}
+
+.message-job-extra {
+  padding: 0 10px 10px;
+}
+
+.message-job-extra .message-checkpoint-group:first-child,
+.message-job-extra .message-step-list:first-child {
+  margin-top: 0;
 }
 
 .message-plan-step {

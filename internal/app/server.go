@@ -80,7 +80,18 @@ func NewServer(config Config) (*Server, error) {
 		return nil, err
 	}
 
-	service := orchestrator.NewServiceWithEvaluator(store, registry, runtimeClient, planner, evaluator, config.DataDir)
+	answerer, err := orchestrator.NewAnswerer(orchestrator.AnswererConfig{
+		Mode:            config.PlannerMode,
+		OpenAIAPIKey:    config.OpenAIAPIKey,
+		OpenAIBaseURL:   config.OpenAIBaseURL,
+		OpenAIModel:     config.OpenAIModel,
+		ReasoningEffort: config.OpenAIReasoningEffort,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	service := orchestrator.NewServiceWithComponents(store, registry, runtimeClient, planner, evaluator, answerer, config.DataDir)
 	handler := api.NewHandler(service, config.DocsDir)
 
 	mux := http.NewServeMux()

@@ -423,7 +423,11 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{
+	status := http.StatusAccepted
+	if job == nil {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, map[string]any{
 		"job":      job,
 		"snapshot": snapshot,
 	})

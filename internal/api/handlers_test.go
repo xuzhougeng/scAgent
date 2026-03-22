@@ -21,6 +21,31 @@ import (
 	"scagent/internal/skill"
 )
 
+type stubAnswerer struct {
+	directAnswer string
+	directOK     bool
+	directErr    error
+	response     *orchestrator.ResponseComposeResult
+}
+
+func (a *stubAnswerer) BuildDirectAnswer(_ context.Context, _ orchestrator.PlanningRequest) (string, bool, error) {
+	if a.directErr != nil {
+		return "", false, a.directErr
+	}
+	return a.directAnswer, a.directOK, nil
+}
+
+func (a *stubAnswerer) BuildInvestigationResponse(_ context.Context, request orchestrator.ResponseComposeRequest) (*orchestrator.ResponseComposeResult, error) {
+	if a.response != nil {
+		return a.response, nil
+	}
+	return orchestrator.NewNoopAnswerer().BuildInvestigationResponse(context.Background(), request)
+}
+
+func (a *stubAnswerer) BuildFailureAnswer(err error) string {
+	return orchestrator.NewNoopAnswerer().BuildFailureAnswer(err)
+}
+
 func TestFakePlanEndpoint(t *testing.T) {
 	service := newTestService(t, orchestrator.NewFakePlanner(), &fakeRuntime{})
 	handler := NewHandler(service, docsPath())
@@ -121,6 +146,61 @@ func TestMessageExecutionFlow(t *testing.T) {
 	}
 	if finalSnapshot.Messages[len(finalSnapshot.Messages)-1].Role != models.MessageAssistant {
 		t.Fatalf("expected final message to be assistant")
+	}
+}
+
+func TestMessageDirectAnswerFlow(t *testing.T) {
+	service := newTestServiceWithAnswerer(t, orchestrator.NewFakePlanner(), &fakeRuntime{}, &stubAnswerer{
+		directAnswer: "当前对象 pbmc3k 有 2638 个细胞。",
+		directOK:     true,
+	})
+	handler := NewHandler(service, docsPath())
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	createSessionRecorder := httptest.NewRecorder()
+	createSessionRequest := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewBufferString(`{"label":"test session"}`))
+	createSessionRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(createSessionRecorder, createSessionRequest)
+
+	if createSessionRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", createSessionRecorder.Code, createSessionRecorder.Body.String())
+	}
+
+	var sessionSnapshot models.SessionSnapshot
+	if err := json.Unmarshal(createSessionRecorder.Body.Bytes(), &sessionSnapshot); err != nil {
+		t.Fatalf("decode session snapshot: %v", err)
+	}
+	sessionID := sessionSnapshot.Session.ID
+
+	messageRecorder := httptest.NewRecorder()
+	messageRequest := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewBufferString(`{"session_id":"`+sessionID+`","message":"有多少细胞"}`))
+	messageRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(messageRecorder, messageRequest)
+
+	if messageRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", messageRecorder.Code, messageRecorder.Body.String())
+	}
+
+	var response struct {
+		Job      *models.Job            `json:"job"`
+		Snapshot models.SessionSnapshot `json:"snapshot"`
+	}
+	if err := json.Unmarshal(messageRecorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode direct answer response: %v", err)
+	}
+	if response.Job != nil {
+		t.Fatalf("expected no job for direct answer, got %+v", response.Job)
+	}
+	if len(response.Snapshot.Jobs) != 0 {
+		t.Fatalf("expected snapshot without jobs, got %+v", response.Snapshot.Jobs)
+	}
+	lastMessage := response.Snapshot.Messages[len(response.Snapshot.Messages)-1]
+	if lastMessage.Role != models.MessageAssistant {
+		t.Fatalf("expected assistant reply, got %+v", lastMessage)
+	}
+	if lastMessage.Content != "当前对象 pbmc3k 有 2638 个细胞。" {
+		t.Fatalf("unexpected direct answer content: %q", lastMessage.Content)
 	}
 }
 
@@ -499,6 +579,10 @@ func TestStatusAPI(t *testing.T) {
 }
 
 func newTestService(t *testing.T, planner orchestrator.Planner, runtimeService runtimeclient.Service) *orchestrator.Service {
+	return newTestServiceWithAnswerer(t, planner, runtimeService, orchestrator.NewNoopAnswerer())
+}
+
+func newTestServiceWithAnswerer(t *testing.T, planner orchestrator.Planner, runtimeService runtimeclient.Service, answerer orchestrator.Answerer) *orchestrator.Service {
 	t.Helper()
 
 	registry, err := skill.LoadRegistry(skillsRegistryPath())
@@ -508,7 +592,7 @@ func newTestService(t *testing.T, planner orchestrator.Planner, runtimeService r
 
 	dataRoot := t.TempDir()
 	store := session.NewStore()
-	return orchestrator.NewService(store, registry, runtimeService, planner, dataRoot)
+	return orchestrator.NewServiceWithComponents(store, registry, runtimeService, planner, orchestrator.NewFakeEvaluator(), answerer, dataRoot)
 }
 
 func docsPath() string {
@@ -563,7 +647,7 @@ func (f *fakeRuntime) InitSession(_ context.Context, payload runtimeclient.InitS
 			NVars:            1838,
 			State:            models.ObjectResident,
 			InMemory:         true,
-			MaterializedPath: filepath.Join(payload.SessionRoot, "objects", "pbmc3k.h5ad"),
+			MaterializedPath: filepath.Join(payload.WorkspaceRoot, "objects", "pbmc3k.h5ad"),
 			Metadata: map[string]any{
 				"obs_fields": []string{"cell_type", "sample", "leiden"},
 				"obsm_keys":  []string{"X_umap"},
@@ -612,7 +696,7 @@ func (f *fakeRuntime) Execute(_ context.Context, payload runtimeclient.ExecuteRe
 				NVars:            1838,
 				State:            models.ObjectResident,
 				InMemory:         true,
-				MaterializedPath: filepath.Join(payload.SessionRoot, "objects", "subset_cortex.h5ad"),
+				MaterializedPath: filepath.Join(payload.WorkspaceRoot, "objects", "subset_cortex.h5ad"),
 			},
 		}, nil
 	case "recluster":
@@ -626,7 +710,7 @@ func (f *fakeRuntime) Execute(_ context.Context, payload runtimeclient.ExecuteRe
 				NVars:            1838,
 				State:            models.ObjectResident,
 				InMemory:         true,
-				MaterializedPath: filepath.Join(payload.SessionRoot, "objects", "reclustered_subset_cortex.h5ad"),
+				MaterializedPath: filepath.Join(payload.WorkspaceRoot, "objects", "reclustered_subset_cortex.h5ad"),
 			},
 		}, nil
 	case "find_markers":
@@ -636,7 +720,7 @@ func (f *fakeRuntime) Execute(_ context.Context, payload runtimeclient.ExecuteRe
 				{
 					Kind:        models.ArtifactTable,
 					Title:       "Markers for reclustered_subset_cortex",
-					Path:        filepath.Join(payload.SessionRoot, "artifacts", "markers_reclustered_subset_cortex.csv"),
+					Path:        filepath.Join(payload.WorkspaceRoot, "artifacts", "markers_reclustered_subset_cortex.csv"),
 					ContentType: "text/csv",
 					Summary:     "Top marker genes grouped by leiden cluster.",
 				},

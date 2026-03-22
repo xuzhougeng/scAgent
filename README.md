@@ -87,7 +87,7 @@ Open:
 
 ## Important Environment Variables
 
-- `SCAGENT_PLANNER_MODE=fake|llm`
+- `SCAGENT_PLANNER_MODE=llm`
 - `SCAGENT_OPENAI_API_KEY`
 - `SCAGENT_OPENAI_BASE_URL`
 - `SCAGENT_OPENAI_MODEL`
@@ -97,15 +97,7 @@ Open:
 
 ## Planner And Execution Modes
 
-The orchestrator can run with either deterministic fake planning or LLM planning.
-
-Fake mode:
-
-```bash
-go run ./cmd/scagent -planner-mode=fake
-```
-
-LLM mode:
+The primary runtime mode is `llm`:
 
 ```bash
 SCAGENT_OPENAI_API_KEY=... go run ./cmd/scagent \
@@ -114,7 +106,7 @@ SCAGENT_OPENAI_API_KEY=... go run ./cmd/scagent \
   -openai-reasoning=low
 ```
 
-In `llm` mode, the same model configuration is used for both:
+The same model configuration is used for both:
 
 - plan generation
 - completion evaluation after each executed step
@@ -129,7 +121,7 @@ This keeps long-running workflows asynchronous while still allowing mid-run corr
 
 ## Planner Preview And Execution
 
-Preview the deterministic fake planner:
+Debug-only deterministic fake-plan preview:
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/fake/plan \

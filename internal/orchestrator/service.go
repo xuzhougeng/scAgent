@@ -24,6 +24,7 @@ type Service struct {
 	runtime   runtime.Service
 	planner   Planner
 	evaluator Evaluator
+	answerer  Answerer
 	dataRoot  string
 }
 
@@ -47,13 +48,6 @@ type PlannerDebugPreview struct {
 	Note                  string          `json:"note,omitempty"`
 }
 
-type planBuildInfo struct {
-	Note           string
-	UsedFallback   bool
-	FallbackReason string
-	PlannerError   string
-}
-
 type SystemStatus struct {
 	SystemMode            string                `json:"system_mode"`
 	Summary               string                `json:"summary"`
@@ -70,12 +64,19 @@ type SystemStatus struct {
 }
 
 func NewService(store *session.Store, skills *skill.Registry, runtimeClient runtime.Service, planner Planner, dataRoot string) *Service {
-	return NewServiceWithEvaluator(store, skills, runtimeClient, planner, NewFakeEvaluator(), dataRoot)
+	return NewServiceWithEvaluator(store, skills, runtimeClient, planner, NewNoopEvaluator(), dataRoot)
 }
 
 func NewServiceWithEvaluator(store *session.Store, skills *skill.Registry, runtimeClient runtime.Service, planner Planner, evaluator Evaluator, dataRoot string) *Service {
+	return NewServiceWithComponents(store, skills, runtimeClient, planner, evaluator, NewNoopAnswerer(), dataRoot)
+}
+
+func NewServiceWithComponents(store *session.Store, skills *skill.Registry, runtimeClient runtime.Service, planner Planner, evaluator Evaluator, answerer Answerer, dataRoot string) *Service {
 	if evaluator == nil {
-		evaluator = NewFakeEvaluator()
+		evaluator = NewNoopEvaluator()
+	}
+	if answerer == nil {
+		answerer = NewNoopAnswerer()
 	}
 	return &Service{
 		store:     store,
@@ -83,6 +84,7 @@ func NewServiceWithEvaluator(store *session.Store, skills *skill.Registry, runti
 		runtime:   runtimeClient,
 		planner:   planner,
 		evaluator: evaluator,
+		answerer:  answerer,
 		dataRoot:  dataRoot,
 	}
 }
@@ -157,7 +159,7 @@ func (s *Service) PreviewPlan(ctx context.Context, message string) (models.Plan,
 	if err := s.refreshSkills(); err != nil {
 		return models.Plan{}, err
 	}
-	plan, _, err := s.buildExecutablePlan(ctx, PlanningRequest{Message: message})
+	plan, err := s.buildExecutablePlan(ctx, PlanningRequest{Message: message})
 	return plan, err
 }
 
@@ -299,10 +301,10 @@ func (s *Service) CreateSession(ctx context.Context, label string) (*models.Sess
 	}
 
 	response, err := s.runtime.InitSession(ctx, runtime.InitSessionRequest{
-		SessionID:   sessionRecord.ID,
-		DatasetID:   workspaceRecord.DatasetID,
-		Label:       label,
-		SessionRoot: workspaceRoot,
+		SessionID:     sessionRecord.ID,
+		DatasetID:     workspaceRecord.DatasetID,
+		Label:         label,
+		WorkspaceRoot: workspaceRoot,
 	})
 	if err != nil {
 		return nil, err
@@ -450,33 +452,59 @@ func (s *Service) SubmitMessage(ctx context.Context, sessionID, content string) 
 		return nil, nil, fmt.Errorf("未找到会话 %q", sessionID)
 	}
 
+	trimmedContent := strings.TrimSpace(content)
 	now := time.Now().UTC()
 	message := &models.Message{
 		ID:        s.store.NextID("msg"),
 		SessionID: sessionID,
 		Role:      models.MessageUser,
-		Content:   strings.TrimSpace(content),
+		Content:   trimmedContent,
 		CreatedAt: now,
 	}
 	s.store.AddMessage(message)
 
-	job := &models.Job{
-		ID:          s.store.NextID("job"),
-		WorkspaceID: sessionRecord.WorkspaceID,
-		SessionID:   sessionID,
-		MessageID:   message.ID,
-		Status:      models.JobQueued,
-		CreatedAt:   now,
-	}
-	s.store.SaveJob(job)
-
 	sessionRecord.UpdatedAt = now
 	sessionRecord.LastAccessedAt = now
 	s.store.SaveSession(sessionRecord)
+
+	planningRequest, err := s.buildPlanningRequest(sessionRecord, trimmedContent)
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.answerer != nil {
+		if answer, ok, answerErr := s.answerer.BuildDirectAnswer(ctx, planningRequest); answerErr == nil && ok {
+			s.store.AddMessage(&models.Message{
+				ID:        s.store.NextID("msg"),
+				SessionID: sessionID,
+				Role:      models.MessageAssistant,
+				Content:   answer,
+				CreatedAt: time.Now().UTC(),
+			})
+			s.publishSnapshot(sessionID)
+			snapshot, err := s.store.Snapshot(sessionID)
+			if err != nil {
+				return nil, nil, err
+			}
+			return nil, snapshot, nil
+		}
+	}
+
+	job := &models.Job{
+		ID:           s.store.NextID("job"),
+		WorkspaceID:  sessionRecord.WorkspaceID,
+		SessionID:    sessionID,
+		MessageID:    message.ID,
+		Status:       models.JobQueued,
+		CurrentPhase: models.JobPhaseInvestigate,
+		Summary:      "当前上下文不足以直接回答，开始收集相关信息。",
+		CreatedAt:    now,
+	}
+	initializeInvestigationPhases(job, time.Now().UTC())
+	s.store.SaveJob(job)
 	s.publishJob(sessionID, job.ID)
 	s.publishSnapshot(sessionID)
 
-	go s.runJob(context.Background(), sessionID, job.ID, content)
+	go s.runJob(context.Background(), sessionID, job.ID, trimmedContent)
 
 	snapshot, err := s.store.Snapshot(sessionID)
 	if err != nil {
@@ -503,6 +531,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 	startedAt := time.Now().UTC()
 	job.Status = models.JobRunning
 	job.StartedAt = &startedAt
+	startJobPhase(job, models.JobPhaseInvestigate, "正在规划并收集与问题相关的信息。", nil)
 	s.store.SaveJob(job)
 	s.publishJob(sessionID, jobID)
 
@@ -512,35 +541,23 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		return
 	}
 
-	plan, planningInfo, err := s.buildExecutablePlan(ctx, planningRequest)
+	plan, err := s.buildExecutablePlan(ctx, planningRequest)
 	if err != nil {
 		s.failJob(sessionID, jobID, fmt.Errorf("规划器执行失败：%w", err))
 		return
 	}
 
 	job.Plan = &plan
-	if planningInfo.Note != "" {
-		job.Summary = planningInfo.Note
-		s.appendJobCheckpointWithMetadata(
-			job,
-			"planning",
-			"warn",
-			"初始规划",
-			"规则兜底",
-			planBuildCheckpointSummary(planningInfo),
-			planBuildCheckpointMetadata(planningInfo),
-		)
-	} else {
-		job.Summary = "编排器已接受执行计划。"
-		s.appendJobCheckpoint(
-			job,
-			"planning",
-			"muted",
-			"初始规划",
-			"已生成计划",
-			fmt.Sprintf("已生成初始执行计划，共 %d 步。", len(plan.Steps)),
-		)
-	}
+	job.Summary = fmt.Sprintf("已生成 %d 步信息收集计划。", len(plan.Steps))
+	updateJobPhaseSummary(job, models.JobPhaseInvestigate, job.Summary)
+	s.appendJobCheckpoint(
+		job,
+		"planning",
+		"muted",
+		"初始规划",
+		"已生成计划",
+		fmt.Sprintf("已生成初始执行计划，共 %d 步。", len(plan.Steps)),
+	)
 	s.store.SaveJob(job)
 	s.publishJob(sessionID, jobID)
 
@@ -595,7 +612,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 			Skill:            step.Skill,
 			TargetBackendRef: backendRef(targetObject),
 			Params:           step.Params,
-			SessionRoot:      s.workspaceRoot(sessionRecord.WorkspaceID),
+			WorkspaceRoot:    s.workspaceRoot(sessionRecord.WorkspaceID),
 		})
 		if err != nil {
 			stepResult.Status = models.JobFailed
@@ -664,11 +681,13 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 
 		stepResult.Status = models.JobSucceeded
 		stepResult.Summary = response.Summary
+		stepResult.Facts = cloneParams(response.Facts)
 		stepResult.Metadata = response.Metadata
 		finishedAt := time.Now().UTC()
 		stepResult.FinishedAt = &finishedAt
 		job.Steps = append(job.Steps, stepResult)
 		stepSummaries = append(stepSummaries, response.Summary)
+		updateJobPhaseSummary(job, models.JobPhaseInvestigate, fmt.Sprintf("已完成 %d/%d 个信息收集步骤。", len(job.Steps), len(job.Steps)+len(pendingPlan.Steps)-1))
 
 		sessionRecord.UpdatedAt = finishedAt
 		sessionRecord.LastAccessedAt = finishedAt
@@ -725,39 +744,28 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		}
 
 		remainingPlan := clonePlanWithSteps(pendingPlan.Steps[1:])
-		replannedPlan, replanInfo, replanErr := s.replanRemainingSteps(ctx, sessionRecord, job, message)
+		replannedPlan, replanErr := s.replanRemainingSteps(ctx, sessionRecord, job, message)
 		switch {
 		case replanErr == nil && len(replannedPlan.Steps) > 0:
 			pendingPlan = replannedPlan
 			if plansEquivalent(replannedPlan, remainingPlan) {
-				s.appendJobCheckpointWithMetadata(
+				s.appendJobCheckpoint(
 					job,
 					"replan",
 					"muted",
 					"检查点重规划",
 					"计划不变",
-					joinCheckpointSummary(
-						planBuildCheckpointSummary(replanInfo),
-						fmt.Sprintf("检查点已确认后续 %d 步仍可继续执行。", len(replannedPlan.Steps)),
-					),
-					planBuildCheckpointMetadata(replanInfo),
+					fmt.Sprintf("检查点已确认后续 %d 步仍可继续执行。", len(replannedPlan.Steps)),
 				)
 			} else {
-				s.appendJobCheckpointWithMetadata(
+				s.appendJobCheckpoint(
 					job,
 					"replan",
 					"ok",
 					"检查点重规划",
 					"已更新计划",
-					joinCheckpointSummary(
-						planBuildCheckpointSummary(replanInfo),
-						fmt.Sprintf("已根据最新对象状态更新剩余计划，当前还有 %d 步待执行。", len(replannedPlan.Steps)),
-					),
-					planBuildCheckpointMetadata(replanInfo),
+					fmt.Sprintf("已根据最新对象状态更新剩余计划，当前还有 %d 步待执行。", len(replannedPlan.Steps)),
 				)
-			}
-			if replanInfo.Note != "" {
-				job.Summary = replanInfo.Note
 			}
 		case replanErr != nil && len(remainingPlan.Steps) > 0:
 			pendingPlan = remainingPlan
@@ -805,6 +813,28 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		job.Status = models.JobSucceeded
 		job.Summary = strings.Join(stepSummaries, " ")
 	}
+	completeJobPhase(job, models.JobPhaseInvestigate, defaultPhaseCompletionSummary(job))
+	startJobPhase(job, models.JobPhaseRespond, "正在确认收集结果并生成最终回答。", nil)
+
+	responseRequest, responseErr := s.buildResponseComposeRequest(sessionRecord, message, job)
+	var composed *ResponseComposeResult
+	if responseErr == nil && s.answerer != nil {
+		composed, responseErr = s.answerer.BuildInvestigationResponse(ctx, responseRequest)
+	}
+	if responseErr != nil || composed == nil || strings.TrimSpace(composed.Answer) == "" {
+		composed, _ = NewNoopAnswerer().BuildInvestigationResponse(ctx, responseRequest)
+	}
+	finalAnswer := ""
+	if composed != nil {
+		finalAnswer = strings.TrimSpace(composed.Answer)
+		if strings.TrimSpace(composed.Summary) != "" {
+			job.Summary = strings.TrimSpace(composed.Summary)
+		}
+	}
+	if finalAnswer == "" {
+		finalAnswer = job.Summary
+	}
+	completeJobPhase(job, models.JobPhaseRespond, "已根据收集到的信息生成最终回答。")
 	s.store.SaveJob(job)
 
 	s.store.AddMessage(&models.Message{
@@ -812,7 +842,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		SessionID: sessionID,
 		JobID:     jobID,
 		Role:      models.MessageAssistant,
-		Content:   s.buildAssistantSummary(job),
+		Content:   finalAnswer,
 		CreatedAt: finishedAt,
 	})
 
@@ -834,72 +864,34 @@ func (s *Service) evaluateCompletion(ctx context.Context, sessionRecord *models.
 	return s.evaluator.Evaluate(ctx, request)
 }
 
-func (s *Service) replanRemainingSteps(ctx context.Context, sessionRecord *models.Session, job *models.Job, message string) (models.Plan, planBuildInfo, error) {
+func (s *Service) replanRemainingSteps(ctx context.Context, sessionRecord *models.Session, job *models.Job, message string) (models.Plan, error) {
 	request, err := s.buildExecutionPlanningRequest(sessionRecord, message, job)
 	if err != nil {
-		return models.Plan{}, planBuildInfo{}, err
+		return models.Plan{}, err
 	}
-	plan, info, err := s.buildExecutablePlan(ctx, request)
+	plan, err := s.buildExecutablePlan(ctx, request)
 	if err != nil {
-		return models.Plan{}, planBuildInfo{}, err
+		return models.Plan{}, err
 	}
-	return trimCompletedPlanPrefix(plan, job.Steps), info, nil
+	return trimCompletedPlanPrefix(plan, job.Steps), nil
 }
 
-func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningRequest) (models.Plan, planBuildInfo, error) {
+func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningRequest) (models.Plan, error) {
 	if err := s.refreshSkills(); err != nil {
-		return models.Plan{}, planBuildInfo{}, err
+		return models.Plan{}, err
 	}
 	plan, err := s.planner.Plan(ctx, request)
 	if err != nil {
-		if s.PlannerMode() != "llm" {
-			return models.Plan{}, planBuildInfo{}, err
-		}
-
-		fallbackPlan, fallbackErr := NewFakePlanner().Plan(ctx, request)
-		if fallbackErr != nil {
-			return models.Plan{}, planBuildInfo{}, fmt.Errorf("规划器执行失败：%w；规则兜底也失败：%v", err, fallbackErr)
-		}
-		fallbackPlan = NormalizePlan(fallbackPlan)
-		fallbackPlan = applyRecentPlotContext(request, fallbackPlan)
-		if fallbackValidateErr := s.skills.ValidatePlan(fallbackPlan); fallbackValidateErr != nil {
-			return models.Plan{}, planBuildInfo{}, fmt.Errorf("规划器执行失败：%w；规则兜底也失败：%v", err, fallbackValidateErr)
-		}
-		return fallbackPlan, planBuildInfo{
-			Note:           "LLM 规划器请求失败，已切换到规则兜底计划。",
-			UsedFallback:   true,
-			FallbackReason: "planner_request_failed",
-			PlannerError:   err.Error(),
-		}, nil
+		return models.Plan{}, err
 	}
 
 	plan = NormalizePlan(plan)
 	plan = applyRecentPlotContext(request, plan)
 	validateErr := s.skills.ValidatePlan(plan)
 	if validateErr == nil {
-		return plan, planBuildInfo{}, nil
+		return plan, nil
 	}
-
-	if s.PlannerMode() != "llm" {
-		return models.Plan{}, planBuildInfo{}, fmt.Errorf("执行计划不合法：%w", validateErr)
-	}
-
-	fallbackPlan, fallbackErr := NewFakePlanner().Plan(ctx, request)
-	if fallbackErr != nil {
-		return models.Plan{}, planBuildInfo{}, fmt.Errorf("执行计划不合法：%w；规则兜底也失败：%v", validateErr, fallbackErr)
-	}
-	fallbackPlan = NormalizePlan(fallbackPlan)
-	fallbackPlan = applyRecentPlotContext(request, fallbackPlan)
-	if fallbackValidateErr := s.skills.ValidatePlan(fallbackPlan); fallbackValidateErr != nil {
-		return models.Plan{}, planBuildInfo{}, fmt.Errorf("执行计划不合法：%w；规则兜底也失败：%v", validateErr, fallbackValidateErr)
-	}
-
-	return fallbackPlan, planBuildInfo{
-		Note:           "LLM 规划结果为空或无效，已切换到规则兜底计划。",
-		UsedFallback:   true,
-		FallbackReason: "planner_invalid_plan",
-		PlannerError:   validateErr.Error(),
-	}, nil
+	return models.Plan{}, fmt.Errorf("执行计划不合法：%w", validateErr)
 }
 
 func (s *Service) failJob(sessionID, jobID string, err error) {
@@ -908,10 +900,18 @@ func (s *Service) failJob(sessionID, jobID string, err error) {
 		return
 	}
 	finishedAt := time.Now().UTC()
+	publicError := err.Error()
+	if s.answerer != nil {
+		publicError = s.answerer.BuildFailureAnswer(err)
+	}
 	job.Status = models.JobFailed
-	job.Error = err.Error()
+	job.Error = publicError
 	job.FinishedAt = &finishedAt
-	s.appendJobCheckpoint(job, "execution", "warn", "执行失败", "已终止", err.Error())
+	failJobPhase(job, job.CurrentPhase, publicError, map[string]any{"raw_error": err.Error()})
+	skipJobPhase(job, models.JobPhaseRespond, "本次执行在信息收集阶段终止，未进入最终回答。")
+	s.appendJobCheckpointWithMetadata(job, "execution", "warn", "执行失败", "已终止", publicError, map[string]any{
+		"raw_error": err.Error(),
+	})
 	s.store.SaveJob(job)
 
 	s.store.AddMessage(&models.Message{
@@ -919,7 +919,7 @@ func (s *Service) failJob(sessionID, jobID string, err error) {
 		SessionID: sessionID,
 		JobID:     jobID,
 		Role:      models.MessageAssistant,
-		Content:   "执行失败：" + err.Error(),
+		Content:   publicError,
 		CreatedAt: finishedAt,
 	})
 
@@ -998,22 +998,6 @@ func (s *Service) pathToURL(path string) string {
 		return ""
 	}
 	return "/data/" + filepath.ToSlash(relative)
-}
-
-func (s *Service) buildAssistantSummary(job *models.Job) string {
-	lines := make([]string, 0, len(job.Steps)+1)
-	headline := "执行完成："
-	switch job.Status {
-	case models.JobIncomplete:
-		headline = "执行未完成："
-	case models.JobFailed:
-		headline = "执行失败："
-	}
-	lines = append(lines, headline)
-	for _, step := range job.Steps {
-		lines = append(lines, fmt.Sprintf("%s：%s", step.Skill, step.Summary))
-	}
-	return strings.Join(lines, "\n")
 }
 
 func backendRef(object *models.ObjectMeta) string {
@@ -1110,6 +1094,147 @@ func (s *Service) appendJobCheckpointWithMetadata(job *models.Job, kind, tone, t
 	})
 }
 
+func initializeInvestigationPhases(job *models.Job, now time.Time) {
+	if job == nil {
+		return
+	}
+	job.Phases = []models.JobPhase{
+		{
+			Kind:       models.JobPhaseDecide,
+			Title:      "快速判断",
+			Status:     models.JobPhaseCompleted,
+			Summary:    "当前上下文不足以直接回答，转入信息收集。",
+			StartedAt:  &now,
+			FinishedAt: &now,
+		},
+		{
+			Kind:    models.JobPhaseInvestigate,
+			Title:   "信息收集",
+			Status:  models.JobPhasePending,
+			Summary: "等待执行。",
+		},
+		{
+			Kind:    models.JobPhaseRespond,
+			Title:   "确认与回答",
+			Status:  models.JobPhasePending,
+			Summary: "等待信息收集完成。",
+		},
+	}
+}
+
+func startJobPhase(job *models.Job, kind models.JobPhaseKind, summary string, metadata map[string]any) {
+	phase := ensureJobPhase(job, kind)
+	if phase == nil {
+		return
+	}
+	now := time.Now().UTC()
+	if phase.StartedAt == nil {
+		phase.StartedAt = &now
+	}
+	phase.Status = models.JobPhaseRunning
+	phase.Summary = strings.TrimSpace(summary)
+	phase.Metadata = cloneParams(metadata)
+	phase.FinishedAt = nil
+	job.CurrentPhase = kind
+}
+
+func updateJobPhaseSummary(job *models.Job, kind models.JobPhaseKind, summary string) {
+	phase := ensureJobPhase(job, kind)
+	if phase == nil || strings.TrimSpace(summary) == "" {
+		return
+	}
+	phase.Summary = strings.TrimSpace(summary)
+}
+
+func completeJobPhase(job *models.Job, kind models.JobPhaseKind, summary string) {
+	phase := ensureJobPhase(job, kind)
+	if phase == nil {
+		return
+	}
+	now := time.Now().UTC()
+	if phase.StartedAt == nil {
+		phase.StartedAt = &now
+	}
+	phase.Status = models.JobPhaseCompleted
+	if strings.TrimSpace(summary) != "" {
+		phase.Summary = strings.TrimSpace(summary)
+	}
+	phase.FinishedAt = &now
+	job.CurrentPhase = kind
+}
+
+func failJobPhase(job *models.Job, kind models.JobPhaseKind, summary string, metadata map[string]any) {
+	phase := ensureJobPhase(job, kind)
+	if phase == nil {
+		return
+	}
+	now := time.Now().UTC()
+	if phase.StartedAt == nil {
+		phase.StartedAt = &now
+	}
+	phase.Status = models.JobPhaseFailed
+	phase.Summary = strings.TrimSpace(summary)
+	phase.Metadata = cloneParams(metadata)
+	phase.FinishedAt = &now
+	job.CurrentPhase = kind
+}
+
+func skipJobPhase(job *models.Job, kind models.JobPhaseKind, summary string) {
+	phase := ensureJobPhase(job, kind)
+	if phase == nil || phase.Status == models.JobPhaseCompleted || phase.Status == models.JobPhaseRunning {
+		return
+	}
+	now := time.Now().UTC()
+	phase.Status = models.JobPhaseSkipped
+	phase.Summary = strings.TrimSpace(summary)
+	phase.FinishedAt = &now
+}
+
+func ensureJobPhase(job *models.Job, kind models.JobPhaseKind) *models.JobPhase {
+	if job == nil {
+		return nil
+	}
+	for i := range job.Phases {
+		if job.Phases[i].Kind == kind {
+			return &job.Phases[i]
+		}
+	}
+	title := jobPhaseTitle(kind)
+	job.Phases = append(job.Phases, models.JobPhase{
+		Kind:   kind,
+		Title:  title,
+		Status: models.JobPhasePending,
+	})
+	return &job.Phases[len(job.Phases)-1]
+}
+
+func jobPhaseTitle(kind models.JobPhaseKind) string {
+	switch kind {
+	case models.JobPhaseDecide:
+		return "快速判断"
+	case models.JobPhaseInvestigate:
+		return "信息收集"
+	case models.JobPhaseRespond:
+		return "确认与回答"
+	default:
+		return "阶段"
+	}
+}
+
+func defaultPhaseCompletionSummary(job *models.Job) string {
+	if job == nil {
+		return ""
+	}
+	switch job.Status {
+	case models.JobSucceeded:
+		return "信息收集已完成，已具备回答所需证据。"
+	case models.JobIncomplete:
+		return "信息收集已结束，但当前证据仍不足以完整回答。"
+	default:
+		return "信息收集阶段已结束。"
+	}
+}
+
 func objectID(object *models.ObjectMeta) string {
 	if object == nil {
 		return ""
@@ -1162,6 +1287,25 @@ func (s *Service) buildEvaluationRequest(sessionRecord *models.Session, message 
 		return EvaluationRequest{}, err
 	}
 	return EvaluationRequest{
+		Message:         request.Message,
+		Session:         request.Session,
+		Workspace:       request.Workspace,
+		ActiveObject:    request.ActiveObject,
+		Objects:         request.Objects,
+		RecentMessages:  request.RecentMessages,
+		RecentJobs:      request.RecentJobs,
+		RecentArtifacts: request.RecentArtifacts,
+		CurrentJob:      cloneJobForPlanning(currentJob),
+		WorkingMemory:   request.WorkingMemory,
+	}, nil
+}
+
+func (s *Service) buildResponseComposeRequest(sessionRecord *models.Session, message string, currentJob *models.Job) (ResponseComposeRequest, error) {
+	request, err := s.buildExecutionPlanningRequest(sessionRecord, message, currentJob)
+	if err != nil {
+		return ResponseComposeRequest{}, err
+	}
+	return ResponseComposeRequest{
 		Message:         request.Message,
 		Session:         request.Session,
 		Workspace:       request.Workspace,
@@ -1295,6 +1439,12 @@ func cloneJobForPlanning(in *models.Job) *models.Job {
 			out.Steps[i] = cloneJobStepForPlanning(step)
 		}
 	}
+	if len(in.Phases) > 0 {
+		out.Phases = make([]models.JobPhase, len(in.Phases))
+		for i, phase := range in.Phases {
+			out.Phases[i] = cloneJobPhaseForPlanning(phase)
+		}
+	}
 	if len(in.Checkpoints) > 0 {
 		out.Checkpoints = append([]models.JobCheckpoint(nil), in.Checkpoints...)
 	}
@@ -1307,6 +1457,17 @@ func cloneJobStepForPlanning(in models.JobStep) models.JobStep {
 	if len(in.ArtifactIDs) > 0 {
 		out.ArtifactIDs = append([]string(nil), in.ArtifactIDs...)
 	}
+	if len(in.Facts) > 0 {
+		out.Facts = cloneParams(in.Facts)
+	}
+	if len(in.Metadata) > 0 {
+		out.Metadata = cloneParams(in.Metadata)
+	}
+	return out
+}
+
+func cloneJobPhaseForPlanning(in models.JobPhase) models.JobPhase {
+	out := in
 	if len(in.Metadata) > 0 {
 		out.Metadata = cloneParams(in.Metadata)
 	}
@@ -1429,33 +1590,4 @@ func joinCheckpointSummary(primary, fallback string) string {
 	default:
 		return primary + " " + fallback
 	}
-}
-
-func planBuildCheckpointSummary(info planBuildInfo) string {
-	summary := strings.TrimSpace(info.Note)
-	if strings.TrimSpace(info.PlannerError) == "" {
-		return summary
-	}
-	return joinCheckpointSummary(summary, "原始错误："+compactJSON(info.PlannerError))
-}
-
-func planBuildCheckpointMetadata(info planBuildInfo) map[string]any {
-	if !info.UsedFallback && strings.TrimSpace(info.PlannerError) == "" {
-		return nil
-	}
-
-	metadata := make(map[string]any, 3)
-	if info.UsedFallback {
-		metadata["fallback_used"] = true
-	}
-	if strings.TrimSpace(info.FallbackReason) != "" {
-		metadata["fallback_reason"] = info.FallbackReason
-	}
-	if strings.TrimSpace(info.PlannerError) != "" {
-		metadata["planner_error"] = info.PlannerError
-	}
-	if len(metadata) == 0 {
-		return nil
-	}
-	return metadata
 }

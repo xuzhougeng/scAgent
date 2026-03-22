@@ -26,7 +26,7 @@ func main() {
 	docsDir := flag.String("docs-dir", "docs", "Directory used for markdown help docs")
 	dataDir := flag.String("data-dir", "data", "Directory used for session artifacts")
 	webDir := flag.String("web-dir", "web", "Directory used for static web assets")
-	plannerMode := flag.String("planner-mode", envOrDefault("SCAGENT_PLANNER_MODE", "fake"), "Planner mode: fake or llm")
+	plannerMode := flag.String("planner-mode", envOrDefault("SCAGENT_PLANNER_MODE", "llm"), "Planner mode: llm or fake (debug only)")
 	openAIBaseURL := flag.String("openai-base-url", envOrDefault("SCAGENT_OPENAI_BASE_URL", "https://api.openai.com/v1"), "Base URL for the OpenAI-compatible planner API")
 	openAIModel := flag.String("openai-model", envOrDefault("SCAGENT_OPENAI_MODEL", "gpt-5.4"), "Model used by the LLM planner")
 	openAIReasoning := flag.String("openai-reasoning", envOrDefault("SCAGENT_OPENAI_REASONING_EFFORT", "low"), "Reasoning effort for the LLM planner")

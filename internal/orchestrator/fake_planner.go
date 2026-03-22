@@ -218,6 +218,14 @@ func objectHasEmbedding(object *models.ObjectMeta, embedding string) bool {
 		return false
 	}
 
+	if embedding == "X_umap" {
+		if assessment, ok := object.Metadata["assessment"].(map[string]any); ok {
+			if hasUMAP, ok := assessment["has_umap"].(bool); ok {
+				return hasUMAP
+			}
+		}
+	}
+
 	value, ok := object.Metadata["obsm_keys"]
 	if !ok {
 		return false

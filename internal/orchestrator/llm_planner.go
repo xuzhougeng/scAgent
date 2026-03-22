@@ -26,7 +26,10 @@ type PlannerConfig struct {
 
 func NewPlanner(config PlannerConfig) (Planner, error) {
 	mode := strings.ToLower(strings.TrimSpace(config.Mode))
-	if mode == "" || mode == "fake" {
+	if mode == "" {
+		return nil, fmt.Errorf("planner mode is required")
+	}
+	if mode == "fake" {
 		return NewFakePlanner(), nil
 	}
 	if mode != "llm" {
@@ -212,6 +215,7 @@ func (p *LLMPlanner) instructions(requestPayload PlanningRequest) string {
 		"If a running or recent job already completed part of the same request, continue from the current object state and avoid repeating already completed steps unless repeating them is clearly necessary.",
 		"Use run_python_analysis only as a last resort when no existing wired skill can satisfy the request; keep the generated code short, deterministic, and focused on adata/scanpy operations.",
 		"When using run_python_analysis, adata is the current object and counts_adata is a count-safe copy for preprocessing-style code.",
+		"When using run_python_analysis for scalar or textual answers, prefer assigning result_value, result_text, or result_summary explicitly instead of only printing to stdout.",
 		"Never return an empty steps array.",
 		"Available skills:",
 	}
@@ -274,7 +278,7 @@ func planStepSchema(definition skill.Definition) map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"skill", "target_object_id", "params"},
+		"required":             []string{"skill", "target_object_id", "params", "memory_refs"},
 		"properties": map[string]any{
 			"skill": map[string]any{
 				"type": "string",
@@ -562,6 +566,9 @@ func formatJobContext(job *models.Job) string {
 		if len(step.Params) > 0 {
 			stepDetails = append(stepDetails, "params="+compactJSON(mustMarshalJSON(step.Params)))
 		}
+		if len(step.Facts) > 0 {
+			stepDetails = append(stepDetails, "facts="+compactJSON(mustMarshalJSON(step.Facts)))
+		}
 		if len(step.Metadata) > 0 {
 			stepDetails = append(stepDetails, "metadata="+compactJSON(mustMarshalJSON(step.Metadata)))
 		}
@@ -570,11 +577,22 @@ func formatJobContext(job *models.Job) string {
 		}
 		stepParts = append(stepParts, "{"+strings.Join(stepDetails, " | ")+"}")
 	}
+	phaseParts := make([]string, 0, len(job.Phases))
+	for _, phase := range job.Phases {
+		phaseParts = append(phaseParts, fmt.Sprintf(
+			"{kind=%s status=%s summary=%s}",
+			phase.Kind,
+			phase.Status,
+			truncateText(phase.Summary, 120),
+		))
+	}
 	return fmt.Sprintf(
-		"id=%s | status=%s | summary=%s | steps=%s",
+		"id=%s | status=%s | current_phase=%s | summary=%s | phases=%s | steps=%s",
 		job.ID,
 		job.Status,
+		job.CurrentPhase,
 		truncateText(job.Summary, 200),
+		strings.Join(phaseParts, "; "),
 		strings.Join(stepParts, "; "),
 	)
 }
