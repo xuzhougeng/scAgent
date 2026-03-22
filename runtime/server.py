@@ -115,6 +115,7 @@ SAFE_EXEC_BUILTINS = {
     "list": list,
     "max": max,
     "min": min,
+    "next": next,
     "print": print,
     "range": range,
     "round": round,

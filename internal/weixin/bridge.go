@@ -25,12 +25,20 @@ type BridgeConfig struct {
 	JobTimeout   time.Duration
 }
 
+// pendingJob tracks a long-running job so the user can check back later.
+type pendingJob struct {
+	SessionID string
+	JobID     string
+	StartedAt time.Time
+}
+
 // Bridge connects WeChat to the scAgent orchestrator.
 type Bridge struct {
 	client       *Client
 	service      *orchestrator.Service
 	config       BridgeConfig
 	sessions     map[string]string // wechat user id → scAgent session id
+	pendingJobs  map[string]*pendingJob // wechat user id → pending job
 	sessionsFile string
 	mu           sync.Mutex
 	typingTicket string
@@ -51,6 +59,7 @@ func NewBridge(client *Client, service *orchestrator.Service, config BridgeConfi
 		service:      service,
 		config:       config,
 		sessions:     make(map[string]string),
+		pendingJobs:  make(map[string]*pendingJob),
 		sessionsFile: sessionsFile,
 	}
 	b.loadSessions()
@@ -233,6 +242,12 @@ func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextTok
 		return
 	}
 
+	// Check if user has a pending long-running job
+	if reply := b.checkPendingJob(ctx, fromUserID, text); reply != "" {
+		_ = b.client.SendTextMessage(ctx, fromUserID, reply, contextToken)
+		return
+	}
+
 	// Fetch typing ticket on demand (per-user) and send indicator
 	if b.typingTicket == "" {
 		if cfg, err := b.client.GetConfig(ctx, fromUserID, contextToken); err == nil && cfg.TypingTicket != "" {
@@ -281,8 +296,19 @@ func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextTok
 		return
 	}
 
-	// Wait for job completion via event subscription
-	reply := b.waitForJob(ctx, sessionID, job.ID)
+	// Wait for job completion — if it takes >30s, notify user and track as pending
+	reply, done := b.waitForJobWithTimeout(ctx, sessionID, job.ID, 30*time.Second)
+	if !done {
+		// Job still running — save as pending so user can check back
+		b.mu.Lock()
+		b.pendingJobs[fromUserID] = &pendingJob{
+			SessionID: sessionID,
+			JobID:     job.ID,
+			StartedAt: time.Now(),
+		}
+		b.mu.Unlock()
+		reply = "任务运行时间较长，请过一分钟后发消息查看结果。"
+	}
 	if err := b.client.SendTextMessage(ctx, fromUserID, reply, contextToken); err != nil {
 		log.Printf("[weixin] send reply error to %s: %v", fromUserID, err)
 	} else {
@@ -490,21 +516,27 @@ func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string
 	}
 }
 
-func (b *Bridge) waitForJob(ctx context.Context, sessionID, jobID string) string {
+// waitForJobWithTimeout waits for a job to complete. If the job finishes within
+// the given timeout, it returns the result and done=true. If the timeout fires
+// first, it returns ("", false) so the caller can track it as a pending job.
+func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID string, timeout time.Duration) (string, bool) {
 	events, cancel := b.service.Subscribe(sessionID)
 	defer cancel()
 
-	timeout := time.After(b.config.JobTimeout)
+	timer := time.After(timeout)
+	hardTimeout := time.After(b.config.JobTimeout)
 
 	for {
 		select {
 		case <-ctx.Done():
-			return "系统已停止"
-		case <-timeout:
-			return "分析超时，请稍后重试"
+			return "系统已停止", true
+		case <-hardTimeout:
+			return "分析超时，请稍后重试", true
+		case <-timer:
+			return "", false
 		case event, ok := <-events:
 			if !ok {
-				return "事件流中断"
+				return "事件流中断", true
 			}
 			if event.Type != "session_updated" {
 				continue
@@ -520,17 +552,70 @@ func (b *Bridge) waitForJob(ctx context.Context, sessionID, jobID string) string
 					continue
 				}
 				if job.Status == models.JobSucceeded {
-					return b.formatReply(snapshot, jobID)
+					return b.formatReply(snapshot, jobID), true
 				}
 				if job.Status == models.JobFailed {
 					if job.Error != "" {
-						return fmt.Sprintf("分析失败: %s", job.Error)
+						return fmt.Sprintf("分析失败: %s", job.Error), true
 					}
-					return "分析失败"
+					return "分析失败", true
 				}
 			}
 		}
 	}
+}
+
+// checkPendingJob checks whether the user has a pending long-running job.
+// If the job is finished, it returns the result and clears the pending state.
+// If the job is still running, it tells the user to wait.
+// Returns "" if there is no pending job (normal message flow should continue).
+func (b *Bridge) checkPendingJob(ctx context.Context, fromUserID, text string) string {
+	b.mu.Lock()
+	pj := b.pendingJobs[fromUserID]
+	b.mu.Unlock()
+	if pj == nil {
+		return ""
+	}
+
+	// Check job status from current snapshot
+	snapshot, err := b.service.GetSnapshot(pj.SessionID)
+	if err != nil {
+		// Session gone — clear pending
+		b.mu.Lock()
+		delete(b.pendingJobs, fromUserID)
+		b.mu.Unlock()
+		return ""
+	}
+
+	for _, job := range snapshot.Jobs {
+		if job.ID != pj.JobID {
+			continue
+		}
+		if job.Status == models.JobSucceeded {
+			b.mu.Lock()
+			delete(b.pendingJobs, fromUserID)
+			b.mu.Unlock()
+			return b.formatReply(snapshot, pj.JobID)
+		}
+		if job.Status == models.JobFailed {
+			b.mu.Lock()
+			delete(b.pendingJobs, fromUserID)
+			b.mu.Unlock()
+			if job.Error != "" {
+				return fmt.Sprintf("分析失败: %s", job.Error)
+			}
+			return "分析失败"
+		}
+		// Still running
+		elapsed := time.Since(pj.StartedAt).Truncate(time.Second)
+		return fmt.Sprintf("任务仍在运行中（已耗时 %s），请再等一分钟后发消息查看。", elapsed)
+	}
+
+	// Job not found in snapshot — clear pending
+	b.mu.Lock()
+	delete(b.pendingJobs, fromUserID)
+	b.mu.Unlock()
+	return ""
 }
 
 func (b *Bridge) formatReply(snapshot *models.SessionSnapshot, jobID string) string {
