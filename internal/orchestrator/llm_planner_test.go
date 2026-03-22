@@ -149,6 +149,7 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 
 	foundStrictParams := false
 	foundPlotUMAPParams := false
+	foundPlotGeneUMAPSkill := false
 	foundCustomCodeSkill := false
 	for _, variant := range stepVariants {
 		stepPayload, ok := variant.(map[string]any)
@@ -169,6 +170,9 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 		}
 		if enumValues[0] == "run_python_analysis" {
 			foundCustomCodeSkill = true
+		}
+		if enumValues[0] == "plot_gene_umap" {
+			foundPlotGeneUMAPSkill = true
 		}
 		if enumValues[0] == "plot_umap" {
 			paramsPayload, ok := stepProperties["params"].(map[string]any)
@@ -253,6 +257,9 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 	}
 	if !foundPlotUMAPParams {
 		t.Fatalf("did not find plot_umap params schema in planner request")
+	}
+	if !foundPlotGeneUMAPSkill {
+		t.Fatalf("did not find plot_gene_umap skill in planner request schema")
 	}
 	if !foundCustomCodeSkill {
 		t.Fatalf("did not find run_python_analysis skill in planner request schema")

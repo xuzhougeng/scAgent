@@ -13,7 +13,7 @@
 
 - [x] 明确识别是否已有 `X_umap`
 - [x] 明确提示如果没有 UMAP 当前缺什么
-- [ ] 接入真实 `plot_gene_umap`
+- [x] 接入真实 `plot_gene_umap`
 - [ ] 如果没有 UMAP，允许 AI 自动规划预处理链
 
 ## P2: 预处理与 readiness 推理

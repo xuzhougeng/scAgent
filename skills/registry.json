@@ -429,9 +429,9 @@
       "name": "plot_gene_umap",
       "label": "Plot gene UMAP",
       "category": "visualization",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Plot a UMAP colored by the expression of one or more genes.",
-      "target_kinds": ["filtered_dataset", "subset", "reclustered_subset"],
+      "target_kinds": ["raw_dataset", "filtered_dataset", "subset", "reclustered_subset"],
       "input": {
         "target_object_id": {
           "type": "string",

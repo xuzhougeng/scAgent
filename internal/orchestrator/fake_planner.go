@@ -23,6 +23,7 @@ type FakePlanner struct{}
 var plotAssignmentPattern = regexp.MustCompile(`(?i)\b(color_by|legend_loc|palette|title|point_size|figure_width|figure_height)\s*=\s*(?:'([^']*)'|"([^"]*)"|([^\s,;]+))`)
 var englishCellTypePattern = regexp.MustCompile(`(?i)\b([a-z0-9][a-z0-9_+\- ]*cells?)\b`)
 var chineseCellTypePattern = regexp.MustCompile(`提取\s*([^\s,，。；;]+?)\s*细胞`)
+var geneTokenPattern = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9._-]{2,}\b`)
 
 func NewFakePlanner() *FakePlanner {
 	return &FakePlanner{}
@@ -50,6 +51,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		strings.Contains(request.Message, "不符合要求") ||
 		(len(explicitPlotParams) > 0 && recentPlotSkill != "")
 	cellTypeValue := inferCellTypeValue(request, request.Message)
+	geneNames := inferGeneNames(request.Message)
 
 	if strings.Contains(lower, "preprocess") || strings.Contains(request.Message, "预处理") {
 		steps = append(steps,
@@ -112,7 +114,16 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 				Params:         map[string]any{},
 			})
 		}
-		if !hasSkill(steps, "plot_umap") {
+		if len(geneNames) > 0 && !hasSkill(steps, "plot_gene_umap") {
+			steps = append(steps, models.PlanStep{
+				ID:             stepID(len(steps) + 1),
+				Skill:          "plot_gene_umap",
+				TargetObjectID: targetFromPrevious(steps),
+				Params: map[string]any{
+					"genes": geneNames,
+				},
+			})
+		} else if !hasSkill(steps, "plot_umap") {
 			plotParams := map[string]any{
 				"color_by": "leiden",
 			}
@@ -313,6 +324,46 @@ func dedupeStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func inferGeneNames(message string) []string {
+	lower := strings.ToLower(message)
+	if !strings.Contains(lower, "umap") {
+		return nil
+	}
+
+	matches := geneTokenPattern.FindAllString(message, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	stopwords := map[string]struct{}{
+		"and": {}, "best": {}, "by": {}, "cell": {}, "cells": {}, "cluster": {}, "clusters": {}, "color": {}, "cortex": {}, "data": {},
+		"draw": {}, "expression": {}, "for": {}, "gene": {}, "genes": {}, "legend": {}, "legend_loc": {}, "leiden": {}, "louvain": {},
+		"none": {}, "on": {}, "palette": {}, "plot": {}, "point_size": {}, "right": {}, "title": {}, "umap": {}, "with": {},
+	}
+
+	out := make([]string, 0, len(matches))
+	for _, match := range matches {
+		key := strings.ToLower(strings.TrimSpace(match))
+		if _, blocked := stopwords[key]; blocked {
+			continue
+		}
+
+		hasGeneSignal := false
+		for _, char := range match {
+			if (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' {
+				hasGeneSignal = true
+				break
+			}
+		}
+		if !hasGeneSignal {
+			continue
+		}
+		out = append(out, match)
+	}
+
+	return dedupeStrings(out)
 }
 
 func parseExplicitPlotParams(message string) map[string]any {

@@ -57,7 +57,7 @@ This catalog organizes common single-cell analysis skills by workflow stage.
 ## Visualization
 
 - `plot_umap` (`wired`): UMAP overview with configurable params such as `color_by`, `legend_loc`, `title`, and figure size
-- `plot_gene_umap` (`planned`): UMAP colored by gene expression
+- `plot_gene_umap` (`wired`): UMAP colored by gene expression
 - `plot_dotplot` (`planned`): marker or gene dotplot
 - `plot_violin` (`planned`): violin plot for genes
 - `plot_heatmap` (`planned`): heatmap for selected genes

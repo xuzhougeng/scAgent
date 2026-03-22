@@ -233,3 +233,32 @@ func TestFakePlannerCarriesExplicitPlotParams(t *testing.T) {
 		t.Fatalf("expected numeric point_size to be carried through, got %+v", params)
 	}
 }
+
+func TestFakePlannerUsesPlotGeneUMAPForGeneRequests(t *testing.T) {
+	planner := NewFakePlanner()
+
+	plan, err := planner.Plan(context.Background(), PlanningRequest{
+		Message: "绘制LDHB的UMAP",
+		ActiveObject: &models.ObjectMeta{
+			Metadata: map[string]any{
+				"obsm_keys": []string{"X_umap"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run fake planner: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("unexpected step count: got %d", len(plan.Steps))
+	}
+	if plan.Steps[0].Skill != "plot_gene_umap" {
+		t.Fatalf("expected gene request to map to plot_gene_umap, got %q", plan.Steps[0].Skill)
+	}
+	genes, ok := plan.Steps[0].Params["genes"].([]string)
+	if !ok {
+		t.Fatalf("expected genes param to be []string, got %+v", plan.Steps[0].Params)
+	}
+	if len(genes) != 1 || genes[0] != "LDHB" {
+		t.Fatalf("unexpected genes param: %+v", genes)
+	}
+}

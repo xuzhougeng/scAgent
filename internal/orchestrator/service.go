@@ -528,7 +528,19 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningRequest) (models.Plan, string, error) {
 	plan, err := s.planner.Plan(ctx, request)
 	if err != nil {
-		return models.Plan{}, "", err
+		if s.PlannerMode() != "llm" {
+			return models.Plan{}, "", err
+		}
+
+		fallbackPlan, fallbackErr := NewFakePlanner().Plan(ctx, request)
+		if fallbackErr != nil {
+			return models.Plan{}, "", fmt.Errorf("规划器执行失败：%w；规则兜底也失败：%v", err, fallbackErr)
+		}
+		fallbackPlan = NormalizePlan(fallbackPlan)
+		if fallbackValidateErr := s.skills.ValidatePlan(fallbackPlan); fallbackValidateErr != nil {
+			return models.Plan{}, "", fmt.Errorf("规划器执行失败：%w；规则兜底也失败：%v", err, fallbackValidateErr)
+		}
+		return fallbackPlan, "LLM 规划器请求失败，已切换到规则兜底计划。", nil
 	}
 
 	plan = NormalizePlan(plan)

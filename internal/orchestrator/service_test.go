@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -17,6 +18,16 @@ func (p emptyLLMPlanner) Plan(context.Context, PlanningRequest) (models.Plan, er
 }
 
 func (p emptyLLMPlanner) Mode() string {
+	return "llm"
+}
+
+type failingLLMPlanner struct{}
+
+func (p failingLLMPlanner) Plan(context.Context, PlanningRequest) (models.Plan, error) {
+	return models.Plan{}, errors.New("planner request failed: context deadline exceeded")
+}
+
+func (p failingLLMPlanner) Mode() string {
 	return "llm"
 }
 
@@ -52,6 +63,27 @@ func TestBuildExecutablePlanFallsBackWhenLLMReturnsEmptyPlan(t *testing.T) {
 		if plan.Steps[index].Skill != want {
 			t.Fatalf("unexpected skill at %d: got %q want %q", index, plan.Steps[index].Skill, want)
 		}
+	}
+}
+
+func TestBuildExecutablePlanFallsBackWhenLLMRequestFails(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	service := NewService(session.NewStore(), registry, nil, failingLLMPlanner{}, t.TempDir())
+	plan, note, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
+		Message: "完成常规的数据预处理",
+	})
+	if err != nil {
+		t.Fatalf("build executable plan: %v", err)
+	}
+	if note == "" {
+		t.Fatalf("expected fallback note when LLM request fails")
+	}
+	if len(plan.Steps) == 0 || plan.Steps[0].Skill != "normalize_total" {
+		t.Fatalf("unexpected fallback plan: %+v", plan.Steps)
 	}
 }
 

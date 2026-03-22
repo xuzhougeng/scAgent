@@ -60,6 +60,7 @@ const skillPrompts = {
   recluster: "对当前对象重新聚类",
   find_markers: "查找当前对象的 marker 基因",
   plot_umap: "绘制当前对象的 UMAP 图",
+  plot_gene_umap: "绘制当前对象中某个基因的 UMAP 图",
   run_python_analysis: "对当前对象执行一段自定义 Python 分析",
   plot_dotplot: "绘制当前对象的 marker 点图",
   plot_violin: "绘制当前对象的基因小提琴图",

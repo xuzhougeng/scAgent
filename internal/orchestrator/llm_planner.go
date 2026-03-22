@@ -200,6 +200,7 @@ func (p *LLMPlanner) instructions(requestPayload PlanningRequest) string {
 		"Compose multiple skills when the user asks for a workflow, not just a single action.",
 		"If the user asks for routine preprocessing, prefer a chain such as normalize_total -> log1p_transform -> select_hvg -> run_pca -> compute_neighbors -> run_umap when those skills are available and appropriate.",
 		"If the request is about plot presentation details such as legends, colors, or labels, prefer the closest visualization skill such as plot_umap instead of returning an empty plan.",
+		"If the user asks for a UMAP colored by one or more genes, or mentions gene symbols such as LDHB or GATA3 in a UMAP request, prefer plot_gene_umap over plot_umap.",
 		"If the user provides explicit plotting kwargs such as legend_loc='on data' or point_size=12, copy them into params when the selected skill supports them.",
 		"If the user asks to isolate a cell type or annotation group and then visualize it, prefer subset_cells followed by plot_umap instead of run_python_analysis whenever the request can be expressed with obs_field/op/value.",
 		"Treat recent_messages, recent_jobs, and recent_artifacts as conversation context for follow-up requests such as '把这个图改一下' or '把图例加上'.",

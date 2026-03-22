@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import math
+import re
 import shutil
 import sys
 import time
@@ -291,7 +292,91 @@ class RuntimeState:
         return target.kind
 
     def _plot_path(self, session_root: Path, skill: str, label: str) -> Path:
-        return session_root / "artifacts" / f"{skill}_{slug(label)}.svg"
+        path = session_root / "artifacts" / f"{skill}_{slug(label)}.svg"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _normalize_gene_list(self, raw_value: Any) -> list[str]:
+        if raw_value is None:
+            return []
+
+        candidates: list[str] = []
+        if isinstance(raw_value, str):
+            candidates = re.split(r"[\s,，;；]+", raw_value)
+        elif isinstance(raw_value, list):
+            for item in raw_value:
+                text = str(item or "").strip()
+                if text:
+                    candidates.append(text)
+        else:
+            text = str(raw_value or "").strip()
+            if text:
+                candidates.append(text)
+
+        return dedupe_list([candidate for candidate in candidates if candidate])
+
+    def _resolve_gene_var_key(self, adata: Any, gene: str) -> str | None:
+        requested = str(gene or "").strip()
+        if requested == "":
+            return None
+
+        if requested in adata.var_names:
+            return requested
+
+        requested_lower = requested.lower()
+        for candidate in adata.var_names:
+            candidate_text = str(candidate)
+            if candidate_text.lower() == requested_lower:
+                return candidate_text
+
+        for column in ("gene_symbol", "gene_name", "symbol", "feature_name", "features"):
+            if column not in adata.var.columns:
+                continue
+            values = adata.var[column].astype(str)
+            exact_matches = values.index[values == requested]
+            if len(exact_matches) > 0:
+                return str(exact_matches[0])
+            casefold_matches = values.index[values.str.lower() == requested_lower]
+            if len(casefold_matches) > 0:
+                return str(casefold_matches[0])
+
+        return None
+
+    def _dense_vector(self, values: Any) -> Any:
+        _, _, _, np, sp = analysis_modules()
+        if sp.issparse(values):
+            return np.asarray(values.toarray()).reshape(-1)
+        return np.asarray(values).reshape(-1)
+
+    def _resolve_gene_expression(self, adata: Any, gene: str, layer: str | None = None) -> tuple[str, str, Any, str]:
+        requested = str(gene or "").strip()
+        if requested == "":
+            raise RuntimeError("基因名不能为空。")
+
+        layer_name = str(layer or "").strip()
+        if layer_name:
+            if layer_name not in adata.layers:
+                raise RuntimeError(f"当前对象缺少 layer `{layer_name}`。")
+            gene_key = self._resolve_gene_var_key(adata, requested)
+            if gene_key is None:
+                raise RuntimeError(f"当前对象缺少基因 `{requested}`。")
+            expression = self._dense_vector(adata[:, [gene_key]].layers[layer_name])
+            return requested, gene_key, expression, f"layer:{layer_name}"
+
+        gene_key = self._resolve_gene_var_key(adata, requested)
+        if gene_key is not None:
+            expression = self._dense_vector(adata[:, [gene_key]].X)
+            return requested, gene_key, expression, "X"
+
+        if adata.raw is not None:
+            raw_adata = adata.raw.to_adata()
+            raw_adata.var_names_make_unique()
+            raw_gene_key = self._resolve_gene_var_key(raw_adata, requested)
+            if raw_gene_key is not None:
+                expression = self._dense_vector(raw_adata[:, [raw_gene_key]].X)
+                return requested, raw_gene_key, expression, "raw"
+
+        raise RuntimeError(f"当前对象缺少基因 `{requested}`。")
 
     def _normalize_legend_loc(self, raw_value: Any) -> str:
         value = str(raw_value or "best").strip().lower().replace("_", " ")
@@ -422,6 +507,48 @@ class RuntimeState:
                 self._render_categorical_umap_legend(ax, plt, np, coords, codes, category_labels, colors, color_by, legend_loc)
         else:
             ax.scatter(coords[:, 0], coords[:, 1], s=point_size, c="#2f7d4a", alpha=0.85, linewidths=0)
+
+        ax.set_title(figure_title)
+        ax.set_xlabel("UMAP1")
+        ax.set_ylabel("UMAP2")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        fig.tight_layout()
+        fig.savefig(path, format="svg")
+        plt.close(fig)
+
+    def _save_gene_umap_plot(
+        self,
+        adata: Any,
+        path: Path,
+        gene_label: str,
+        expression_values: Any,
+        *,
+        title: str | None = None,
+        point_size: float = 8.0,
+        figure_width: float = 6.2,
+        figure_height: float = 4.8,
+        palette: str | None = None,
+    ) -> None:
+        _, _, plt, np, _ = analysis_modules()
+        coords = adata.obsm.get("X_umap")
+        if coords is None or len(coords.shape) != 2 or coords.shape[1] < 2:
+            raise RuntimeError("当前对象缺少 `X_umap`，请先执行 run_umap。")
+
+        point_size = self._coerce_positive_float(point_size, 8.0)
+        figure_width = self._coerce_positive_float(figure_width, 6.2)
+        figure_height = self._coerce_positive_float(figure_height, 4.8)
+        figure_title = str(title or f"UMAP: {gene_label}").strip() or f"UMAP: {gene_label}"
+        values = np.nan_to_num(np.asarray(expression_values, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+
+        fig, ax = plt.subplots(figsize=(figure_width, figure_height))
+        cmap_name = str(palette or "viridis")
+        try:
+            scatter = ax.scatter(coords[:, 0], coords[:, 1], c=values, s=point_size, cmap=cmap_name, linewidths=0)
+        except ValueError:
+            scatter = ax.scatter(coords[:, 0], coords[:, 1], c=values, s=point_size, cmap="viridis", linewidths=0)
+        colorbar = fig.colorbar(scatter, ax=ax, fraction=0.045, pad=0.04)
+        colorbar.set_label(str(gene_label))
 
         ax.set_title(figure_title)
         ax.set_xlabel("UMAP1")
@@ -693,7 +820,7 @@ class RuntimeState:
                 except RuntimeError:
                     color_by = ""
             if color_by and color_by not in adata.obs.columns:
-                color_by = self._cluster_field(target, adata, None)
+                raise RuntimeError(f"`{color_by}` 不是 obs 字段；如果要按基因表达着色，请使用 plot_gene_umap。")
             path = self._plot_path(session_root, skill, target.label)
             self._save_umap_plot(
                 adata,
@@ -733,6 +860,51 @@ class RuntimeState:
                     "point_size": point_size,
                     "figure_width": figure_width,
                     "figure_height": figure_height,
+                },
+            }
+
+        if skill == "plot_gene_umap":
+            target = self._require_target(target, skill)
+            adata = self._load_adata(target)
+            requested_genes = self._normalize_gene_list(params.get("genes"))
+            if not requested_genes:
+                raise RuntimeError("plot_gene_umap 需要至少一个基因。")
+
+            layer_name = str(params.get("layer") or "").strip() or None
+            artifacts: list[dict[str, Any]] = []
+            resolved_genes: list[dict[str, str]] = []
+            for requested_gene in requested_genes:
+                display_gene, gene_key, expression, source = self._resolve_gene_expression(adata, requested_gene, layer_name)
+                path = self._plot_path(session_root, skill, f"{target.label}_{display_gene}")
+                self._save_gene_umap_plot(adata, path, display_gene, expression)
+                artifacts.append(
+                    {
+                        "kind": "plot",
+                        "title": f"{target.label} 的 {display_gene} 基因 UMAP",
+                        "path": str(path),
+                        "content_type": "image/svg+xml",
+                        "summary": f"{target.label} 中 {display_gene} 的真实基因表达 UMAP 图。",
+                    }
+                )
+                resolved_genes.append(
+                    {
+                        "requested": display_gene,
+                        "feature_key": gene_key,
+                        "source": source,
+                    }
+                )
+
+            summary_bits = [f"已为 {target.label} 生成 {len(artifacts)} 个基因 UMAP 图：{format_list_zh(requested_genes)}。"]
+            if layer_name:
+                summary_bits.append(f"使用 layer：{layer_name}。")
+            return {
+                "summary": "".join(summary_bits),
+                "artifacts": artifacts,
+                "metadata": {
+                    "placeholder_plot": False,
+                    "genes": requested_genes,
+                    "resolved_genes": resolved_genes,
+                    "layer": layer_name,
                 },
             }
 
@@ -1408,6 +1580,12 @@ def dedupe_list(values: list[str]) -> list[str]:
         seen.add(value)
         out.append(value)
     return out
+
+
+def format_list_zh(values: list[str]) -> str:
+    if not values:
+        return "无"
+    return "、".join(values)
 
 
 def format_object_state_zh(state: str) -> str:
