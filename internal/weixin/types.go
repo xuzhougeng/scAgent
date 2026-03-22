@@ -2,12 +2,18 @@ package weixin
 
 // iLink Bot protocol types.
 // Ref: https://ilinkai.weixin.qq.com
+// Ref: https://github.com/wong2/weixin-agent-sdk packages/sdk/src/
+
+// BaseInfo is included in every API request per the iLink protocol.
+type BaseInfo struct {
+	ChannelVersion string `json:"channel_version"`
+}
 
 type QRCodeResponse struct {
-	Ret             int    `json:"ret"`
-	QRCode          string `json:"qrcode"`           // session identifier for polling
+	Ret              int    `json:"ret"`
+	QRCode           string `json:"qrcode"`             // session identifier for polling
 	QRCodeImgContent string `json:"qrcode_img_content"` // URL to encode as QR code
-	Message         string `json:"message"`
+	Message          string `json:"message"`
 }
 
 type QRCodeStatusResponse struct {
@@ -21,25 +27,22 @@ type QRCodeStatusResponse struct {
 }
 
 type GetUpdatesRequest struct {
-	GetUpdatesBuf string          `json:"get_updates_buf"`
-	BaseInfo      GetUpdatesBase  `json:"base_info"`
-}
-
-type GetUpdatesBase struct {
-	ChannelVersion string `json:"channel_version"`
+	GetUpdatesBuf string   `json:"get_updates_buf"`
+	BaseInfo      BaseInfo `json:"base_info"`
 }
 
 type GetUpdatesResponse struct {
-	Ret              int              `json:"ret"`
-	Msgs             []WeixinMessage  `json:"msgs"`
-	GetUpdatesBuf    string           `json:"get_updates_buf"`
-	LongPollingTimeout int            `json:"longpolling_timeout_ms"`
-	ErrCode          int              `json:"errcode"`
+	Ret                int             `json:"ret"`
+	Msgs               []WeixinMessage `json:"msgs"`
+	GetUpdatesBuf      string          `json:"get_updates_buf"`
+	LongPollingTimeout int             `json:"longpolling_timeout_ms"`
+	ErrCode            int             `json:"errcode"`
 }
 
 type WeixinMessage struct {
 	FromUserID   string        `json:"from_user_id"`
 	ToUserID     string        `json:"to_user_id"`
+	ClientID     string        `json:"client_id,omitempty"`
 	MessageType  int           `json:"message_type"`
 	MessageState int           `json:"message_state"`
 	ContextToken string        `json:"context_token"`
@@ -57,7 +60,8 @@ type TextItem struct {
 }
 
 type SendMessageRequest struct {
-	Msg WeixinMessage `json:"msg"`
+	Msg      WeixinMessage `json:"msg"`
+	BaseInfo BaseInfo      `json:"base_info"`
 }
 
 type SendMessageResponse struct {
@@ -66,13 +70,20 @@ type SendMessageResponse struct {
 	Message string `json:"message"`
 }
 
+type GetConfigRequest struct {
+	ILinkUserID  string   `json:"ilink_user_id"`
+	ContextToken string   `json:"context_token,omitempty"`
+	BaseInfo     BaseInfo `json:"base_info"`
+}
+
 type GetConfigResponse struct {
 	Ret          int    `json:"ret"`
 	TypingTicket string `json:"typing_ticket"`
 }
 
 type SendTypingRequest struct {
-	ToUserID     string `json:"to_user_id"`
-	TypingTicket string `json:"typing_ticket"`
-	ContextToken string `json:"context_token"`
+	ILinkUserID  string   `json:"ilink_user_id"`
+	TypingTicket string   `json:"typing_ticket"`
+	Status       int      `json:"status"` // 1=typing, 2=cancel
+	BaseInfo     BaseInfo `json:"base_info"`
 }

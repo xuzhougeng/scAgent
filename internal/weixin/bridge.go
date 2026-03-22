@@ -135,13 +135,18 @@ func (b *Bridge) LoadAccount() bool {
 	return true
 }
 
+// Logout removes saved account and session data.
+func (b *Bridge) Logout() error {
+	dir := filepath.Join(b.config.DataDir, "weixin-bridge")
+	for _, name := range []string{"account.json", "sessions.json", "sync_buf"} {
+		_ = os.Remove(filepath.Join(dir, name))
+	}
+	log.Printf("[weixin] logged out, credentials removed")
+	return nil
+}
+
 // Run starts the long-polling message loop. Blocks until ctx is cancelled.
 func (b *Bridge) Run(ctx context.Context) error {
-	// Try to get typing ticket
-	if cfg, err := b.client.GetConfig(); err == nil && cfg.TypingTicket != "" {
-		b.typingTicket = cfg.TypingTicket
-	}
-
 	log.Printf("[weixin] bridge started, polling for messages")
 
 	var updatesBuf string
@@ -158,8 +163,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 		default:
 		}
 
-		resp, err := b.client.GetUpdates(updatesBuf)
+		resp, err := b.client.GetUpdates(ctx, updatesBuf)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			log.Printf("[weixin] getUpdates error: %v", err)
 			time.Sleep(5 * time.Second)
 			continue
@@ -193,28 +201,52 @@ func (b *Bridge) Run(ctx context.Context) error {
 }
 
 func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextToken string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[weixin] panic handling message from %s: %v", fromUserID, r)
+		}
+	}()
+
 	log.Printf("[weixin] %s: %s", fromUserID, truncate(text, 80))
 
-	// Handle slash commands
+	// Handle slash commands — normalize full-width "／" (Chinese IME) to ASCII "/"
+	if strings.HasPrefix(text, "／") {
+		text = "/" + strings.TrimPrefix(text, "／")
+	}
 	if strings.HasPrefix(text, "/") {
 		reply := b.handleSlashCommand(ctx, fromUserID, text)
 		if reply != "" {
-			_ = b.client.SendTextMessage(fromUserID, reply, contextToken)
+			if err := b.client.SendTextMessage(ctx, fromUserID, reply, contextToken); err != nil {
+				log.Printf("[weixin] failed to send slash reply to %s: %v", fromUserID, err)
+			} else {
+				log.Printf("[weixin] slash reply sent to %s: %s", fromUserID, truncate(reply, 40))
+			}
 			return
 		}
 		// Not a recognized command — fall through to normal processing
 	}
 
-	// Send typing indicator
+	// Ping test
+	if strings.EqualFold(text, "hi") {
+		_ = b.client.SendTextMessage(ctx, fromUserID, "hello, i'm back", contextToken)
+		return
+	}
+
+	// Fetch typing ticket on demand (per-user) and send indicator
+	if b.typingTicket == "" {
+		if cfg, err := b.client.GetConfig(ctx, fromUserID, contextToken); err == nil && cfg.TypingTicket != "" {
+			b.typingTicket = cfg.TypingTicket
+		}
+	}
 	if b.typingTicket != "" {
-		_ = b.client.SendTyping(fromUserID, b.typingTicket, contextToken)
+		_ = b.client.SendTyping(ctx, fromUserID, b.typingTicket)
 	}
 
 	// Resolve or create scAgent session
 	sessionID, err := b.resolveSession(ctx, fromUserID)
 	if err != nil {
 		log.Printf("[weixin] session resolve error: %v", err)
-		_ = b.client.SendTextMessage(fromUserID, "系统错误，请稍后重试", contextToken)
+		_ = b.client.SendTextMessage(ctx, fromUserID, "系统错误，请稍后重试", contextToken)
 		return
 	}
 
@@ -226,21 +258,23 @@ func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextTok
 		b.deleteSession(fromUserID)
 		sessionID, err = b.resolveSession(ctx, fromUserID)
 		if err != nil {
-			_ = b.client.SendTextMessage(fromUserID, "系统错误，请稍后重试", contextToken)
+			_ = b.client.SendTextMessage(ctx, fromUserID, "系统错误，请稍后重试", contextToken)
 			return
 		}
 		job, _, err = b.service.SubmitMessage(ctx, sessionID, text)
 		if err != nil {
 			log.Printf("[weixin] submit retry failed: %v", err)
-			_ = b.client.SendTextMessage(fromUserID, fmt.Sprintf("提交失败: %v", err), contextToken)
+			_ = b.client.SendTextMessage(ctx, fromUserID, fmt.Sprintf("提交失败: %v", err), contextToken)
 			return
 		}
 	}
 
 	// Wait for job completion via event subscription
 	reply := b.waitForJob(ctx, sessionID, job.ID)
-	if err := b.client.SendTextMessage(fromUserID, reply, contextToken); err != nil {
-		log.Printf("[weixin] send reply error: %v", err)
+	if err := b.client.SendTextMessage(ctx, fromUserID, reply, contextToken); err != nil {
+		log.Printf("[weixin] send reply error to %s: %v", fromUserID, err)
+	} else {
+		log.Printf("[weixin] replied to %s (%d chars)", fromUserID, len(reply))
 	}
 }
 
@@ -253,7 +287,7 @@ func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string
 	case "/help":
 		return "可用命令:\n" +
 			"/status — 查看当前会话状态\n" +
-			"/workspaces — 列出所有工作区\n" +
+			"/list — 列出所有工作区（别名 /workspaces）\n" +
 			"/switch <workspace_id> — 切换到指定工作区\n" +
 			"/new — 创建新工作区+会话\n" +
 			"/reset — 重置会话映射（在当前工作区新建对话）\n" +
@@ -278,7 +312,7 @@ func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string
 			snapshot.Session.ID, ws.ID, ws.Label,
 			len(snapshot.Objects), len(snapshot.Messages))
 
-	case "/workspaces":
+	case "/workspaces", "/list":
 		wsList := b.service.ListWorkspaces()
 		if wsList == nil || len(wsList.Workspaces) == 0 {
 			return "暂无工作区。发送任意消息将自动创建。"

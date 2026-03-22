@@ -80,7 +80,18 @@ fi
 
 cleanup() {
   if [[ -n "${RUNTIME_PID:-}" ]]; then
-    kill "${RUNTIME_PID}" >/dev/null 2>&1 || true
+    local runtime_target="${RUNTIME_PID}"
+    if [[ "${RUNTIME_OWN_PG:-0}" == "1" ]]; then
+      runtime_target="-${RUNTIME_PID}"
+    fi
+
+    kill "${runtime_target}" >/dev/null 2>&1 || true
+    # Give Python 2s to shut down, then force kill
+    for _ in 1 2 3 4; do
+      kill -0 "${RUNTIME_PID}" 2>/dev/null || return 0
+      sleep 0.5
+    done
+    kill -9 "${runtime_target}" >/dev/null 2>&1 || true
     wait "${RUNTIME_PID}" >/dev/null 2>&1 || true
   fi
 }
@@ -93,8 +104,13 @@ echo "  runtime command: ${runtime_cmd[*]}"
 echo "  runtime url:     ${SCAGENT_RUNTIME_URL}"
 echo "  server addr:     ${SCAGENT_ADDR}"
 
+# Run the runtime in its own process group so Ctrl+C only hits the
+# foreground Go process. The shell trap will clean the runtime up.
+set -m
 "${runtime_cmd[@]}" &
 RUNTIME_PID=$!
+RUNTIME_OWN_PG=1
+set +m
 
 for _ in $(seq 1 30); do
   if curl -s "${SCAGENT_RUNTIME_URL}/healthz" >/dev/null; then

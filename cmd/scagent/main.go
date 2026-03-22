@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"scagent/internal/app"
@@ -29,6 +31,7 @@ func main() {
 	openAIAPIKey := flag.String("openai-api-key", envOrDefault("SCAGENT_OPENAI_API_KEY", ""), "API key for the LLM planner")
 	weixinEnabled := flag.Bool("weixin", envOrDefault("WEIXIN_BRIDGE_ENABLED", "0") == "1", "Enable WeChat bridge")
 	weixinLogin := flag.Bool("weixin-login", false, "Run WeChat QR login then exit")
+	weixinLogout := flag.Bool("weixin-logout", false, "Remove saved WeChat credentials and exit")
 	flag.Parse()
 
 	server, err := app.NewServer(app.Config{
@@ -68,6 +71,17 @@ func main() {
 		return
 	}
 
+	// Logout mode
+	if *weixinLogout {
+		if err := bridge.Logout(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	shutdownCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
 	// Start WeChat bridge in background
 	if *weixinEnabled {
 		if !bridge.LoadAccount() {
@@ -76,27 +90,51 @@ func main() {
 				log.Fatalf("[weixin] login failed: %v", err)
 			}
 		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		// Graceful shutdown on signal
 		go func() {
-			sigCh := make(chan os.Signal, 1)
-			signal.Notify(sigCh, os.Interrupt)
-			<-sigCh
-			cancel()
-		}()
-
-		go func() {
-			if err := bridge.Run(ctx); err != nil {
+			if err := bridge.Run(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("[weixin] bridge stopped: %v", err)
 			}
 		}()
 	}
 
-	log.Printf("scAgent listening on %s", *addr)
-	log.Fatal(http.ListenAndServe(*addr, server.Handler))
+	httpServer := &http.Server{
+		Addr:    *addr,
+		Handler: server.Handler,
+	}
+	serverErrCh := make(chan error, 1)
+
+	go func() {
+		log.Printf("scAgent listening on %s", *addr)
+		err := httpServer.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrCh <- err
+			return
+		}
+		serverErrCh <- nil
+	}()
+
+	select {
+	case err := <-serverErrCh:
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	case <-shutdownCtx.Done():
+	}
+
+	// Restore default signal behavior after the first interrupt so a second
+	// Ctrl+C can still terminate the process immediately.
+	stopSignals()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := httpServer.Shutdown(ctx); err != nil {
+		log.Printf("http server shutdown failed: %v", err)
+	}
+
+	if err := <-serverErrCh; err != nil {
+		log.Fatal(err)
+	}
 }
 
 func envOrDefault(key, fallback string) string {

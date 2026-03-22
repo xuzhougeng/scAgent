@@ -158,6 +158,30 @@ Authorization: Bearer <bot_token>               // 登录后获得
 
 **`context_token`** 是协议中最关键的字段——回复时必须原样携带，否则消息不会关联到正确的对话窗口。
 
+### 发送消息必填字段
+
+```json
+POST /ilink/bot/sendmessage
+{
+  "msg": {
+    "to_user_id": "xxx@im.wechat",
+    "client_id": "openclaw-weixin-1742000000000-12345",
+    "message_type": 2,
+    "message_state": 2,
+    "context_token": "AARzJWAF...",
+    "item_list": [{ "type": 1, "text_item": { "text": "回复内容" } }]
+  },
+  "base_info": { "channel_version": "1.0.2" }
+}
+```
+
+**关键踩坑点：**
+
+- **`client_id`（必须）**：每条消息必须携带唯一 ID（格式 `openclaw-weixin-<timestamp>-<random>`）。缺失时服务端会将后续消息视为重复并静默丢弃，导致"第一条消息能回复，后续全部无响应"。参见 `send.ts` 中的 `generateId()`。
+- **`base_info`（必须）**：所有 POST 请求（`sendmessage`、`sendtyping`、`getconfig`、`getupdates`）都必须在请求体顶层携带 `base_info: { channel_version: "1.0.2" }`，不仅是 `getupdates`。参见 `api.ts` 中所有请求均追加 `base_info`。
+- **`sendtyping` 字段差异**：收件人字段为 `ilink_user_id`（非 `to_user_id`），且必须包含 `status: 1`（typing）或 `status: 2`（cancel）。
+- **`getconfig` 需要用户信息**：必须传 `ilink_user_id` 和 `context_token`，空 body 可能返回无效 ticket。
+
 ### 长轮询
 
 ```json

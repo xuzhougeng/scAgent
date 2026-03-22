@@ -1,4 +1,4 @@
-.PHONY: dev restore weixin weixin-login
+.PHONY: dev restore weixin weixin-login weixin-logout
 
 DATA_DIR ?= $(if $(SCAGENT_DATA_DIR),$(SCAGENT_DATA_DIR),data)
 
@@ -10,6 +10,9 @@ weixin:
 
 weixin-login:
 	go run ./cmd/scagent -weixin-login
+
+weixin-logout:
+	go run ./cmd/scagent -weixin-logout
 
 restore:
 	@echo "Resetting $(DATA_DIR)/state/store.db and $(DATA_DIR)/workspaces"

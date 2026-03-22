@@ -66,6 +66,12 @@ You can also use:
 make dev
 ```
 
+To reset persisted workspace metadata and materialized workspace files under the current `SCAGENT_DATA_DIR` (default `data`), use:
+
+```bash
+make restore
+```
+
 Or run both processes manually:
 
 ```bash
