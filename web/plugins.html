@@ -59,7 +59,7 @@
           <div>
             <p class="eyebrow">Skill Hub</p>
             <h2>插件与技能包</h2>
-            <p class="muted">技能统一放在右侧技能包区域。展开某个技能包后即可查看全部技能，点击任一技能可在右侧检查器里查看说明、输入输出规范和实现方式。</p>
+            <p class="muted">技能统一放在右侧技能包区域。展开某个技能包后即可查看全部技能，点击任一技能会以悬浮窗打开说明、输入输出规范和实现方式，按 ESC 可快速退出。</p>
           </div>
         </header>
         <div class="hub-workspace">
@@ -70,18 +70,29 @@
             </div>
             <section id="bundleList" class="bundle-grid"></section>
           </section>
-
-          <aside class="inspector-column">
-            <div class="inspector-card">
-              <div class="section-head">
-                <h3>技能详情</h3>
-                <p class="muted">点击某个技能后，在这里查看字段规范、目标对象和实现配置。</p>
-              </div>
-              <div id="skillDetail" class="skill-detail"></div>
-            </div>
-          </aside>
         </div>
       </main>
+    </div>
+
+    <div id="skillDetailModal" class="skill-detail-modal" hidden aria-hidden="true">
+      <div class="skill-detail-backdrop" data-close-skill-detail></div>
+      <section
+        class="skill-detail-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="skillDetailModalTitle"
+        tabindex="-1"
+      >
+        <div class="skill-detail-dialog-head">
+          <div>
+            <p class="eyebrow">技能详情</p>
+            <h3 id="skillDetailModalTitle">查看技能规范</h3>
+            <p class="muted">按 ESC 可关闭悬浮窗，按方向键可切换不同技能</p>
+          </div>
+          <button id="skillDetailClose" type="button" class="ghost-button">关闭</button>
+        </div>
+        <div id="skillDetail" class="skill-detail-modal-body"></div>
+      </section>
     </div>
 
     <script src="/plugins.js" defer></script>

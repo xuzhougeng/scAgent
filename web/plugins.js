@@ -6,6 +6,7 @@ const hubState = {
   openBundles: new Set(),
   selectedBundleID: "",
   selectedSkillName: "",
+  detailModalOpen: false,
 };
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -18,6 +19,8 @@ function bindHub() {
   const fileInput = document.getElementById("pluginFileInput");
   const refreshButton = document.getElementById("refreshButton");
   const bundleList = document.getElementById("bundleList");
+  const detailModal = document.getElementById("skillDetailModal");
+  const detailCloseButton = document.getElementById("skillDetailClose");
 
   uploadForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -56,7 +59,9 @@ function bindHub() {
     if (skillButton) {
       hubState.selectedBundleID = skillButton.getAttribute("data-bundle-id") || "";
       hubState.selectedSkillName = skillButton.getAttribute("data-select-skill") || "";
+      hubState.detailModalOpen = true;
       render();
+      focusDetailModal();
       return;
     }
 
@@ -91,6 +96,43 @@ function bindHub() {
     } finally {
       hubState.busyBundles.delete(bundleID);
       render();
+    }
+  });
+
+  detailCloseButton?.addEventListener("click", () => {
+    closeDetailModal();
+  });
+
+  detailModal?.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.hasAttribute("data-close-skill-detail")) {
+      closeDetailModal();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (!hubState.detailModalOpen) {
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDetailModal();
+      return;
+    }
+    if (shouldIgnoreDetailKeydown(event.target) || event.altKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
+
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      if (navigateDetailSelection(-1)) {
+        event.preventDefault();
+      }
+      return;
+    }
+
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      if (navigateDetailSelection(1)) {
+        event.preventDefault();
+      }
     }
   });
 }
@@ -135,6 +177,7 @@ function render() {
   renderSummary();
   renderBundles();
   renderSkillDetail();
+  syncDetailModal();
   bindBundleToggles();
 }
 
@@ -221,7 +264,7 @@ function renderBundles() {
 
             <div class="bundle-skills-head">
               <strong>技能列表</strong>
-              <span class="muted">点击某个技能查看详细规范</span>
+              <span class="muted">点击某个技能在悬浮窗中查看详细规范</span>
             </div>
             <div class="skill-button-grid ${bundle.enabled ? "" : "disabled-skills"}">
               ${(bundle.skills || [])
@@ -271,7 +314,7 @@ function renderSkillDetail() {
     container.innerHTML = `
       <section class="detail-empty">
         <strong>还没有选中技能</strong>
-        <p>在左侧技能包列表中展开一个 bundle，然后点击任意技能，即可查看该技能的说明、参数规范、输出约定和运行配置。</p>
+        <p>在列表中展开一个 bundle，然后点击任意技能，即可通过悬浮窗查看说明、参数规范、输出约定和运行配置。</p>
       </section>
     `;
     return;
@@ -414,6 +457,95 @@ function renderRuntimeSpec(bundle, skill) {
   }
 
   return "<p class='muted'>当前没有可展示的 runtime 配置。</p>";
+}
+
+function syncDetailModal() {
+  const modal = document.getElementById("skillDetailModal");
+  const dialog = modal?.querySelector(".skill-detail-dialog");
+  const hasSelection = Boolean(findSelectedSkillRecord());
+  if (!modal || !dialog) {
+    return;
+  }
+  if (!hasSelection) {
+    hubState.detailModalOpen = false;
+  }
+  const isOpen = hubState.detailModalOpen;
+
+  modal.hidden = !isOpen;
+  modal.setAttribute("aria-hidden", isOpen ? "false" : "true");
+  document.body.classList.toggle("detail-modal-open", isOpen);
+}
+
+function focusDetailModal() {
+  window.requestAnimationFrame(() => {
+    document.getElementById("skillDetailClose")?.focus();
+  });
+}
+
+function closeDetailModal() {
+  if (!hubState.detailModalOpen) {
+    return;
+  }
+  hubState.detailModalOpen = false;
+  syncDetailModal();
+  window.requestAnimationFrame(() => {
+    findSelectedSkillButton()?.focus();
+  });
+}
+
+function findSelectedSkillButton() {
+  const buttons = document.querySelectorAll("[data-select-skill]");
+  for (const button of buttons) {
+    if (
+      button.getAttribute("data-bundle-id") === hubState.selectedBundleID &&
+      button.getAttribute("data-select-skill") === hubState.selectedSkillName
+    ) {
+      return button;
+    }
+  }
+  return null;
+}
+
+function navigateDetailSelection(step) {
+  const records = listSkillRecords();
+  if (!records.length) {
+    return false;
+  }
+
+  const currentIndex = records.findIndex(
+    ({ bundle, skill }) =>
+      bundle.id === hubState.selectedBundleID && skill.name === hubState.selectedSkillName,
+  );
+  if (currentIndex === -1) {
+    return false;
+  }
+
+  const nextIndex = currentIndex + step;
+  if (nextIndex < 0 || nextIndex >= records.length) {
+    return false;
+  }
+
+  const nextRecord = records[nextIndex];
+  hubState.selectedBundleID = nextRecord.bundle.id;
+  hubState.selectedSkillName = nextRecord.skill.name;
+  hubState.openBundles.add(nextRecord.bundle.id);
+  render();
+  return true;
+}
+
+function listSkillRecords() {
+  return hubState.bundles.flatMap((bundle) =>
+    (bundle.skills || []).map((skill) => ({ bundle, skill })),
+  );
+}
+
+function shouldIgnoreDetailKeydown(target) {
+  return target instanceof HTMLElement && (
+    target.isContentEditable ||
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT"
+  );
 }
 
 function findSelectedSkillRecord() {
