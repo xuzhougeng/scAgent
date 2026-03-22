@@ -195,6 +195,54 @@ func TestFakePlannerSubsetsNamedCellTypeThenPlotsUMAP(t *testing.T) {
 	}
 }
 
+func TestFakePlannerUsesGlobalSubclusterSkillForCellTypeSubclusterRequests(t *testing.T) {
+	planner := NewFakePlanner()
+
+	plan, err := planner.Plan(context.Background(), PlanningRequest{
+		Message: "保持全局不动，只对B cells做亚群分析",
+		ActiveObject: &models.ObjectMeta{
+			Kind: models.ObjectFilteredDataset,
+			Metadata: map[string]any{
+				"cell_type_annotation": map[string]any{
+					"sample_values": []any{"B cells", "T cells"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run fake planner: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("unexpected steps: %+v", plan.Steps)
+	}
+	if plan.Steps[0].Skill != "subcluster_from_global" {
+		t.Fatalf("expected subcluster_from_global, got %+v", plan.Steps)
+	}
+	if plan.Steps[0].Params["value"] != "B cells" {
+		t.Fatalf("expected B cells subgroup, got %+v", plan.Steps[0].Params)
+	}
+}
+
+func TestFakePlannerUsesSubsetReanalysisSkillForExtractedSubgroups(t *testing.T) {
+	planner := NewFakePlanner()
+
+	plan, err := planner.Plan(context.Background(), PlanningRequest{
+		Message: "对这个提取出来的亚群重新做亚群分析",
+		ActiveObject: &models.ObjectMeta{
+			Kind: models.ObjectSubset,
+		},
+	})
+	if err != nil {
+		t.Fatalf("run fake planner: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("unexpected steps: %+v", plan.Steps)
+	}
+	if plan.Steps[0].Skill != "reanalyze_subset" {
+		t.Fatalf("expected reanalyze_subset, got %+v", plan.Steps)
+	}
+}
+
 func TestFakePlannerCarriesExplicitPlotParams(t *testing.T) {
 	planner := NewFakePlanner()
 

@@ -61,7 +61,9 @@ BUILTIN_EXECUTABLE_SKILLS = [
     "run_umap",
     "prepare_umap",
     "subset_cells",
+    "subcluster_from_global",
     "recluster",
+    "reanalyze_subset",
     "find_markers",
     "plot_umap",
     "plot_gene_umap",
@@ -376,6 +378,63 @@ class RuntimeState:
         if target.kind == "raw_dataset":
             return "filtered_dataset"
         return target.kind
+
+    def _build_obs_mask(self, adata: Any, obs_field: str, op: str, value: Any) -> Any:
+        _, _, _, np, _ = analysis_modules()
+        field_name = str(obs_field or "").strip()
+        if field_name == "" or field_name not in adata.obs.columns:
+            raise RuntimeError(f"当前对象缺少 obs 字段 `{field_name}`。")
+
+        series = adata.obs[field_name]
+        operator = str(op or "eq").strip()
+        if operator == "eq":
+            mask = series.astype(str) == str(value)
+        elif operator == "in":
+            values = value if isinstance(value, list) else [value]
+            mask = series.astype(str).isin([str(item) for item in values])
+        elif operator == "gt":
+            mask = series.astype(float) > float(value)
+        elif operator == "lt":
+            mask = series.astype(float) < float(value)
+        else:
+            raise RuntimeError(f"不支持的筛选操作符：{operator}")
+
+        if hasattr(mask, "to_numpy"):
+            return mask.to_numpy()
+        return np.asarray(mask)
+
+    def _run_subcluster_workflow(self, adata: Any, params: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+        _, sc, _, _, _ = analysis_modules()
+        if adata.n_obs < 3 or adata.n_vars < 3:
+            raise RuntimeError("亚群分析至少需要 3 个细胞和 3 个基因。")
+
+        n_top_genes = int(params.get("n_top_genes") or 2000)
+        n_neighbors = int(params.get("n_neighbors") or 15)
+        min_dist = float(params.get("min_dist") or 0.5)
+        resolution = float(params.get("resolution") or 0.6)
+
+        sc.pp.normalize_total(adata, target_sum=1e4)
+        sc.pp.log1p(adata)
+        sc.pp.highly_variable_genes(adata, n_top_genes=n_top_genes, flavor="seurat", subset=True)
+        if adata.n_obs < 3 or adata.n_vars < 3:
+            raise RuntimeError("亚群分析后的对象维度过小，无法继续 PCA/邻接图/UMAP。")
+
+        max_comps = min(30, adata.n_obs - 1, adata.n_vars - 1)
+        if max_comps < 2:
+            raise RuntimeError("亚群分析至少需要两个主成分，请检查筛选后的细胞数和基因数。")
+
+        sc.pp.pca(adata, n_comps=max_comps)
+        sc.pp.neighbors(adata, n_neighbors=n_neighbors, n_pcs=min(30, adata.obsm["X_pca"].shape[1]))
+        sc.tl.umap(adata, min_dist=min_dist)
+        sc.tl.leiden(adata, resolution=resolution, key_added="leiden")
+
+        return adata, {
+            "n_top_genes": n_top_genes,
+            "n_neighbors": n_neighbors,
+            "min_dist": min_dist,
+            "resolution": resolution,
+            "n_comps": max_comps,
+        }
 
     def _plot_path(self, session_root: Path, skill: str, label: str) -> Path:
         path = session_root / "artifacts" / f"{skill}_{slug(label)}.svg"
@@ -950,23 +1009,9 @@ class RuntimeState:
             obs_field = str(params.get("obs_field") or "").strip()
             op = str(params.get("op") or "eq").strip()
             value = params.get("value")
-            if obs_field == "" or obs_field not in adata.obs.columns:
-                raise RuntimeError(f"当前对象缺少 obs 字段 `{obs_field}`。")
+            mask = self._build_obs_mask(adata, obs_field, op, value)
 
-            series = adata.obs[obs_field]
-            if op == "eq":
-                mask = series.astype(str) == str(value)
-            elif op == "in":
-                values = value if isinstance(value, list) else [value]
-                mask = series.astype(str).isin([str(item) for item in values])
-            elif op == "gt":
-                mask = series.astype(float) > float(value)
-            elif op == "lt":
-                mask = series.astype(float) < float(value)
-            else:
-                raise RuntimeError(f"不支持的筛选操作符：{op}")
-
-            subset = adata[mask.to_numpy()].copy()
+            subset = adata[mask].copy()
             if subset.n_obs == 0:
                 raise RuntimeError("筛选结果为空，请检查筛选条件。")
             subset_label = f"subset_{obs_field}_{slug(str(value)) or 'selected'}"
@@ -977,6 +1022,31 @@ class RuntimeState:
                 kind="subset",
                 adata=subset,
                 summary=f"已从 {target.label} 中筛选出 {subset.n_obs} 个细胞，生成子集 {subset_label}。",
+            )
+
+        if skill == "subcluster_from_global":
+            target = self._require_target(target, skill)
+            adata = self._load_counts_adata(target)
+            obs_field = str(params.get("obs_field") or "").strip()
+            op = str(params.get("op") or "eq").strip()
+            value = params.get("value")
+            mask = self._build_obs_mask(adata, obs_field, op, value)
+            subset = adata[mask].copy()
+            if subset.n_obs == 0:
+                raise RuntimeError("亚群分析筛选结果为空，请检查筛选条件。")
+
+            analyzed_subset, workflow = self._run_subcluster_workflow(subset, params)
+            subset_label = f"subcluster_{obs_field}_{slug(str(value)) or 'selected'}"
+            return self._persist_adata_object(
+                session_id=session_id,
+                session_root=session_root,
+                label=subset_label,
+                kind="reclustered_subset",
+                adata=analyzed_subset,
+                summary=(
+                    f"已保持 {target.label} 不变，并仅对 {obs_field}={value} 的 {analyzed_subset.n_obs} 个细胞完成亚群分析。"
+                    f"流程包括归一化、log1p、高变基因、PCA、邻接图、UMAP 和 Leiden（resolution={workflow['resolution']}）。"
+                ),
             )
 
         if skill == "recluster":
@@ -996,6 +1066,22 @@ class RuntimeState:
                 kind="reclustered_subset",
                 adata=adata,
                 summary=f"已对 {target.label} 完成重新聚类，分辨率为 {resolution}。",
+            )
+
+        if skill == "reanalyze_subset":
+            target = self._require_target(target, skill)
+            adata = self._load_counts_adata(target)
+            analyzed_subset, workflow = self._run_subcluster_workflow(adata, params)
+            return self._persist_adata_object(
+                session_id=session_id,
+                session_root=session_root,
+                label=f"reanalyzed_{target.label}",
+                kind="reclustered_subset",
+                adata=analyzed_subset,
+                summary=(
+                    f"已对提取亚群 {target.label} 重新执行低计数友好的亚群分析。"
+                    f"流程包括归一化、log1p、高变基因、PCA、邻接图、UMAP 和 Leiden（resolution={workflow['resolution']}）。"
+                ),
             )
 
         if skill == "find_markers":

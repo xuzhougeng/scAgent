@@ -490,6 +490,61 @@
       }
     },
     {
+      "name": "subcluster_from_global",
+      "label": "Subcluster from global",
+      "category": "clustering",
+      "support_level": "wired",
+      "description": "Keep the parent object unchanged, isolate one annotation group, and rerun a low-count-friendly subcluster workflow only on that subgroup.",
+      "target_kinds": ["raw_dataset", "filtered_dataset", "subset", "reclustered_subset"],
+      "input": {
+        "target_object_id": {
+          "type": "string",
+          "required": false,
+          "description": "Parent object used as the global reference. Defaults to the active object."
+        },
+        "obs_field": {
+          "type": "string",
+          "required": true,
+          "description": "Obs field used to isolate the subgroup."
+        },
+        "op": {
+          "type": "string",
+          "required": false,
+          "enum": ["eq", "in", "gt", "lt"],
+          "description": "Comparison operator used for subgroup isolation."
+        },
+        "value": {
+          "type": "string|number|array",
+          "required": true,
+          "description": "Subgroup value to isolate before subclustering."
+        },
+        "n_top_genes": {
+          "type": "number",
+          "required": false,
+          "description": "Number of highly variable genes kept for subcluster analysis."
+        },
+        "n_neighbors": {
+          "type": "number",
+          "required": false,
+          "description": "Neighbor count used for the subgroup graph."
+        },
+        "min_dist": {
+          "type": "number",
+          "required": false,
+          "description": "UMAP min_dist parameter used for the subgroup embedding."
+        },
+        "resolution": {
+          "type": "number",
+          "required": false,
+          "description": "Resolution used for subgroup reclustering."
+        }
+      },
+      "output": {
+        "new_object": "object",
+        "summary": "string"
+      }
+    },
+    {
       "name": "score_gene_set",
       "label": "Score gene set",
       "category": "subsetting",
@@ -535,6 +590,45 @@
           "type": "number",
           "required": false,
           "description": "Leiden-style resolution."
+        }
+      },
+      "output": {
+        "new_object": "object",
+        "summary": "string"
+      }
+    },
+    {
+      "name": "reanalyze_subset",
+      "label": "Reanalyze subset",
+      "category": "clustering",
+      "support_level": "wired",
+      "description": "Take an already extracted subgroup and rerun a low-count-friendly subcluster workflow on that subset.",
+      "target_kinds": ["subset", "reclustered_subset"],
+      "input": {
+        "target_object_id": {
+          "type": "string",
+          "required": false,
+          "description": "Subset object to reanalyze. Defaults to the active object."
+        },
+        "n_top_genes": {
+          "type": "number",
+          "required": false,
+          "description": "Number of highly variable genes kept for the subset reanalysis."
+        },
+        "n_neighbors": {
+          "type": "number",
+          "required": false,
+          "description": "Neighbor count used for the subset graph."
+        },
+        "min_dist": {
+          "type": "number",
+          "required": false,
+          "description": "UMAP min_dist parameter used for the subset embedding."
+        },
+        "resolution": {
+          "type": "number",
+          "required": false,
+          "description": "Resolution used for the subset reclustering."
         }
       },
       "output": {

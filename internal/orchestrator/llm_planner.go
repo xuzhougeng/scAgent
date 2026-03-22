@@ -199,6 +199,8 @@ func (p *LLMPlanner) instructions(requestPayload PlanningRequest) string {
 		"Prefer the fewest valid steps needed to satisfy the request.",
 		"Compose multiple skills when the user asks for a workflow, not just a single action.",
 		"If the user asks for routine preprocessing, prefer a chain such as normalize_total -> log1p_transform -> select_hvg -> run_pca -> compute_neighbors -> run_umap when those skills are available and appropriate.",
+		"If the user asks to reanalyze an already extracted subgroup or subset, prefer reanalyze_subset over composing low-level preprocessing steps by hand.",
+		"If the user asks to keep the global object unchanged but perform subgroup analysis on one cell type such as B cells, prefer subcluster_from_global when the request can be expressed with obs_field/op/value.",
 		"If the request is about plot presentation details such as legends, colors, or labels, prefer the closest visualization skill such as plot_umap instead of returning an empty plan.",
 		"If the user asks for a UMAP colored by one or more genes, or mentions gene symbols such as LDHB or GATA3 in a UMAP request, prefer plot_gene_umap over plot_umap.",
 		"If the user provides explicit plotting kwargs such as legend_loc='on data' or point_size=12, copy them into params when the selected skill supports them.",

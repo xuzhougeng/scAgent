@@ -39,7 +39,9 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 	explicitPlotParams := parseExplicitPlotParams(request.Message)
 	wantsLegend := strings.Contains(lower, "legend") || strings.Contains(request.Message, "图例")
 	wantsPlot := strings.Contains(lower, "plot") || strings.Contains(request.Message, "画") || strings.Contains(request.Message, "绘") || wantsLegend
+	wantsSubcluster := strings.Contains(lower, "subcluster") || strings.Contains(request.Message, "亚群")
 	activeHasUMAP := objectHasEmbedding(request.ActiveObject, "X_umap")
+	activeIsSubset := request.ActiveObject != nil && (request.ActiveObject.Kind == models.ObjectSubset || request.ActiveObject.Kind == models.ObjectReclustered)
 	recentPlotSkill := latestRecentPlotSkill(request)
 	wantsPlotFollowUp := strings.Contains(request.Message, "这个图") ||
 		strings.Contains(request.Message, "这张图") ||
@@ -64,7 +66,31 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		)
 	}
 
-	if strings.Contains(lower, "subset") || strings.Contains(request.Message, "提取") || strings.Contains(request.Message, "拿出来") || strings.Contains(request.Message, "筛") || strings.Contains(request.Message, "cortex") || cellTypeValue != "" {
+	if wantsSubcluster && activeIsSubset {
+		steps = append(steps, models.PlanStep{
+			ID:             stepID(len(steps) + 1),
+			Skill:          "reanalyze_subset",
+			TargetObjectID: targetFromPrevious(steps),
+			Params: map[string]any{
+				"resolution": 0.6,
+			},
+		})
+	} else if wantsSubcluster && cellTypeValue != "" {
+		steps = append(steps, models.PlanStep{
+			ID:             stepID(len(steps) + 1),
+			Skill:          "subcluster_from_global",
+			TargetObjectID: targetFromPrevious(steps),
+			Params: map[string]any{
+				"obs_field":   "cell_type",
+				"op":          "eq",
+				"value":       cellTypeValue,
+				"resolution":  0.6,
+				"n_neighbors": 15,
+			},
+		})
+	}
+
+	if !wantsSubcluster && (strings.Contains(lower, "subset") || strings.Contains(request.Message, "提取") || strings.Contains(request.Message, "拿出来") || strings.Contains(request.Message, "筛") || strings.Contains(request.Message, "cortex") || cellTypeValue != "") {
 		value := "cortex"
 		if cellTypeValue != "" {
 			value = cellTypeValue
@@ -106,7 +132,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 	}
 
 	if strings.Contains(lower, "umap") || strings.Contains(request.Message, "UMAP") || strings.Contains(request.Message, "降维") || wantsLegend || (wantsPlotFollowUp && recentPlotSkill == "plot_umap") {
-		if !hasSkill(steps, "run_umap") && ((!wantsPlot && !wantsPlotFollowUp) || !activeHasUMAP) {
+		if !hasSkill(steps, "run_umap") && !hasSkill(steps, "prepare_umap") && !hasSkill(steps, "subcluster_from_global") && !hasSkill(steps, "reanalyze_subset") && ((!wantsPlot && !wantsPlotFollowUp) || !activeHasUMAP) {
 			steps = append(steps, models.PlanStep{
 				ID:             stepID(len(steps) + 1),
 				Skill:          "run_umap",
