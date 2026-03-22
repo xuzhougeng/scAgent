@@ -137,6 +137,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindUpload();
   bindPlannerPreview();
   bindImageModal();
+  bindStatusOverviewModal();
   renderQuickActions();
   await bootstrap();
 });
@@ -586,7 +587,8 @@ function connectEvents() {
 }
 
 function render() {
-  renderSystemStatus();
+  renderStatusOverviewEntry();
+  renderStatusOverviewModal();
   renderSessionMeta();
   renderSkillHub();
   renderObjectTree();
@@ -614,12 +616,10 @@ function renderSidebarCard({ title, body, badge = "", open = true }) {
   `;
 }
 
-function renderSystemStatus() {
-  const container = document.getElementById("systemStatus");
+function buildSystemStatusMarkup() {
   const status = appState.systemStatus;
   if (!status) {
-    container.innerHTML = "<p class='muted'>系统状态暂不可用。</p>";
-    return;
+    return "<p class='muted'>系统状态暂不可用。</p>";
   }
 
   const pills = [
@@ -637,11 +637,10 @@ function renderSystemStatus() {
   const failingChecks = environmentChecks.filter((check) => !check.ok);
 
   const cards = [
-    renderSidebarCard({
-      title: "系统状态",
-      badge: statusPill(status.system_mode === "live" ? "ok" : "warn", formatSystemMode(status.system_mode)),
-      body: `
-        <p class="muted">${escapeHTML(status.summary || "")}</p>
+      renderSidebarCard({
+        title: "系统状态",
+        badge: statusPill(status.system_mode === "live" ? "ok" : "warn", formatSystemMode(status.system_mode)),
+        body: `
         <div class="status-pills">${pills.join("")}</div>
         <div class="status-detail-grid">
           <div class="kv"><span>运行模式</span><span>${escapeHTML(formatRuntimeMode(status.runtime_mode))}</span></div>
@@ -717,8 +716,85 @@ function renderSystemStatus() {
     );
   }
 
-  container.innerHTML = cards.join("");
-  bindLoadedSkillButtons(container);
+  return cards.join("");
+}
+
+function renderStatusOverviewEntry() {
+  const container = document.getElementById("statusOverviewEntry");
+  const status = appState.systemStatus;
+  if (!status) {
+    container.innerHTML = `
+      <div class="status-overview-entry disabled">
+        <div class="status-overview-copy">
+          <span class="status-overview-eyebrow">运行概览</span>
+          <strong>系统状态、技能与环境</strong>
+          <p class="muted">系统状态暂不可用。</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const runtime = status.runtime || {};
+  const failingChecks = (runtime.environment_checks || []).filter((check) => !check.ok);
+  const skillCount = status.executable_skills?.length || 0;
+
+  container.innerHTML = `
+    <button
+      id="statusOverviewButton"
+      type="button"
+      class="status-overview-entry"
+      aria-haspopup="dialog"
+      aria-controls="statusOverviewModal"
+    >
+      <div class="status-overview-copy">
+        <span class="status-overview-eyebrow">运行概览</span>
+        <strong>系统状态、技能与环境</strong>
+      </div>
+      <div class="status-overview-meta">
+        ${statusPill(status.system_mode === "live" ? "ok" : "warn", formatSystemMode(status.system_mode))}
+        ${statusPill(status.runtime_connected ? "ok" : "bad", status.runtime_connected ? "运行时在线" : "运行时离线")}
+        ${statusPill(
+          failingChecks.length ? "bad" : "ok",
+          failingChecks.length ? `环境失败 ${failingChecks.length}` : "环境正常",
+        )}
+        ${statusPill(skillCount ? "ok" : "muted", `技能 ${skillCount}`)}
+      </div>
+    </button>
+  `;
+
+  const button = document.getElementById("statusOverviewButton");
+  button?.addEventListener("click", openStatusOverviewModal);
+}
+
+function renderStatusOverviewModal() {
+  const content = document.getElementById("statusOverviewModalContent");
+  if (!content) {
+    return;
+  }
+  content.innerHTML = buildSystemStatusMarkup();
+  bindLoadedSkillButtons(content);
+}
+
+function bindStatusOverviewModal() {
+  const modal = document.getElementById("statusOverviewModal");
+  const closeButton = document.getElementById("statusOverviewModalClose");
+  const backdrop = document.getElementById("statusOverviewModalBackdrop");
+
+  closeButton.addEventListener("click", closeStatusOverviewModal);
+  backdrop.addEventListener("click", closeStatusOverviewModal);
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeStatusOverviewModal();
+    }
+  });
+
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) {
+      closeStatusOverviewModal();
+    }
+  });
 }
 
 function renderSessionMeta() {
@@ -796,11 +872,6 @@ function renderSessionMeta() {
     ${workspaceListMarkup}
     <div class="workspace-section-label">对话列表</div>
     ${conversationMarkup}
-    ${renderSidebarCard({
-      title: "Working Memory",
-      open: false,
-      body: renderWorkingMemoryMarkup(appState.snapshot?.working_memory),
-    })}
   `;
   bindWorkspaceMeta(meta);
 }
@@ -1168,8 +1239,22 @@ function buildPlanStepMarkup(step, index) {
 function renderInspector() {
   const container = document.getElementById("inspector");
   const object = activeObject();
+  const blocks = [
+    renderSidebarCard({
+      title: "Working Memory",
+      open: true,
+      body: renderWorkingMemoryMarkup(appState.snapshot?.working_memory),
+    }),
+  ];
+
   if (!object) {
-    container.innerHTML = "<p class='muted'>请选择一个对象查看详情。</p>";
+    blocks.push(
+      renderSidebarCard({
+        title: "当前对象",
+        body: "<p class='muted'>请选择一个对象查看详情。</p>",
+      }),
+    );
+    container.innerHTML = blocks.join("");
     return;
   }
 
@@ -1186,7 +1271,7 @@ function renderInspector() {
   const cluster = metadata.cluster_annotation;
   const categorical = metadata.categorical_obs_fields || [];
 
-  container.innerHTML = [
+  blocks.push(
     renderSidebarCard({
       title: object.label,
       body: `
@@ -1205,6 +1290,9 @@ function renderInspector() {
         }</span></div>
       `,
     }),
+  );
+
+  blocks.push(
     renderSidebarCard({
       title: "数据集评估",
       body: `
@@ -1221,6 +1309,9 @@ function renderInspector() {
         <div class="kv"><span>建议下一步</span><span>${escapeHTML(formatList(assessment.suggested_next_steps))}</span></div>
       `,
     }),
+  );
+
+  blocks.push(
     renderSidebarCard({
       title: "注释候选字段",
       body: categorical.length
@@ -1237,6 +1328,9 @@ function renderInspector() {
             .join("")
         : "<p class='muted'>暂未发现分类 obs 字段。</p>",
     }),
+  );
+
+  blocks.push(
     renderSidebarCard({
       title: "最近任务",
       body: relatedJobs.length
@@ -1251,7 +1345,9 @@ function renderInspector() {
             .join("")
         : "<p class='muted'>这个对象还没有关联任务。</p>",
     }),
-  ].join("");
+  );
+
+  container.innerHTML = blocks.join("");
 }
 
 function renderPlannerPreview() {
@@ -1453,6 +1549,7 @@ function bindLoadedSkillButtons(container) {
     button.addEventListener("click", () => {
       const input = document.getElementById("messageInput");
       input.value = button.dataset.skillPrompt || button.dataset.skillName || "";
+      closeStatusOverviewModal();
       input.focus();
     });
   }
@@ -1657,4 +1754,19 @@ function closeImageModal() {
   modal.classList.add("hidden");
   modal.setAttribute("aria-hidden", "true");
   image.removeAttribute("src");
+}
+
+function openStatusOverviewModal() {
+  const modal = document.getElementById("statusOverviewModal");
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function closeStatusOverviewModal() {
+  const modal = document.getElementById("statusOverviewModal");
+  if (modal.classList.contains("hidden")) {
+    return;
+  }
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
 }

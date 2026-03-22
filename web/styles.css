@@ -228,6 +228,11 @@ body {
   flex-shrink: 0;
 }
 
+.status-overview-slot {
+  margin-top: 12px;
+  flex-shrink: 0;
+}
+
 .object-tree {
   flex: 1;
   min-height: 0;
@@ -384,10 +389,6 @@ body {
   background: rgba(61, 107, 75, 0.1);
   color: var(--accent-deep);
   font-size: 0.84rem;
-}
-
-.system-status {
-  margin-bottom: 12px;
 }
 
 .sidebar-card {
@@ -594,6 +595,73 @@ body {
   font-size: 0.72rem;
   color: var(--muted);
   letter-spacing: 0.01em;
+}
+
+.status-overview-entry {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(61, 107, 75, 0.14);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(242, 247, 238, 0.9));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.status-overview-entry:hover {
+  transform: translateY(-1px);
+  border-color: rgba(61, 107, 75, 0.28);
+  box-shadow: 0 12px 30px rgba(26, 40, 26, 0.08);
+}
+
+.status-overview-entry.disabled {
+  cursor: default;
+}
+
+.status-overview-entry.disabled:hover {
+  transform: none;
+  border-color: rgba(61, 107, 75, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.status-overview-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.status-overview-copy strong {
+  font-size: 1rem;
+}
+
+.status-overview-copy p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.status-overview-eyebrow {
+  color: var(--warm);
+  font-size: 0.76rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.status-overview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.status-overview-link {
+  color: var(--accent);
+  font-size: 0.86rem;
+  font-weight: 600;
 }
 
 .upload-label {
@@ -1046,6 +1114,55 @@ body {
   height: auto;
 }
 
+.status-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+}
+
+.status-modal.hidden {
+  display: none;
+}
+
+.status-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(12, 20, 15, 0.66);
+  backdrop-filter: blur(6px);
+}
+
+.status-modal-dialog {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: min(920px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  margin: 16px auto;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 24px;
+  background: rgba(245, 248, 240, 0.98);
+  box-shadow: 0 24px 70px rgba(5, 10, 8, 0.3);
+}
+
+.status-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.status-modal-head h3 {
+  margin: 6px 0 0;
+}
+
+.status-modal-body {
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .planner-preview pre {
   margin: 0;
   padding: 12px;
@@ -1099,6 +1216,10 @@ body {
 
   .image-modal-head {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .status-modal-head {
     flex-direction: column;
   }
 }

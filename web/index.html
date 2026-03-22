@@ -14,8 +14,9 @@
           <h1>共享对象</h1>
         </div>
         <div id="sessionMeta" class="session-meta"></div>
-        <div id="skillHubEntry" class="skill-hub"></div>
         <div id="objectTree" class="object-tree"></div>
+        <div id="skillHubEntry" class="skill-hub"></div>
+        <div id="statusOverviewEntry" class="status-overview-slot"></div>
       </aside>
 
       <main class="panel console">
@@ -56,7 +57,6 @@
           <p class="eyebrow">检查器 / 上下文</p>
           <h2>当前上下文</h2>
         </div>
-        <div id="systemStatus" class="system-status"></div>
         <div id="inspector" class="inspector-body"></div>
         <div id="plannerPreview" class="planner-preview"></div>
       </aside>
@@ -83,6 +83,20 @@
         <div class="image-modal-body">
           <img id="imageModalImage" alt="" />
         </div>
+      </div>
+    </div>
+
+    <div id="statusOverviewModal" class="status-modal hidden" aria-hidden="true">
+      <div id="statusOverviewModalBackdrop" class="status-modal-backdrop"></div>
+      <div class="status-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="statusOverviewModalTitle">
+        <div class="status-modal-head">
+          <div>
+            <p class="eyebrow">运行概览</p>
+            <h3 id="statusOverviewModalTitle">系统状态、技能与环境</h3>
+          </div>
+          <button id="statusOverviewModalClose" type="button" class="ghost-button">关闭</button>
+        </div>
+        <div id="statusOverviewModalContent" class="status-modal-body"></div>
       </div>
     </div>
 
