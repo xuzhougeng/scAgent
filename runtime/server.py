@@ -94,6 +94,8 @@ SAFE_EXEC_BUILTINS = {
     "enumerate": enumerate,
     "Exception": Exception,
     "float": float,
+    "getattr": getattr,
+    "hasattr": hasattr,
     "int": int,
     "isinstance": isinstance,
     "len": len,
