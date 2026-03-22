@@ -224,6 +224,13 @@ scAgent 的 Go 实现参考了 [weixin-agent-sdk](https://github.com/wong2/weixi
 
 ---
 
+## TODO
+
+- [ ] **图片发送**：将分析生成的 plot 图片发回微信（AES-128-ECB 加密 → `getuploadurl` → PUT CDN → `sendmessage`），参考 `cdn/aes-ecb.ts`
+- [ ] **图片接收**：解析用户发来的图片消息（CDN 下载 + AES 解密），支持以图片作为分析输入
+
+---
+
 ## 常见问题
 
 **Q: 扫码后提示登录失败？**

@@ -536,6 +536,10 @@ func extractText(msg WeixinMessage) string {
 		if item.Type == ItemTypeText && item.TextItem != nil {
 			return strings.TrimSpace(item.TextItem.Text)
 		}
+		// 语音消息：微信服务端转写的文字在 voice_item.text
+		if item.Type == ItemTypeVoice && item.VoiceItem != nil && item.VoiceItem.Text != "" {
+			return strings.TrimSpace(item.VoiceItem.Text)
+		}
 	}
 	return ""
 }

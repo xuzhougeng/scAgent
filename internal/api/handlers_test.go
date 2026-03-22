@@ -592,6 +592,13 @@ func (f *fakeRuntime) LoadFile(_ context.Context, payload runtimeclient.LoadFile
 	}, nil
 }
 
+func (f *fakeRuntime) EnsureObject(_ context.Context, payload runtimeclient.EnsureObjectRequest) (*runtimeclient.EnsureObjectResponse, error) {
+	return &runtimeclient.EnsureObjectResponse{
+		Object:  payload.Object,
+		Summary: "Object is available in fake runtime.",
+	}, nil
+}
+
 func (f *fakeRuntime) Execute(_ context.Context, payload runtimeclient.ExecuteRequest) (*runtimeclient.ExecuteResponse, error) {
 	switch payload.Skill {
 	case "subset_cells":

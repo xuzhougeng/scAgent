@@ -82,8 +82,9 @@
 但目前还有一个边界需要注意：
 
 - SQLite 持久化的是元数据，不是 Python 运行时内存
-- 如果 Python runtime 也重启，已有对象的 `backend_ref` 不会自动重建
-- `pin / evict / reload` 这类完整对象恢复策略还在后续 roadmap 里
+- 如果 Python runtime 重启，控制层会在下一次执行前按需把带 `.h5ad` 落盘文件的对象重新注册回 runtime
+- 还没有落盘文件的临时内存对象，当前仍然无法在 runtime 重启后自动恢复
+- `pin / evict / reload` 这类更完整的对象恢复策略还在后续 roadmap 里
 
 ## 典型案例
 

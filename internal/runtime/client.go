@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ type Service interface {
 	Status(ctx context.Context) (*HealthStatus, error)
 	InitSession(ctx context.Context, payload InitSessionRequest) (*InitSessionResponse, error)
 	LoadFile(ctx context.Context, payload LoadFileRequest) (*LoadFileResponse, error)
+	EnsureObject(ctx context.Context, payload EnsureObjectRequest) (*EnsureObjectResponse, error)
 	Execute(ctx context.Context, payload ExecuteRequest) (*ExecuteResponse, error)
 }
 
@@ -73,6 +75,16 @@ type LoadFileRequest struct {
 }
 
 type LoadFileResponse struct {
+	Object  ObjectDescriptor `json:"object"`
+	Summary string           `json:"summary"`
+}
+
+type EnsureObjectRequest struct {
+	SessionID string           `json:"session_id"`
+	Object    ObjectDescriptor `json:"object"`
+}
+
+type EnsureObjectResponse struct {
 	Object  ObjectDescriptor `json:"object"`
 	Summary string           `json:"summary"`
 }
@@ -172,6 +184,14 @@ func (c *Client) LoadFile(ctx context.Context, payload LoadFileRequest) (*LoadFi
 	return &response, nil
 }
 
+func (c *Client) EnsureObject(ctx context.Context, payload EnsureObjectRequest) (*EnsureObjectResponse, error) {
+	var response EnsureObjectResponse
+	if err := c.postJSON(ctx, "/objects/ensure", payload, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 func (c *Client) postJSON(ctx context.Context, path string, payload any, out any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -191,6 +211,18 @@ func (c *Client) postJSON(ctx context.Context, path string, payload any, out any
 	defer response.Body.Close()
 
 	if response.StatusCode >= http.StatusBadRequest {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 8192))
+		if len(detail) > 0 {
+			var payload struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(detail, &payload) == nil && strings.TrimSpace(payload.Error) != "" {
+				return fmt.Errorf("runtime %s returned %s: %s", path, response.Status, strings.TrimSpace(payload.Error))
+			}
+			if text := strings.TrimSpace(string(detail)); text != "" {
+				return fmt.Errorf("runtime %s returned %s: %s", path, response.Status, text)
+			}
+		}
 		return fmt.Errorf("runtime %s returned %s", path, response.Status)
 	}
 

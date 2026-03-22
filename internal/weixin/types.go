@@ -51,12 +51,17 @@ type WeixinMessage struct {
 }
 
 type MessageItem struct {
-	Type     int       `json:"type"`
-	TextItem *TextItem `json:"text_item,omitempty"`
+	Type      int        `json:"type"`
+	TextItem  *TextItem  `json:"text_item,omitempty"`
+	VoiceItem *VoiceItem `json:"voice_item,omitempty"`
 }
 
 type TextItem struct {
 	Text string `json:"text"`
+}
+
+type VoiceItem struct {
+	Text string `json:"text,omitempty"` // 微信服务端语音转写结果
 }
 
 type SendMessageRequest struct {

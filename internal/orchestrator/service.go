@@ -544,6 +544,16 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 			targetObject.LastAccessedAt = time.Now().UTC()
 			s.store.SaveObject(targetObject)
 		}
+		if err := s.ensureRuntimeObject(ctx, sessionRecord.ID, targetObject); err != nil {
+			stepResult.Status = models.JobFailed
+			stepResult.Summary = err.Error()
+			finishedAt := time.Now().UTC()
+			stepResult.FinishedAt = &finishedAt
+			job.Steps = append(job.Steps, stepResult)
+			s.store.SaveJob(job)
+			s.failJob(sessionID, jobID, err)
+			return
+		}
 
 		response, err := s.runtime.Execute(ctx, runtime.ExecuteRequest{
 			SessionID:        sessionID,
@@ -977,6 +987,74 @@ func backendRef(object *models.ObjectMeta) string {
 		return ""
 	}
 	return object.BackendRef
+}
+
+func (s *Service) ensureRuntimeObject(ctx context.Context, sessionID string, object *models.ObjectMeta) error {
+	if object == nil || s.runtime == nil {
+		return nil
+	}
+
+	response, err := s.runtime.EnsureObject(ctx, runtime.EnsureObjectRequest{
+		SessionID: sessionID,
+		Object: runtime.ObjectDescriptor{
+			BackendRef:       object.BackendRef,
+			Kind:             object.Kind,
+			Label:            object.Label,
+			NObs:             object.NObs,
+			NVars:            object.NVars,
+			State:            object.State,
+			InMemory:         object.InMemory,
+			MaterializedPath: object.MaterializedPath,
+			Metadata:         cloneParams(object.Metadata),
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	refreshed := response.Object
+	updated := false
+	if refreshed.BackendRef != "" && refreshed.BackendRef != object.BackendRef {
+		object.BackendRef = refreshed.BackendRef
+		updated = true
+	}
+	if refreshed.Kind != "" && refreshed.Kind != object.Kind {
+		object.Kind = refreshed.Kind
+		updated = true
+	}
+	if refreshed.Label != "" && refreshed.Label != object.Label {
+		object.Label = refreshed.Label
+		updated = true
+	}
+	if refreshed.NObs > 0 && refreshed.NObs != object.NObs {
+		object.NObs = refreshed.NObs
+		updated = true
+	}
+	if refreshed.NVars > 0 && refreshed.NVars != object.NVars {
+		object.NVars = refreshed.NVars
+		updated = true
+	}
+	if refreshed.State != "" && refreshed.State != object.State {
+		object.State = refreshed.State
+		updated = true
+	}
+	if refreshed.InMemory != object.InMemory {
+		object.InMemory = refreshed.InMemory
+		updated = true
+	}
+	if refreshed.MaterializedPath != "" && refreshed.MaterializedPath != object.MaterializedPath {
+		object.MaterializedPath = refreshed.MaterializedPath
+		object.MaterializedURL = s.pathToURL(refreshed.MaterializedPath)
+		updated = true
+	}
+	if !reflect.DeepEqual(refreshed.Metadata, object.Metadata) {
+		object.Metadata = cloneParams(refreshed.Metadata)
+		updated = true
+	}
+	if updated {
+		s.store.SaveObject(object)
+	}
+	return nil
 }
 
 func (s *Service) appendJobCheckpoint(job *models.Job, kind, tone, title, label, summary string) {

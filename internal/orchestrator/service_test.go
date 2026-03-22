@@ -67,6 +67,12 @@ type sequentialRuntime struct {
 	nextBackendRef int
 }
 
+type restoringRuntime struct {
+	ensuredRefs map[string]struct{}
+	ensureCalls []runtimeclient.EnsureObjectRequest
+	execCalls   []runtimeclient.ExecuteRequest
+}
+
 type scriptedEvaluator struct {
 	results  []*CompletionEvaluation
 	errs     map[int]error
@@ -105,6 +111,13 @@ func (r *sequentialRuntime) LoadFile(context.Context, runtimeclient.LoadFileRequ
 	return nil, errors.New("unexpected load file call")
 }
 
+func (r *sequentialRuntime) EnsureObject(_ context.Context, payload runtimeclient.EnsureObjectRequest) (*runtimeclient.EnsureObjectResponse, error) {
+	return &runtimeclient.EnsureObjectResponse{
+		Object:  payload.Object,
+		Summary: "already available",
+	}, nil
+}
+
 func (r *sequentialRuntime) Execute(_ context.Context, payload runtimeclient.ExecuteRequest) (*runtimeclient.ExecuteResponse, error) {
 	r.nextBackendRef++
 	return &runtimeclient.ExecuteResponse{
@@ -116,6 +129,52 @@ func (r *sequentialRuntime) Execute(_ context.Context, payload runtimeclient.Exe
 			State:      models.ObjectResident,
 			InMemory:   true,
 			Metadata:   map[string]any{},
+		},
+	}, nil
+}
+
+func (r *restoringRuntime) Health(context.Context) error {
+	return nil
+}
+
+func (r *restoringRuntime) Status(context.Context) (*runtimeclient.HealthStatus, error) {
+	return &runtimeclient.HealthStatus{}, nil
+}
+
+func (r *restoringRuntime) InitSession(context.Context, runtimeclient.InitSessionRequest) (*runtimeclient.InitSessionResponse, error) {
+	return nil, errors.New("unexpected init session call")
+}
+
+func (r *restoringRuntime) LoadFile(context.Context, runtimeclient.LoadFileRequest) (*runtimeclient.LoadFileResponse, error) {
+	return nil, errors.New("unexpected load file call")
+}
+
+func (r *restoringRuntime) EnsureObject(_ context.Context, payload runtimeclient.EnsureObjectRequest) (*runtimeclient.EnsureObjectResponse, error) {
+	r.ensureCalls = append(r.ensureCalls, payload)
+	if r.ensuredRefs == nil {
+		r.ensuredRefs = make(map[string]struct{})
+	}
+
+	descriptor := payload.Object
+	if descriptor.BackendRef == "" {
+		descriptor.BackendRef = "rehydrated_backend"
+	}
+	r.ensuredRefs[descriptor.BackendRef] = struct{}{}
+	return &runtimeclient.EnsureObjectResponse{
+		Object:  descriptor,
+		Summary: "rehydrated",
+	}, nil
+}
+
+func (r *restoringRuntime) Execute(_ context.Context, payload runtimeclient.ExecuteRequest) (*runtimeclient.ExecuteResponse, error) {
+	r.execCalls = append(r.execCalls, payload)
+	if _, ok := r.ensuredRefs[payload.TargetBackendRef]; !ok {
+		return nil, errors.New("target object was not rehydrated")
+	}
+	return &runtimeclient.ExecuteResponse{
+		Summary: "inspected dataset",
+		Metadata: map[string]any{
+			"available_obs": []string{"cell_type"},
 		},
 	}, nil
 }
@@ -619,6 +678,93 @@ func TestRunJobKeepsOriginalRemainingStepsWhenCheckpointReplanFails(t *testing.T
 	}
 	if !jobHasCheckpoint(job, "检查点重规划", "沿用原计划") {
 		t.Fatalf("expected fallback replan checkpoint to be recorded, got %+v", job.Checkpoints)
+	}
+}
+
+func TestRunJobRehydratesSharedActiveObjectBeforeExecution(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	now := time.Now().UTC()
+	seedSession := store.CreateSession("seed")
+	sharedObject := &models.ObjectMeta{
+		ID:               "obj_shared",
+		WorkspaceID:      seedSession.WorkspaceID,
+		SessionID:        seedSession.ID,
+		DatasetID:        seedSession.DatasetID,
+		Label:            "pbmc3k",
+		Kind:             models.ObjectRawDataset,
+		BackendRef:       "py:sess_legacy:adata_1",
+		NObs:             2638,
+		NVars:            1838,
+		State:            models.ObjectResident,
+		InMemory:         true,
+		MaterializedPath: filepath.Join(t.TempDir(), "pbmc3k.h5ad"),
+		CreatedAt:        now,
+		LastAccessedAt:   now,
+	}
+	store.SaveObject(sharedObject)
+
+	workspaceRecord, ok := store.GetWorkspace(seedSession.WorkspaceID)
+	if !ok {
+		t.Fatalf("expected workspace to exist")
+	}
+	workspaceRecord.ActiveObjectID = sharedObject.ID
+	store.SaveWorkspace(workspaceRecord)
+
+	seedSession.ActiveObjectID = sharedObject.ID
+	store.SaveSession(seedSession)
+
+	followupSession, err := store.CreateConversation(seedSession.WorkspaceID, "followup")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	store.SaveJob(&models.Job{
+		ID:        "job_rehydrate",
+		SessionID: followupSession.ID,
+		Status:    models.JobQueued,
+		CreatedAt: now,
+	})
+
+	planner := &scriptedPlanner{
+		mode: "llm",
+		plans: []models.Plan{
+			{
+				Steps: []models.PlanStep{
+					{ID: "step_1", Skill: "inspect_dataset", TargetObjectID: "$active"},
+				},
+			},
+		},
+	}
+	runtimeStub := &restoringRuntime{}
+	service := NewService(store, registry, runtimeStub, planner, t.TempDir())
+
+	service.runJob(context.Background(), followupSession.ID, "job_rehydrate", "检查数据")
+
+	job, ok := store.GetJob("job_rehydrate")
+	if !ok {
+		t.Fatalf("expected job to exist after run")
+	}
+	if job.Status != models.JobSucceeded {
+		t.Fatalf("expected job to succeed, got %s (%s)", job.Status, job.Error)
+	}
+	if len(runtimeStub.ensureCalls) != 1 {
+		t.Fatalf("expected one runtime rehydration call, got %d", len(runtimeStub.ensureCalls))
+	}
+	if runtimeStub.ensureCalls[0].SessionID != followupSession.ID {
+		t.Fatalf("expected rehydration to use current session id, got %+v", runtimeStub.ensureCalls[0])
+	}
+	if runtimeStub.ensureCalls[0].Object.BackendRef != "py:sess_legacy:adata_1" {
+		t.Fatalf("expected stored backend ref to be rehydrated, got %+v", runtimeStub.ensureCalls[0].Object)
+	}
+	if len(runtimeStub.execCalls) != 1 {
+		t.Fatalf("expected one execute call, got %d", len(runtimeStub.execCalls))
+	}
+	if runtimeStub.execCalls[0].TargetBackendRef != "py:sess_legacy:adata_1" {
+		t.Fatalf("expected execute to target the rehydrated backend ref, got %+v", runtimeStub.execCalls[0])
 	}
 }
 

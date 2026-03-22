@@ -112,6 +112,7 @@ SAFE_EXEC_BUILTINS = {
     "tuple": tuple,
     "zip": zip,
 }
+BACKEND_REF_RE = re.compile(r"^py:[^:]+:adata_(\d+)$")
 
 
 def safe_exec_import(name: str, globals_dict: Any = None, locals_dict: Any = None, fromlist: tuple[str, ...] = (), level: int = 0) -> Any:
@@ -206,6 +207,12 @@ class RuntimeState:
     def next_ref(self, session_id: str) -> str:
         self.counter += 1
         return f"py:{session_id}:adata_{self.counter}"
+
+    def _sync_counter_with_backend_ref(self, backend_ref: str) -> None:
+        match = BACKEND_REF_RE.match(str(backend_ref or "").strip())
+        if match is None:
+            return
+        self.counter = max(self.counter, int(match.group(1)))
 
     def load_plugin_skills(self) -> dict[str, dict[str, Any]]:
         skills: dict[str, dict[str, Any]] = {}
@@ -304,6 +311,64 @@ class RuntimeState:
         return {
             "object": self._descriptor(obj),
             "summary": f"已上传 {file_path.name}，并注册为 {object_label}（{n_obs} 个细胞，{n_vars} 个基因）。{annotation_note}",
+        }
+
+    def ensure_object(self, session_id: str, descriptor: dict[str, Any]) -> dict[str, Any]:
+        backend_ref = str(descriptor.get("backend_ref") or "").strip()
+        if backend_ref and backend_ref in self.objects:
+            obj = self.objects[backend_ref]
+            return {
+                "object": self._descriptor(obj),
+                "summary": f"目标对象 {obj.label} 已存在于运行时。",
+            }
+
+        materialized_path_raw = str(descriptor.get("materialized_path") or "").strip()
+        if materialized_path_raw == "":
+            raise RuntimeError("无法恢复目标对象：缺少 materialized_path。")
+
+        materialized_path = Path(materialized_path_raw)
+        if not materialized_path.exists():
+            raise RuntimeError(f"无法恢复目标对象，文件不存在：{materialized_path}")
+
+        label = str(descriptor.get("label") or materialized_path.stem).strip() or materialized_path.stem
+        kind = str(descriptor.get("kind") or "unknown").strip() or "unknown"
+        state = str(descriptor.get("state") or "resident").strip() or "resident"
+        metadata = descriptor.get("metadata")
+        if not isinstance(metadata, dict) or not metadata:
+            metadata = inspect_h5ad_metadata(materialized_path)
+
+        try:
+            n_obs = int(descriptor.get("n_obs") or 0)
+        except (TypeError, ValueError):
+            n_obs = 0
+        try:
+            n_vars = int(descriptor.get("n_vars") or 0)
+        except (TypeError, ValueError):
+            n_vars = 0
+        if n_obs <= 0 or n_vars <= 0:
+            n_obs, n_vars = inspect_h5ad_shape(materialized_path)
+
+        if backend_ref == "":
+            backend_ref = self.next_ref(session_id)
+        else:
+            self._sync_counter_with_backend_ref(backend_ref)
+
+        obj = RuntimeObject(
+            backend_ref=backend_ref,
+            session_id=session_id,
+            label=label,
+            kind=kind,
+            n_obs=n_obs,
+            n_vars=n_vars,
+            state=state,
+            in_memory=bool(descriptor.get("in_memory", True)),
+            materialized_path=str(materialized_path),
+            metadata=metadata,
+        )
+        self.objects[backend_ref] = obj
+        return {
+            "object": self._descriptor(obj),
+            "summary": f"已恢复目标对象 {label} 到运行时。",
         }
 
     def _require_target(self, target: RuntimeObject | None, skill: str) -> RuntimeObject:
@@ -1516,6 +1581,28 @@ class RequestHandler(BaseHTTPRequestHandler):
                     object_label=response.get("object", {}).get("label"),
                     n_obs=response.get("object", {}).get("n_obs"),
                     n_vars=response.get("object", {}).get("n_vars"),
+                )
+                self._write_json(HTTPStatus.OK, response)
+                return
+            if self.path == "/objects/ensure":
+                object_payload = payload.get("object") or {}
+                log_runtime_event(
+                    "ensure_object_started",
+                    session_id=session_id,
+                    backend_ref=object_payload.get("backend_ref"),
+                    label=object_payload.get("label"),
+                    materialized_path=object_payload.get("materialized_path"),
+                )
+                response = STATE.ensure_object(
+                    session_id=payload["session_id"],
+                    descriptor=object_payload,
+                )
+                log_runtime_event(
+                    "ensure_object_finished",
+                    session_id=session_id,
+                    backend_ref=response.get("object", {}).get("backend_ref"),
+                    duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                    object_label=response.get("object", {}).get("label"),
                 )
                 self._write_json(HTTPStatus.OK, response)
                 return

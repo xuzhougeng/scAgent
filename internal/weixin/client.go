@@ -20,6 +20,7 @@ const (
 	MessageTypeBot     = 2
 	MessageStateFinish = 2
 	ItemTypeText       = 1
+	ItemTypeVoice      = 3
 	TypingStatusTyping = 1
 )
 
