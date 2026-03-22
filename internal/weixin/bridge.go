@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	qrterminal "github.com/mdp/qrterminal/v3"
 	"scagent/internal/models"
 	"scagent/internal/orchestrator"
 )
@@ -56,6 +57,10 @@ func NewBridge(client *Client, service *orchestrator.Service, config BridgeConfi
 }
 
 // Login performs QR code login interactively.
+//
+// Flow: GET get_bot_qrcode → render qrcode_img_content as terminal QR →
+// poll get_qrcode_status until "confirmed" → persist bot_token.
+// See: https://github.com/wong2/weixin-agent-sdk packages/sdk/src/auth/login-qr.ts
 func (b *Bridge) Login() error {
 	qr, err := b.client.GetQRCode()
 	if err != nil {
@@ -66,10 +71,19 @@ func (b *Bridge) Login() error {
 	}
 
 	fmt.Println("\n请用微信扫描以下二维码：")
-	if qr.QRCodeURL != "" {
-		fmt.Printf("二维码链接: %s\n", qr.QRCodeURL)
+
+	// qrcode_img_content is the URL to encode as a scannable QR code
+	if qr.QRCodeImgContent != "" {
+		qrterminal.GenerateWithConfig(qr.QRCodeImgContent, qrterminal.Config{
+			Level:     qrterminal.L,
+			Writer:    os.Stdout,
+			QuietZone: 1,
+		})
+		fmt.Printf("\n(如果无法扫描，请在浏览器打开: %s)\n", qr.QRCodeImgContent)
+	} else {
+		fmt.Printf("QR code session: %s\n", qr.QRCode)
 	}
-	fmt.Printf("QR code: %s\n", qr.QRCode)
+
 	fmt.Println("\n等待扫码...")
 
 	status, err := b.client.PollQRCodeStatus(qr.QRCode, 8*time.Minute)
@@ -86,14 +100,14 @@ func (b *Bridge) Login() error {
 	account := map[string]string{
 		"token":      status.BotToken,
 		"base_url":   status.BaseURL,
-		"user_id":    status.UserID,
-		"account_id": status.AccountID,
+		"user_id":    status.ILinkUserID,
+		"account_id": status.ILinkBotID,
 	}
 	if err := b.saveAccount(account); err != nil {
 		log.Printf("[weixin] warning: failed to save account: %v", err)
 	}
 
-	log.Printf("[weixin] login succeeded, account=%s", status.AccountID)
+	log.Printf("[weixin] login succeeded, account=%s", status.ILinkBotID)
 	return nil
 }
 

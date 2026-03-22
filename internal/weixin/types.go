@@ -4,21 +4,20 @@ package weixin
 // Ref: https://ilinkai.weixin.qq.com
 
 type QRCodeResponse struct {
-	Ret            int    `json:"ret"`
-	QRCode         string `json:"qrcode"`
-	QRCodeURL      string `json:"qrcode_url"`
-	QRCodeImgBytes string `json:"qrcode_img_content"`
-	Message        string `json:"message"`
+	Ret             int    `json:"ret"`
+	QRCode          string `json:"qrcode"`           // session identifier for polling
+	QRCodeImgContent string `json:"qrcode_img_content"` // URL to encode as QR code
+	Message         string `json:"message"`
 }
 
 type QRCodeStatusResponse struct {
-	Ret       int    `json:"ret"`
-	Status    string `json:"status"`
-	BotToken  string `json:"bot_token"`
-	BaseURL   string `json:"baseurl"`
-	UserID    string `json:"user_id"`
-	AccountID string `json:"account_id"`
-	Message   string `json:"message"`
+	Ret         int    `json:"ret"`
+	Status      string `json:"status"` // wait, scaned, confirmed, expired
+	BotToken    string `json:"bot_token"`
+	BaseURL     string `json:"baseurl"`
+	ILinkBotID  string `json:"ilink_bot_id"`
+	ILinkUserID string `json:"ilink_user_id"`
+	Message     string `json:"message"`
 }
 
 type GetUpdatesRequest struct {
