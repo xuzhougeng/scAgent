@@ -503,10 +503,23 @@ class RuntimeState:
             "n_comps": max_comps,
         }
 
-    def _plot_path(self, workspace_root: Path, skill: str, label: str) -> Path:
-        path = workspace_root / "artifacts" / f"{skill}_{slug(label)}.svg"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
+    def _artifact_path(self, workspace_root: Path, stem: str, extension: str, request_id: str | None = None) -> Path:
+        artifacts_dir = workspace_root / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        normalized_extension = extension.lstrip(".").lower() or "bin"
+        base_stem = slug(stem) or "artifact"
+        request_suffix = slug(str(request_id or "").strip())
+        file_stem = f"{base_stem}_{request_suffix}" if request_suffix else base_stem
+        candidate = artifacts_dir / f"{file_stem}.{normalized_extension}"
+        duplicate_index = 2
+        while candidate.exists():
+            candidate = artifacts_dir / f"{file_stem}_{duplicate_index}.{normalized_extension}"
+            duplicate_index += 1
+        return candidate
+
+    def _plot_path(self, workspace_root: Path, skill: str, label: str, request_id: str | None = None) -> Path:
+        return self._artifact_path(workspace_root, f"{skill}_{label}", "png", request_id)
 
     def _normalize_gene_list(self, raw_value: Any) -> list[str]:
         if raw_value is None:
@@ -726,7 +739,7 @@ class RuntimeState:
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         fig.tight_layout()
-        fig.savefig(path, format="svg")
+        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
         plt.close(fig)
 
     def _save_gene_umap_plot(
@@ -768,20 +781,18 @@ class RuntimeState:
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         fig.tight_layout()
-        fig.savefig(path, format="svg")
+        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
         plt.close(fig)
 
-    def _save_custom_figure(self, figure: Any, workspace_root: Path, stem: str) -> Path:
-        path = workspace_root / "artifacts" / f"{stem}.svg"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        figure.savefig(path, format="svg", bbox_inches="tight")
+    def _save_custom_figure(self, figure: Any, workspace_root: Path, stem: str, request_id: str | None = None) -> Path:
+        path = self._artifact_path(workspace_root, stem, "png", request_id)
+        figure.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
         _, _, plt, _, _ = analysis_modules()
         plt.close(figure)
         return path
 
-    def _save_custom_table(self, table: Any, workspace_root: Path, stem: str) -> Path:
-        path = workspace_root / "artifacts" / f"{stem}.csv"
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def _save_custom_table(self, table: Any, workspace_root: Path, stem: str, request_id: str | None = None) -> Path:
+        path = self._artifact_path(workspace_root, stem, "csv", request_id)
         table.to_csv(path, index=False)
         return path
 
@@ -834,17 +845,27 @@ class RuntimeState:
             return persisted["object"]
 
         def save_figure(figure: Any, stem: str, *, title: str = "", summary: str = "") -> dict[str, Any]:
-            figure_path = self._save_custom_figure(figure, workspace_root, stem or f"{skill_name}_{slug(target.label if target else skill_name)}")
+            figure_path = self._save_custom_figure(
+                figure,
+                workspace_root,
+                stem or f"{skill_name}_{slug(target.label if target else skill_name)}",
+                request_id=str(payload.get("request_id") or "").strip() or None,
+            )
             return {
                 "kind": "plot",
                 "title": title or f"{skill_name} 输出图",
                 "path": str(figure_path),
-                "content_type": "image/svg+xml",
+                "content_type": "image/png",
                 "summary": summary or "由 Skill Hub 插件生成的图。",
             }
 
         def save_table(table: Any, stem: str, *, title: str = "", summary: str = "") -> dict[str, Any]:
-            table_path = self._save_custom_table(table, workspace_root, stem or f"{skill_name}_{slug(target.label if target else skill_name)}")
+            table_path = self._save_custom_table(
+                table,
+                workspace_root,
+                stem or f"{skill_name}_{slug(target.label if target else skill_name)}",
+                request_id=str(payload.get("request_id") or "").strip() or None,
+            )
             return {
                 "kind": "table",
                 "title": title or f"{skill_name} 输出表",
@@ -918,6 +939,7 @@ class RuntimeState:
         skill = payload["skill"]
         session_id = payload["session_id"]
         workspace_root = Path(payload["workspace_root"])
+        request_id = str(payload.get("request_id") or "").strip() or None
         target = self.objects.get(payload.get("target_backend_ref", ""))
         params = payload.get("params", {})
 
@@ -1158,7 +1180,7 @@ class RuntimeState:
             adata = self._load_adata(target)
             groupby = self._cluster_field(target, adata, str(params.get("groupby") or ""))
             adata.obs[groupby] = adata.obs[groupby].astype("category")
-            path = workspace_root / "artifacts" / f"markers_{slug(target.label)}.csv"
+            path = self._artifact_path(workspace_root, f"markers_{target.label}", "csv", request_id)
             sc.tl.rank_genes_groups(adata, groupby=groupby, method="wilcoxon", use_raw=adata.raw is not None)
             markers = sc.get.rank_genes_groups_df(adata, group=None)
             markers.to_csv(path, index=False)
@@ -1193,7 +1215,7 @@ class RuntimeState:
                     color_by = ""
             if color_by and color_by not in adata.obs.columns:
                 raise RuntimeError(f"`{color_by}` 不是 obs 字段；如果要按基因表达着色，请使用 plot_gene_umap。")
-            path = self._plot_path(workspace_root, skill, target.label)
+            path = self._plot_path(workspace_root, skill, target.label, request_id)
             self._save_umap_plot(
                 adata,
                 path,
@@ -1219,7 +1241,7 @@ class RuntimeState:
                         "kind": "plot",
                         "title": f"{target.label} 的 UMAP 图",
                         "path": str(path),
-                        "content_type": "image/svg+xml",
+                        "content_type": "image/png",
                         "summary": f"{target.label} 的真实 UMAP 散点图。",
                     }
                 ],
@@ -1247,14 +1269,14 @@ class RuntimeState:
             resolved_genes: list[dict[str, str]] = []
             for requested_gene in requested_genes:
                 display_gene, gene_key, expression, source = self._resolve_gene_expression(adata, requested_gene, layer_name)
-                path = self._plot_path(workspace_root, skill, f"{target.label}_{display_gene}")
+                path = self._plot_path(workspace_root, skill, f"{target.label}_{display_gene}", request_id)
                 self._save_gene_umap_plot(adata, path, display_gene, expression)
                 artifacts.append(
                     {
                         "kind": "plot",
                         "title": f"{target.label} 的 {display_gene} 基因 UMAP",
                         "path": str(path),
-                        "content_type": "image/svg+xml",
+                        "content_type": "image/png",
                         "summary": f"{target.label} 中 {display_gene} 的真实基因表达 UMAP 图。",
                     }
                 )
@@ -1333,20 +1355,30 @@ class RuntimeState:
             if figure is None and plt.get_fignums():
                 figure = plt.gcf()
             if figure is not None and hasattr(figure, "savefig"):
-                figure_path = self._save_custom_figure(figure, workspace_root, f"custom_plot_{slug(output_label)}")
+                figure_path = self._save_custom_figure(
+                    figure,
+                    workspace_root,
+                    f"custom_plot_{slug(output_label)}",
+                    request_id,
+                )
                 artifacts.append(
                     {
                         "kind": "plot",
                         "title": f"{output_label} 的自定义图",
                         "path": str(figure_path),
-                        "content_type": "image/svg+xml",
+                        "content_type": "image/png",
                         "summary": "由自定义 Python 分析生成的图。",
                     }
                 )
 
             result_table = exec_env.get("result_table")
             if result_table is not None and hasattr(result_table, "to_csv"):
-                table_path = self._save_custom_table(result_table, workspace_root, f"custom_table_{slug(output_label)}")
+                table_path = self._save_custom_table(
+                    result_table,
+                    workspace_root,
+                    f"custom_table_{slug(output_label)}",
+                    request_id,
+                )
                 artifacts.append(
                     {
                         "kind": "table",

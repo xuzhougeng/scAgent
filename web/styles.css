@@ -980,6 +980,17 @@ body.is-resizing {
   background: rgba(255, 255, 255, 0.92);
 }
 
+.message.message-pending {
+  border-style: dashed;
+  border-color: rgba(197, 136, 49, 0.36);
+  background: rgba(255, 248, 236, 0.82);
+  opacity: 0.88;
+}
+
+.message.message-pending .message-role {
+  color: #9a6a1f;
+}
+
 .message-assistant {
   background: linear-gradient(180deg, rgba(246, 250, 242, 0.96), rgba(240, 246, 235, 0.9));
 }

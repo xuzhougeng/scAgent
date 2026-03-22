@@ -707,17 +707,49 @@ async function submitMessage() {
     return;
   }
 
+  const optimisticMessage = appState.snapshot
+    ? {
+        id: `local_user_${Date.now()}`,
+        session_id: appState.sessionId,
+        role: "user",
+        content: message,
+        created_at: new Date().toISOString(),
+        local_status: "sending",
+      }
+    : null;
+
   input.value = "";
-  const response = await fetchJSON("/api/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: appState.sessionId,
-      message,
-    }),
-  });
-  syncSnapshot(response.snapshot);
-  render();
+  if (optimisticMessage) {
+    appState.snapshot = {
+      ...appState.snapshot,
+      messages: [...(appState.snapshot.messages || []), optimisticMessage],
+    };
+    render();
+  }
+
+  try {
+    const response = await fetchJSON("/api/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: appState.sessionId,
+        message,
+      }),
+    });
+    syncSnapshot(response.snapshot);
+    render();
+  } catch (error) {
+    if (optimisticMessage && appState.snapshot) {
+      appState.snapshot = {
+        ...appState.snapshot,
+        messages: (appState.snapshot.messages || []).filter((item) => item.id !== optimisticMessage.id),
+      };
+    }
+    input.value = message;
+    input.focus();
+    appState.workspaceStatus = error.message;
+    render();
+  }
 }
 
 function bindUpload() {
@@ -1336,7 +1368,13 @@ async function buildMessageNode(message, template) {
   const node = template.content.firstElementChild.cloneNode(true);
   const content = node.querySelector(".message-content");
   node.classList.add(`message-${message.role}`);
-  node.querySelector(".message-role").textContent = formatRole(message.role);
+  if (message.local_status === "sending") {
+    node.classList.add("message-pending");
+  }
+  node.querySelector(".message-role").textContent =
+    message.local_status === "sending"
+      ? `${formatRole(message.role)} · 发送中`
+      : formatRole(message.role);
 
   const detailMarkup = await buildMessageDetailMarkup(message);
   if (String(message.content || "").trim()) {
@@ -1917,16 +1955,17 @@ function renderWorkingMemoryMarkup(memory) {
 }
 
 async function buildArtifactCardMarkup(artifact, variant = "chat") {
+  const artifactURL = artifactResourceURL(artifact);
   let body = `<p class="muted">${escapeHTML(artifact.summary || artifact.content_type || "")}</p>`;
   if (artifact.kind === "plot") {
     body += `
       <button
         type="button"
         class="artifact-preview-button"
-        data-artifact-url="${escapeAttribute(artifact.url)}"
+        data-artifact-url="${escapeAttribute(artifactURL)}"
         data-artifact-title="${escapeAttribute(artifact.title)}"
       >
-        <img src="${artifact.url}" alt="${escapeAttribute(artifact.title)}" />
+        <img src="${artifactURL}" alt="${escapeAttribute(artifact.title)}" />
       </button>
     `;
   } else if (artifact.kind === "table" || artifact.kind === "file") {
@@ -1939,8 +1978,8 @@ async function buildArtifactCardMarkup(artifact, variant = "chat") {
       <div class="artifact-head">
         <h3>${escapeHTML(artifact.title)}</h3>
         <div class="artifact-actions">
-          <a class="inline-link" href="${artifact.url}" target="_blank" rel="noreferrer">打开</a>
-          <a class="inline-link" href="${artifact.url}" download>下载</a>
+          <a class="inline-link" href="${artifactURL}" target="_blank" rel="noreferrer">打开</a>
+          <a class="inline-link" href="${artifactURL}" download>下载</a>
         </div>
       </div>
       ${body}
@@ -1954,7 +1993,7 @@ async function getArtifactTextPreview(artifact) {
   }
 
   try {
-    const response = await fetch(artifact.url);
+    const response = await fetch(artifactResourceURL(artifact));
     const text = await response.text();
     appState.artifactTextCache.set(artifact.id, text);
     return text;
@@ -1963,6 +2002,15 @@ async function getArtifactTextPreview(artifact) {
     appState.artifactTextCache.set(artifact.id, fallback);
     return fallback;
   }
+}
+
+function artifactResourceURL(artifact) {
+  const rawURL = artifact?.url || "";
+  const version = artifact?.id || artifact?.created_at || "";
+  if (!rawURL || !version) {
+    return rawURL;
+  }
+  return `${rawURL}${rawURL.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}`;
 }
 
 function bindArtifactPreviewButtons(container) {
