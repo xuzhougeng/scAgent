@@ -2650,8 +2650,9 @@ def slug(value: str) -> str:
 def inspect_h5ad_shape(path: Path) -> tuple[int, int]:
     with h5py.File(path, "r") as handle:
         matrix = handle.get("X")
-        if matrix is not None and getattr(matrix, "shape", None) and len(matrix.shape) >= 2:
-            return int(matrix.shape[0]), int(matrix.shape[1])
+        matrix_shape = infer_h5ad_matrix_shape(matrix)
+        if matrix_shape is not None:
+            return matrix_shape
 
         obs = handle.get("obs")
         var = handle.get("var")
@@ -2736,9 +2737,57 @@ def infer_axis_length(node: Any) -> int:
     shape = getattr(node, "shape", None)
     if shape:
         return int(shape[0])
+    if hasattr(node, "attrs"):
+        index_name = node.attrs.get("_index")
+        if isinstance(index_name, bytes):
+            index_name = index_name.decode("utf-8", "ignore")
+        if isinstance(index_name, str) and hasattr(node, "keys") and index_name in node:
+            return len(node[index_name])
     if hasattr(node, "keys") and "_index" in node:
         return len(node["_index"])
+    if hasattr(node, "keys"):
+        keys = list(node.keys())
+        if keys:
+            first_key = keys[0]
+            try:
+                return len(node[first_key])
+            except Exception:
+                return 0
     return 0
+
+
+def infer_h5ad_matrix_shape(node: Any) -> tuple[int, int] | None:
+    if node is None:
+        return None
+
+    shape = getattr(node, "shape", None)
+    if shape and len(shape) >= 2:
+        return int(shape[0]), int(shape[1])
+
+    if hasattr(node, "attrs"):
+        attr_shape = node.attrs.get("shape")
+        if attr_shape is not None:
+            try:
+                values = list(attr_shape)
+                if len(values) >= 2:
+                    return int(values[0]), int(values[1])
+            except Exception:
+                pass
+
+    if hasattr(node, "keys") and "indptr" in node and "indices" in node:
+        try:
+            n_obs = len(node["indptr"]) - 1
+            attr_shape = node.attrs.get("shape")
+            if attr_shape is not None:
+                values = list(attr_shape)
+                if len(values) >= 2:
+                    return int(values[0]), int(values[1])
+            if len(node["indices"]) > 0:
+                return int(n_obs), int(max(node["indices"]) + 1)
+        except Exception:
+            return None
+
+    return None
 
 
 def inspect_h5ad_metadata(path: Path) -> dict[str, Any]:
