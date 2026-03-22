@@ -164,6 +164,40 @@ func TestFakePlannerUsesRecentPlotContextForFollowUp(t *testing.T) {
 	}
 }
 
+func TestFakePlannerInheritsRecentPlotLegendLocForFollowUp(t *testing.T) {
+	planner := NewFakePlanner()
+
+	plan, err := planner.Plan(context.Background(), PlanningRequest{
+		Message: "把这个图改一下",
+		ActiveObject: &models.ObjectMeta{
+			Metadata: map[string]any{
+				"obsm_keys": []string{"X_umap"},
+			},
+		},
+		RecentJobs: []*models.Job{
+			{
+				ID:     "job_prev",
+				Status: models.JobSucceeded,
+				Steps: []models.JobStep{
+					{
+						Skill:    "plot_umap",
+						Metadata: map[string]any{"legend_loc": "on data"},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run fake planner: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("unexpected step count: got %d", len(plan.Steps))
+	}
+	if plan.Steps[0].Params["legend_loc"] != "on data" {
+		t.Fatalf("expected follow-up request to inherit legend_loc, got %+v", plan.Steps[0].Params)
+	}
+}
+
 func TestFakePlannerSubsetsNamedCellTypeThenPlotsUMAP(t *testing.T) {
 	planner := NewFakePlanner()
 

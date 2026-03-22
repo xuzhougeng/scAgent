@@ -256,6 +256,119 @@ func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
 	if len(request.RecentArtifacts) != 1 || request.RecentArtifacts[0].ID != "art_prev" {
 		t.Fatalf("unexpected recent artifacts: %+v", request.RecentArtifacts)
 	}
+	if request.WorkingMemory == nil {
+		t.Fatalf("expected working memory in planning request")
+	}
+	if request.WorkingMemory.Focus == nil || request.WorkingMemory.Focus.ActiveObjectID != "obj_active" {
+		t.Fatalf("expected working memory focus on obj_active, got %+v", request.WorkingMemory.Focus)
+	}
+}
+
+func TestBuildExecutablePlanInheritsMissingLegendFromRecentPlotContext(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	planner := &scriptedPlanner{
+		mode: "llm",
+		plans: []models.Plan{
+			{
+				Steps: []models.PlanStep{
+					{
+						ID:             "step_1",
+						Skill:          "plot_umap",
+						TargetObjectID: "$active",
+						Params: map[string]any{
+							"color_by": "louvain",
+						},
+					},
+				},
+			},
+		},
+	}
+	service := NewService(session.NewStore(), registry, nil, planner, t.TempDir())
+
+	plan, _, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
+		Message: "把这个图改一下",
+		RecentJobs: []*models.Job{
+			{
+				ID:     "job_prev",
+				Status: models.JobSucceeded,
+				Steps: []models.JobStep{
+					{
+						Skill: "plot_umap",
+						Metadata: map[string]any{
+							"legend_loc": "on data",
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build executable plan: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("unexpected step count: %+v", plan.Steps)
+	}
+	if plan.Steps[0].Params["legend_loc"] != "on data" {
+		t.Fatalf("expected missing legend_loc to inherit from recent plot, got %+v", plan.Steps[0].Params)
+	}
+}
+
+func TestBuildExecutablePlanKeepsPlannerLegendChoiceWhenProvided(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	planner := &scriptedPlanner{
+		mode: "llm",
+		plans: []models.Plan{
+			{
+				Steps: []models.PlanStep{
+					{
+						ID:             "step_1",
+						Skill:          "plot_umap",
+						TargetObjectID: "$active",
+						Params: map[string]any{
+							"color_by":   "louvain",
+							"legend_loc": "right",
+						},
+					},
+				},
+			},
+		},
+	}
+	service := NewService(session.NewStore(), registry, nil, planner, t.TempDir())
+
+	plan, _, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
+		Message: "把图例放右边",
+		RecentJobs: []*models.Job{
+			{
+				ID:     "job_prev",
+				Status: models.JobSucceeded,
+				Steps: []models.JobStep{
+					{
+						Skill: "plot_umap",
+						Metadata: map[string]any{
+							"legend_loc": "on data",
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build executable plan: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("unexpected step count: %+v", plan.Steps)
+	}
+	if plan.Steps[0].Params["legend_loc"] != "right" {
+		t.Fatalf("expected explicit legend request to win, got %+v", plan.Steps[0].Params)
+	}
 }
 
 func TestRunJobReplansRemainingStepsFromCurrentState(t *testing.T) {

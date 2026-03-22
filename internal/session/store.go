@@ -266,12 +266,13 @@ func (s *Store) Snapshot(sessionID string) (*models.SessionSnapshot, error) {
 	}
 
 	return &models.SessionSnapshot{
-		Session:   sessionCopy,
-		Workspace: workspaceCopy,
-		Objects:   objects,
-		Jobs:      jobs,
-		Artifacts: artifacts,
-		Messages:  messages,
+		Session:       sessionCopy,
+		Workspace:     workspaceCopy,
+		Objects:       objects,
+		Jobs:          jobs,
+		Artifacts:     artifacts,
+		Messages:      messages,
+		WorkingMemory: buildWorkingMemory(sessionCopy, objects, jobs, artifacts),
 	}, nil
 }
 
@@ -454,6 +455,9 @@ func clonePlanStep(in models.PlanStep) models.PlanStep {
 		for key, value := range in.Params {
 			out.Params[key] = value
 		}
+	}
+	if len(in.MemoryRefs) > 0 {
+		out.MemoryRefs = append([]string(nil), in.MemoryRefs...)
 	}
 	return out
 }

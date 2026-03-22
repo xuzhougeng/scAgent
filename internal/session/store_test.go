@@ -86,6 +86,22 @@ func TestPersistentStoreRestoresWorkspaceConversationState(t *testing.T) {
 	}
 	store.SaveArtifact(artifact)
 
+	job.Steps = []models.JobStep{
+		{
+			ID:             "step_1",
+			Skill:          "plot_dotplot",
+			Status:         models.JobSucceeded,
+			Summary:        "已输出 B 细胞 top10 marker dotplot。",
+			OutputObjectID: object.ID,
+			ArtifactIDs:    []string{artifact.ID},
+			Params: map[string]any{
+				"groupby": "cell_type",
+			},
+			FinishedAt: &now,
+		},
+	}
+	store.SaveJob(job)
+
 	messageAssistant := &models.Message{
 		ID:        store.NextID("msg"),
 		SessionID: conversation.ID,
@@ -129,6 +145,21 @@ func TestPersistentStoreRestoresWorkspaceConversationState(t *testing.T) {
 	}
 	if snapshot.Messages[0].ID != messageUser.ID || snapshot.Messages[1].ID != messageAssistant.ID {
 		t.Fatalf("expected messages to preserve order, got %+v", snapshot.Messages)
+	}
+	if snapshot.WorkingMemory == nil {
+		t.Fatalf("expected working memory in snapshot")
+	}
+	if snapshot.WorkingMemory.Focus == nil || snapshot.WorkingMemory.Focus.ActiveObjectID != object.ID {
+		t.Fatalf("expected working memory focus on active object %q, got %+v", object.ID, snapshot.WorkingMemory.Focus)
+	}
+	if len(snapshot.WorkingMemory.RecentArtifacts) != 1 || snapshot.WorkingMemory.RecentArtifacts[0].ID != artifact.ID {
+		t.Fatalf("expected working memory to reference recent artifact %q, got %+v", artifact.ID, snapshot.WorkingMemory.RecentArtifacts)
+	}
+	if len(snapshot.WorkingMemory.ConfirmedPreferences) == 0 {
+		t.Fatalf("expected working memory confirmed preferences, got %+v", snapshot.WorkingMemory)
+	}
+	if len(snapshot.WorkingMemory.SemanticStateChanges) == 0 {
+		t.Fatalf("expected working memory state changes, got %+v", snapshot.WorkingMemory)
 	}
 
 	workspaceSnapshot, err := reloaded.WorkspaceSnapshot(workspace.ID)

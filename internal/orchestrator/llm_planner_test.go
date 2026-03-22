@@ -41,7 +41,7 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 							"content": [
 								{
 									"type": "output_text",
-									"text": "{\"steps\":[{\"skill\":\"inspect_dataset\",\"target_object_id\":\"$active\",\"params\":{}}]}"
+									"text": "{\"steps\":[{\"skill\":\"inspect_dataset\",\"target_object_id\":\"$active\",\"params\":{},\"memory_refs\":[\"focus.active_object_id\"]}]}"
 								}
 							]
 						}
@@ -88,6 +88,51 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 				},
 			},
 		},
+		RecentJobs: []*models.Job{
+			{
+				ID:     "job_prev",
+				Status: models.JobSucceeded,
+				Steps: []models.JobStep{
+					{
+						Skill: "plot_umap",
+						Params: map[string]any{
+							"color_by":   "louvain",
+							"legend_loc": "on data",
+						},
+						Metadata: map[string]any{
+							"legend_loc": "on data",
+						},
+					},
+				},
+			},
+		},
+		WorkingMemory: &models.WorkingMemory{
+			Focus: &models.WorkingMemoryFocus{
+				ActiveObjectID:        "obj_1",
+				ActiveObjectLabel:     "pbmc3k",
+				LastArtifactID:        "art_1",
+				LastArtifactTitle:     "pbmc3k UMAP",
+				LastOutputObjectID:    "obj_1",
+				LastOutputObjectLabel: "pbmc3k",
+			},
+			RecentArtifacts: []models.WorkingMemoryArtifactRef{
+				{
+					ID:       "art_1",
+					Kind:     models.ArtifactPlot,
+					ObjectID: "obj_1",
+					JobID:    "job_prev",
+					Title:    "pbmc3k UMAP",
+					Summary:  "colored by louvain",
+				},
+			},
+			ConfirmedPreferences: []models.WorkingMemoryPreference{
+				{
+					Skill: "plot_umap",
+					Param: "legend_loc",
+					Value: "on data",
+				},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("run planner: %v", err)
@@ -95,6 +140,9 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 
 	if len(plan.Steps) != 1 || plan.Steps[0].Skill != "inspect_dataset" {
 		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	if len(plan.Steps[0].MemoryRefs) != 1 || plan.Steps[0].MemoryRefs[0] != "focus.active_object_id" {
+		t.Fatalf("planner response should preserve memory refs, got %+v", plan.Steps[0].MemoryRefs)
 	}
 
 	if !bytes.Contains(capturedBody, []byte(`"model":"gpt-5.4"`)) {
@@ -111,6 +159,12 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 	}
 	if !bytes.Contains(capturedBody, []byte(`obs_fields`)) {
 		t.Fatalf("planner request missing metadata context: %s", string(capturedBody))
+	}
+	if !bytes.Contains(capturedBody, []byte(`legend_loc`)) || !bytes.Contains(capturedBody, []byte(`on data`)) {
+		t.Fatalf("planner request missing recent step params/metadata context: %s", string(capturedBody))
+	}
+	if !bytes.Contains(capturedBody, []byte(`working_memory`)) || !bytes.Contains(capturedBody, []byte(`confirmed_preferences`)) {
+		t.Fatalf("planner request missing working memory context: %s", string(capturedBody))
 	}
 
 	var requestPayload map[string]any
@@ -210,7 +264,14 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 				t.Fatalf("plot_umap legend_loc enum missing 'on data': %+v", legendLocPayload)
 			}
 			foundPlotUMAPParams = true
-			continue
+		}
+		memoryRefsPayload, ok := stepProperties["memory_refs"].(map[string]any)
+		if !ok {
+			t.Fatalf("plan step schema missing memory_refs: %+v", stepProperties)
+		}
+		memoryRefsAnyOf, ok := memoryRefsPayload["anyOf"].([]any)
+		if !ok || len(memoryRefsAnyOf) != 2 {
+			t.Fatalf("memory_refs should allow null: %+v", memoryRefsPayload)
 		}
 		if enumValues[0] != "inspect_dataset" {
 			continue

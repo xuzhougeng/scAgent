@@ -796,6 +796,11 @@ function renderSessionMeta() {
     ${workspaceListMarkup}
     <div class="workspace-section-label">对话列表</div>
     ${conversationMarkup}
+    ${renderSidebarCard({
+      title: "Working Memory",
+      open: false,
+      body: renderWorkingMemoryMarkup(appState.snapshot?.working_memory),
+    })}
   `;
   bindWorkspaceMeta(meta);
 }
@@ -1140,6 +1145,9 @@ function buildPlanStepMarkup(step, index) {
   const params = step.params && Object.keys(step.params).length
     ? `<pre>${escapeHTML(JSON.stringify(step.params, null, 2))}</pre>`
     : "<p class='muted'>无额外参数。</p>";
+  const memoryRefs = step.memory_refs?.length
+    ? `<div class="kv"><span>记忆引用</span><span>${escapeHTML(step.memory_refs.join("、"))}</span></div>`
+    : "";
 
   return `
     <details class="message-plan-step">
@@ -1150,6 +1158,7 @@ function buildPlanStepMarkup(step, index) {
       <div class="message-plan-step-body">
         <div class="kv"><span>技能</span><span>${escapeHTML(step.skill || "未知")}</span></div>
         <div class="kv"><span>目标</span><span>${escapeHTML(formatPlanTarget(step.target_object_id))}</span></div>
+        ${memoryRefs}
         ${params}
       </div>
     </details>
@@ -1267,6 +1276,14 @@ function renderPlannerPreview() {
 
   blocks.push(
     renderSidebarCard({
+      title: "Working Memory",
+      open: false,
+      body: renderWorkingMemoryMarkup(preview.planning_request?.working_memory),
+    }),
+  );
+
+  blocks.push(
+    renderSidebarCard({
       title: "规划请求",
       body: `<pre>${escapeHTML(JSON.stringify(preview.planning_request, null, 2))}</pre>`,
     }),
@@ -1291,6 +1308,87 @@ function renderPlannerPreview() {
   }
 
   container.innerHTML = blocks.join("");
+}
+
+function renderWorkingMemoryMarkup(memory) {
+  if (!memory) {
+    return "<p class='muted'>当前还没有 working memory。</p>";
+  }
+
+  const focus = memory.focus;
+  const recentArtifacts = memory.recent_artifacts || [];
+  const confirmedPreferences = memory.confirmed_preferences || [];
+  const stateChanges = memory.semantic_state_changes || [];
+
+  const sections = [];
+  sections.push(`
+    <div class="workspace-section-label">当前焦点</div>
+    ${
+      focus
+        ? `
+          <div class="kv"><span>当前对象</span><span>${escapeHTML(focus.active_object_label || focus.active_object_id || "无")}</span></div>
+          <div class="kv"><span>最近输出对象</span><span>${escapeHTML(focus.last_output_object_label || focus.last_output_object_id || "无")}</span></div>
+          <div class="kv"><span>最近结果</span><span>${escapeHTML(focus.last_artifact_title || focus.last_artifact_id || "无")}</span></div>
+        `
+        : "<p class='muted'>暂无焦点信息。</p>"
+    }
+  `);
+
+  sections.push(`
+    <div class="workspace-section-label">确认偏好</div>
+    ${
+      confirmedPreferences.length
+        ? confirmedPreferences
+            .map(
+              (item) => `
+                <div class="kv">
+                  <span>${escapeHTML(`${item.skill}.${item.param}`)}</span>
+                  <span>${escapeHTML(formatMemoryValue(item.value))}</span>
+                </div>
+              `,
+            )
+            .join("")
+        : "<p class='muted'>暂无确认偏好。</p>"
+    }
+  `);
+
+  sections.push(`
+    <div class="workspace-section-label">最近结果引用</div>
+    ${
+      recentArtifacts.length
+        ? recentArtifacts
+            .map(
+              (artifact) => `
+                <div class="kv">
+                  <span>${escapeHTML(artifact.kind || "artifact")}</span>
+                  <span>${escapeHTML(artifact.title || artifact.id || "未命名结果")}</span>
+                </div>
+              `,
+            )
+            .join("")
+        : "<p class='muted'>暂无最近结果引用。</p>"
+    }
+  `);
+
+  sections.push(`
+    <div class="workspace-section-label">语义状态变更</div>
+    ${
+      stateChanges.length
+        ? stateChanges
+            .map(
+              (change) => `
+                <div class="kv">
+                  <span>${escapeHTML(change.kind || "change")}</span>
+                  <span>${escapeHTML(change.summary || change.object_label || change.artifact_title || change.skill || "已记录")}</span>
+                </div>
+              `,
+            )
+            .join("")
+        : "<p class='muted'>暂无语义状态变更。</p>"
+    }
+  `);
+
+  return sections.join("");
 }
 
 async function buildArtifactCardMarkup(artifact, variant = "chat") {
@@ -1408,6 +1506,19 @@ function formatList(values) {
     return "无";
   }
   return values.join("、");
+}
+
+function formatMemoryValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return "无";
+  }
+  if (Array.isArray(value)) {
+    return value.join("、");
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
 }
 
 function formatSkillList(values) {

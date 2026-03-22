@@ -134,6 +134,7 @@ type PlanStep struct {
 	Skill          string         `json:"skill"`
 	TargetObjectID string         `json:"target_object_id,omitempty"`
 	Params         map[string]any `json:"params,omitempty"`
+	MemoryRefs     []string       `json:"memory_refs,omitempty"`
 }
 
 type JobStep struct {
@@ -176,13 +177,63 @@ type Job struct {
 	FinishedAt  *time.Time      `json:"finished_at,omitempty"`
 }
 
+type WorkingMemory struct {
+	Focus                *WorkingMemoryFocus        `json:"focus,omitempty"`
+	RecentArtifacts      []WorkingMemoryArtifactRef `json:"recent_artifacts,omitempty"`
+	ConfirmedPreferences []WorkingMemoryPreference  `json:"confirmed_preferences,omitempty"`
+	SemanticStateChanges []WorkingMemoryStateChange `json:"semantic_state_changes,omitempty"`
+	UpdatedAt            time.Time                  `json:"updated_at"`
+}
+
+type WorkingMemoryFocus struct {
+	ActiveObjectID        string `json:"active_object_id,omitempty"`
+	ActiveObjectLabel     string `json:"active_object_label,omitempty"`
+	LastOutputObjectID    string `json:"last_output_object_id,omitempty"`
+	LastOutputObjectLabel string `json:"last_output_object_label,omitempty"`
+	LastArtifactID        string `json:"last_artifact_id,omitempty"`
+	LastArtifactTitle     string `json:"last_artifact_title,omitempty"`
+}
+
+type WorkingMemoryArtifactRef struct {
+	ID        string       `json:"id"`
+	Kind      ArtifactKind `json:"kind"`
+	ObjectID  string       `json:"object_id,omitempty"`
+	JobID     string       `json:"job_id,omitempty"`
+	Title     string       `json:"title"`
+	Summary   string       `json:"summary,omitempty"`
+	CreatedAt time.Time    `json:"created_at"`
+}
+
+type WorkingMemoryPreference struct {
+	Skill        string    `json:"skill"`
+	Param        string    `json:"param"`
+	Value        any       `json:"value,omitempty"`
+	SourceJobID  string    `json:"source_job_id,omitempty"`
+	SourceStepID string    `json:"source_step_id,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type WorkingMemoryStateChange struct {
+	Kind          string    `json:"kind"`
+	Skill         string    `json:"skill,omitempty"`
+	JobID         string    `json:"job_id,omitempty"`
+	StepID        string    `json:"step_id,omitempty"`
+	Summary       string    `json:"summary,omitempty"`
+	ObjectID      string    `json:"object_id,omitempty"`
+	ObjectLabel   string    `json:"object_label,omitempty"`
+	ArtifactID    string    `json:"artifact_id,omitempty"`
+	ArtifactTitle string    `json:"artifact_title,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
 type SessionSnapshot struct {
-	Session   *Session      `json:"session"`
-	Workspace *Workspace    `json:"workspace,omitempty"`
-	Objects   []*ObjectMeta `json:"objects"`
-	Jobs      []*Job        `json:"jobs"`
-	Artifacts []*Artifact   `json:"artifacts"`
-	Messages  []*Message    `json:"messages"`
+	Session       *Session       `json:"session"`
+	Workspace     *Workspace     `json:"workspace,omitempty"`
+	Objects       []*ObjectMeta  `json:"objects"`
+	Jobs          []*Job         `json:"jobs"`
+	Artifacts     []*Artifact    `json:"artifacts"`
+	Messages      []*Message     `json:"messages"`
+	WorkingMemory *WorkingMemory `json:"working_memory,omitempty"`
 }
 
 type WorkspaceSnapshot struct {

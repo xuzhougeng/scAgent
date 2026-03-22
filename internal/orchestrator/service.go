@@ -28,14 +28,15 @@ type Service struct {
 }
 
 type PlanningRequest struct {
-	Message         string               `json:"message"`
-	Session         *models.Session      `json:"session,omitempty"`
-	Workspace       *models.Workspace    `json:"workspace,omitempty"`
-	ActiveObject    *models.ObjectMeta   `json:"active_object,omitempty"`
-	Objects         []*models.ObjectMeta `json:"objects,omitempty"`
-	RecentMessages  []*models.Message    `json:"recent_messages,omitempty"`
-	RecentJobs      []*models.Job        `json:"recent_jobs,omitempty"`
-	RecentArtifacts []*models.Artifact   `json:"recent_artifacts,omitempty"`
+	Message         string                `json:"message"`
+	Session         *models.Session       `json:"session,omitempty"`
+	Workspace       *models.Workspace     `json:"workspace,omitempty"`
+	ActiveObject    *models.ObjectMeta    `json:"active_object,omitempty"`
+	Objects         []*models.ObjectMeta  `json:"objects,omitempty"`
+	RecentMessages  []*models.Message     `json:"recent_messages,omitempty"`
+	RecentJobs      []*models.Job         `json:"recent_jobs,omitempty"`
+	RecentArtifacts []*models.Artifact    `json:"recent_artifacts,omitempty"`
+	WorkingMemory   *models.WorkingMemory `json:"working_memory,omitempty"`
 }
 
 type PlannerDebugPreview struct {
@@ -781,6 +782,7 @@ func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningReque
 			return models.Plan{}, "", fmt.Errorf("规划器执行失败：%w；规则兜底也失败：%v", err, fallbackErr)
 		}
 		fallbackPlan = NormalizePlan(fallbackPlan)
+		fallbackPlan = applyRecentPlotContext(request, fallbackPlan)
 		if fallbackValidateErr := s.skills.ValidatePlan(fallbackPlan); fallbackValidateErr != nil {
 			return models.Plan{}, "", fmt.Errorf("规划器执行失败：%w；规则兜底也失败：%v", err, fallbackValidateErr)
 		}
@@ -788,6 +790,7 @@ func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningReque
 	}
 
 	plan = NormalizePlan(plan)
+	plan = applyRecentPlotContext(request, plan)
 	validateErr := s.skills.ValidatePlan(plan)
 	if validateErr == nil {
 		return plan, "", nil
@@ -802,6 +805,7 @@ func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningReque
 		return models.Plan{}, "", fmt.Errorf("执行计划不合法：%w；规则兜底也失败：%v", validateErr, fallbackErr)
 	}
 	fallbackPlan = NormalizePlan(fallbackPlan)
+	fallbackPlan = applyRecentPlotContext(request, fallbackPlan)
 	if fallbackValidateErr := s.skills.ValidatePlan(fallbackPlan); fallbackValidateErr != nil {
 		return models.Plan{}, "", fmt.Errorf("执行计划不合法：%w；规则兜底也失败：%v", validateErr, fallbackValidateErr)
 	}
@@ -967,6 +971,7 @@ func (s *Service) buildPlanningRequest(sessionRecord *models.Session, message st
 		RecentMessages:  trimRecentMessages(snapshot.Messages, message, 6),
 		RecentJobs:      trimRecentJobs(snapshot.Jobs, 3),
 		RecentArtifacts: trimRecentArtifacts(snapshot.Artifacts, 4),
+		WorkingMemory:   snapshot.WorkingMemory,
 	}, nil
 }
 
@@ -997,6 +1002,7 @@ func (s *Service) buildEvaluationRequest(sessionRecord *models.Session, message 
 		RecentJobs:      request.RecentJobs,
 		RecentArtifacts: request.RecentArtifacts,
 		CurrentJob:      cloneJobForPlanning(currentJob),
+		WorkingMemory:   request.WorkingMemory,
 	}, nil
 }
 
@@ -1092,6 +1098,9 @@ func clonePlanWithSteps(steps []models.PlanStep) models.Plan {
 func clonePlanStepData(in models.PlanStep) models.PlanStep {
 	out := in
 	out.Params = cloneParams(in.Params)
+	if len(in.MemoryRefs) > 0 {
+		out.MemoryRefs = append([]string(nil), in.MemoryRefs...)
+	}
 	return out
 }
 

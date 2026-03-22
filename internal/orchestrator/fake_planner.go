@@ -43,15 +43,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 	activeHasUMAP := objectHasEmbedding(request.ActiveObject, "X_umap")
 	activeIsSubset := request.ActiveObject != nil && (request.ActiveObject.Kind == models.ObjectSubset || request.ActiveObject.Kind == models.ObjectReclustered)
 	recentPlotSkill := latestRecentPlotSkill(request)
-	wantsPlotFollowUp := strings.Contains(request.Message, "这个图") ||
-		strings.Contains(request.Message, "这张图") ||
-		strings.Contains(request.Message, "上一张图") ||
-		strings.Contains(request.Message, "刚才的图") ||
-		strings.Contains(request.Message, "改图") ||
-		strings.Contains(request.Message, "修改图") ||
-		strings.Contains(request.Message, "重画") ||
-		strings.Contains(request.Message, "不符合要求") ||
-		(len(explicitPlotParams) > 0 && recentPlotSkill != "")
+	wantsPlotFollowUp := isPlotFollowUpRequest(request, explicitPlotParams)
 	cellTypeValue := inferCellTypeValue(request, request.Message)
 	geneNames := inferGeneNames(request.Message)
 
@@ -156,6 +148,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 			for key, value := range explicitPlotParams {
 				plotParams[key] = value
 			}
+			plotParams = mergeRecentPlotUMAPParams(request, plotParams)
 			steps = append(steps, models.PlanStep{
 				ID:             stepID(len(steps) + 1),
 				Skill:          "plot_umap",
