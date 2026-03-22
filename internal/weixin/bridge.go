@@ -313,7 +313,10 @@ func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string
 		return "可用命令:\n" +
 			"/status — 查看当前会话状态\n" +
 			"/l — 列出所有工作区\n" +
-			"/s <序号> — 切换到指定工作区（如 /s 1）\n" +
+			"/s <序号> — 切换工作区（如 /s 1）\n" +
+			"/lc — 列出当前工作区的对话\n" +
+			"/sc <序号> — 切换对话（如 /sc 1）\n" +
+			"/nc — 在当前工作区新建对话\n" +
 			"/new — 创建新工作区+会话\n" +
 			"/reset — 重置会话映射\n" +
 			"/h — 显示此帮助"
@@ -388,6 +391,86 @@ func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string
 			wsLabel = snapshot.Workspace.Label
 		}
 		return fmt.Sprintf("已切换到工作区 %s (%s)\n新会话: %s", targetWS, wsLabel, snapshot.Session.ID)
+
+	case "/list-chat", "/lc":
+		b.mu.Lock()
+		sessionID := b.sessions[fromUserID]
+		b.mu.Unlock()
+		if sessionID == "" {
+			return "当前无活跃会话。发送任意消息开始。"
+		}
+		snap, err := b.service.GetSnapshot(sessionID)
+		if err != nil || snap.Workspace == nil {
+			return "无法获取当前工作区信息"
+		}
+		wsSnap, err := b.service.GetWorkspaceSnapshot(snap.Workspace.ID)
+		if err != nil || len(wsSnap.Conversations) == 0 {
+			return "当前工作区暂无对话"
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("工作区 %s 的对话:\n", snap.Workspace.Label))
+		for i, conv := range wsSnap.Conversations {
+			marker := "  "
+			if conv.ID == sessionID {
+				marker = "→ "
+			}
+			label := conv.Label
+			if label == "" {
+				label = conv.ID
+			}
+			sb.WriteString(fmt.Sprintf("%s%d. %s\n", marker, i+1, label))
+		}
+		sb.WriteString("\n用 /sc <序号> 切换，如 /sc 1")
+		return sb.String()
+
+	case "/switch-chat", "/sc":
+		if len(parts) < 2 {
+			return "用法: /sc <序号>\n用 /lc 查看对话列表"
+		}
+		b.mu.Lock()
+		sessionID := b.sessions[fromUserID]
+		b.mu.Unlock()
+		if sessionID == "" {
+			return "当前无活跃会话。发送任意消息开始。"
+		}
+		snap, err := b.service.GetSnapshot(sessionID)
+		if err != nil || snap.Workspace == nil {
+			return "无法获取当前工作区信息"
+		}
+		wsSnap, err := b.service.GetWorkspaceSnapshot(snap.Workspace.ID)
+		if err != nil {
+			return "无法获取工作区对话列表"
+		}
+		idx, err := strconv.Atoi(parts[1])
+		if err != nil || idx < 1 || idx > len(wsSnap.Conversations) {
+			return fmt.Sprintf("无效序号，用 /lc 查看列表（共 %d 个对话）", len(wsSnap.Conversations))
+		}
+		target := wsSnap.Conversations[idx-1]
+		b.setSession(fromUserID, target.ID)
+		label := target.Label
+		if label == "" {
+			label = target.ID
+		}
+		return fmt.Sprintf("已切换到对话: %s", label)
+
+	case "/new-chat", "/nc":
+		b.mu.Lock()
+		sessionID := b.sessions[fromUserID]
+		b.mu.Unlock()
+		if sessionID == "" {
+			return "当前无活跃会话。发送任意消息或 /new 创建工作区。"
+		}
+		snap, err := b.service.GetSnapshot(sessionID)
+		if err != nil || snap.Workspace == nil {
+			return "无法获取当前工作区信息"
+		}
+		label := fmt.Sprintf("%s-%s", b.config.SessionLabel, truncate(fromUserID, 12))
+		newSnap, err := b.service.CreateConversation(ctx, snap.Workspace.ID, label)
+		if err != nil {
+			return fmt.Sprintf("创建对话失败: %v", err)
+		}
+		b.setSession(fromUserID, newSnap.Session.ID)
+		return fmt.Sprintf("已在工作区 %s 新建对话\n会话: %s", snap.Workspace.Label, newSnap.Session.ID)
 
 	case "/new":
 		label := fmt.Sprintf("%s-%s", b.config.SessionLabel, truncate(fromUserID, 12))
