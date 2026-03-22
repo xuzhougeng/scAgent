@@ -561,6 +561,7 @@ function buildJobStatusMarkup(job) {
         ${statusPill(job.status === "running" ? "warn" : "muted", formatJobStatus(job.status))}
       </div>
       <p class="message-job-summary">${escapeHTML(job.summary || "请求已接收，等待规划器和运行时返回更新。")}</p>
+      ${buildPlanMarkup(job)}
       ${
         job.steps?.length
           ? `<div class="message-step-list">
@@ -603,6 +604,7 @@ async function buildJobResultMarkup(job) {
           ? `<p class="message-job-error">${escapeHTML(job.error)}</p>`
           : ""
       }
+      ${buildPlanMarkup(job)}
       ${
         job.steps?.length
           ? `<div class="message-step-list">
@@ -639,6 +641,45 @@ async function buildJobResultMarkup(job) {
           : ""
       }
     </section>
+  `;
+}
+
+function buildPlanMarkup(job) {
+  const steps = job.plan?.steps || [];
+  if (!steps.length) {
+    return "";
+  }
+
+  return `
+    <details class="message-plan-details">
+      <summary>
+        <span>执行计划</span>
+        <span class="message-plan-summary">${escapeHTML(`${steps.length} 步`)}</span>
+      </summary>
+      <div class="message-plan-list">
+        ${steps.map((step, index) => buildPlanStepMarkup(step, index)).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function buildPlanStepMarkup(step, index) {
+  const params = step.params && Object.keys(step.params).length
+    ? `<pre>${escapeHTML(JSON.stringify(step.params, null, 2))}</pre>`
+    : "<p class='muted'>无额外参数。</p>";
+
+  return `
+    <details class="message-plan-step">
+      <summary>
+        <span>第 ${index + 1} 步 · ${escapeHTML(formatSkillName(step.skill))}</span>
+        <span class="message-plan-step-target">${escapeHTML(formatPlanTarget(step.target_object_id))}</span>
+      </summary>
+      <div class="message-plan-step-body">
+        <div class="kv"><span>技能</span><span>${escapeHTML(step.skill || "未知")}</span></div>
+        <div class="kv"><span>目标</span><span>${escapeHTML(formatPlanTarget(step.target_object_id))}</span></div>
+        ${params}
+      </div>
+    </details>
   `;
 }
 
@@ -906,6 +947,16 @@ function formatSkillList(values) {
 function objectLabel(objectId) {
   const object = (appState.snapshot?.objects || []).find((item) => item.id === objectId);
   return object ? object.label : objectId;
+}
+
+function formatPlanTarget(targetObjectId) {
+  if (!targetObjectId || targetObjectId === "$active") {
+    return "当前对象";
+  }
+  if (targetObjectId === "$prev") {
+    return "上一步输出";
+  }
+  return objectLabel(targetObjectId);
 }
 
 function formatRole(role) {

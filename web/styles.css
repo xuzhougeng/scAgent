@@ -511,6 +511,82 @@ body {
   margin-top: 12px;
 }
 
+.message-plan-details {
+  margin-top: 12px;
+  border: 1px solid rgba(61, 107, 75, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.62);
+  overflow: hidden;
+}
+
+.message-plan-details summary,
+.message-plan-step summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.message-plan-details summary::-webkit-details-marker,
+.message-plan-step summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-plan-details > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  font-weight: 600;
+}
+
+.message-plan-summary,
+.message-plan-step-target {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 500;
+}
+
+.message-plan-list {
+  padding: 0 10px 10px;
+}
+
+.message-plan-step {
+  border-top: 1px solid rgba(61, 107, 75, 0.1);
+}
+
+.message-plan-step:first-child {
+  border-top: none;
+}
+
+.message-plan-step > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 4px;
+  font-size: 0.92rem;
+}
+
+.message-plan-step-body {
+  padding: 0 4px 10px;
+}
+
+.message-plan-step-body pre {
+  margin: 10px 0 0;
+  padding: 12px;
+  overflow: auto;
+  border-radius: 12px;
+  background: #18211c;
+  color: #eff8f0;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.message-plan-step-body .muted {
+  margin: 10px 0 0;
+}
+
 .message-step-row,
 .message-step-card {
   border-top: 1px solid rgba(61, 107, 75, 0.1);
