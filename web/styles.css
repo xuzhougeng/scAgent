@@ -163,6 +163,21 @@ body.is-resizing {
     );
 }
 
+.console-info-bar {
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+
+.console-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.console-info-bar .workspace-identity-card {
+  background: rgba(255, 255, 255, 0.78);
+}
+
 .panel-head {
   margin-bottom: 18px;
   flex-shrink: 0;
@@ -196,6 +211,29 @@ body.is-resizing {
   background: var(--panel-strong);
   font-size: 0.92rem;
   flex-shrink: 0;
+}
+
+.workspace-navigator {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--panel-strong);
+  font-size: 0.92rem;
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
+.workspace-navigator-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.workspace-navigator-title {
+  font-weight: 700;
+  line-height: 1.35;
 }
 
 .workspace-meta-head {
@@ -1435,6 +1473,7 @@ body.is-resizing {
   }
 
   .workspace-identity-grid,
+  .console-info-grid,
   .workspace-summary-grid {
     grid-template-columns: 1fr;
   }

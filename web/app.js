@@ -829,9 +829,11 @@ function connectEvents() {
 }
 
 function render() {
+  renderWorkspaceNavigator();
   renderStatusOverviewEntry();
   renderStatusOverviewModal();
   renderSessionMeta();
+  renderConsoleInfoBar();
   renderSkillHub();
   renderObjectTree();
   renderChat();
@@ -1039,6 +1041,92 @@ function bindStatusOverviewModal() {
   });
 }
 
+function renderWorkspaceNavigator() {
+  const container = document.getElementById("workspaceNavigator");
+  if (!container) {
+    return;
+  }
+
+  const currentWorkspace = appState.workspaceSnapshot?.workspace || appState.snapshot?.workspace || null;
+  const workspaceList = appState.workspaceList?.length
+    ? appState.workspaceList
+    : currentWorkspace
+      ? [currentWorkspace]
+      : [];
+
+  container.innerHTML = `
+    <div class="workspace-navigator-head">
+      <div>
+        <div class="workspace-meta-eyebrow">工作区</div>
+        <div class="workspace-navigator-title">工作区列表</div>
+      </div>
+      <button
+        id="newWorkspaceButton"
+        type="button"
+        class="ghost-button conversation-create-button"
+        title="新建独立工作区，适合换数据集或开始全新分析"
+      >新工作区</button>
+    </div>
+    ${
+      workspaceList.length
+        ? `
+          <div class="workspace-list">
+            ${workspaceList
+              .map(
+                (item) => `
+                  <button
+                    type="button"
+                    class="workspace-chip ${item.id === currentWorkspace?.id ? "active" : ""}"
+                    data-workspace-id="${escapeAttribute(item.id)}"
+                  >
+                    <span class="workspace-chip-label">${escapeHTML(item.label || item.id)}</span>
+                    <span class="workspace-chip-id">${escapeHTML(item.id)}</span>
+                  </button>
+                `,
+              )
+              .join("")}
+          </div>
+        `
+        : "<p class='muted'>当前还没有工作区。</p>"
+    }
+  `;
+
+  bindWorkspaceNavigator(container);
+}
+
+function renderConsoleInfoBar() {
+  const container = document.getElementById("consoleInfoBar");
+  if (!container) {
+    return;
+  }
+
+  if (!appState.snapshot) {
+    container.innerHTML = "";
+    return;
+  }
+
+  const { session, workspace } = appState.snapshot;
+  const currentWorkspace = appState.workspaceSnapshot?.workspace || workspace;
+  const datasetID = currentWorkspace?.dataset_id || session?.dataset_id || "未设置";
+
+  container.innerHTML = `
+    <div class="console-info-grid">
+      <div class="workspace-identity-card">
+        <span>Workspace</span>
+        <strong>${escapeHTML(currentWorkspace?.id || "未设置")}</strong>
+      </div>
+      <div class="workspace-identity-card">
+        <span>当前对话</span>
+        <strong>${escapeHTML(session?.id || "未设置")}</strong>
+      </div>
+      <div class="workspace-identity-card">
+        <span>数据集</span>
+        <strong>${escapeHTML(datasetID)}</strong>
+      </div>
+    </div>
+  `;
+}
+
 function renderSessionMeta() {
   const meta = document.getElementById("sessionMeta");
   if (!appState.snapshot) {
@@ -1046,33 +1134,10 @@ function renderSessionMeta() {
     return;
   }
   const { session, workspace, objects, jobs, artifacts } = appState.snapshot;
-  const workspaceList = appState.workspaceList || [];
   const conversations = appState.workspaceSnapshot?.conversations || (session ? [session] : []);
   const currentWorkspace = appState.workspaceSnapshot?.workspace || workspace;
   const workspaceLabel = currentWorkspace?.label || "未命名 workspace";
   const workspaceStatus = appState.workspaceStatus ? `<p class="workspace-status muted">${escapeHTML(appState.workspaceStatus)}</p>` : "";
-  const showWorkspaceSwitcher = workspaceList.length > 1;
-  const showConversationSwitcher = conversations.length > 1;
-  const workspaceListMarkup = workspaceList.length
-    ? `
-      <div class="workspace-list">
-        ${workspaceList
-          .map(
-            (item) => `
-              <button
-                type="button"
-                class="workspace-chip ${item.id === currentWorkspace?.id ? "active" : ""}"
-                data-workspace-id="${escapeAttribute(item.id)}"
-              >
-                <span class="workspace-chip-label">${escapeHTML(item.label || item.id)}</span>
-                <span class="workspace-chip-id">${escapeHTML(item.id)}</span>
-              </button>
-            `,
-          )
-          .join("")}
-      </div>
-    `
-    : "<p class='muted'>当前还没有其他 workspace。</p>";
   const conversationMarkup = conversations.length
     ? `
       <div class="conversation-list">
@@ -1095,7 +1160,7 @@ function renderSessionMeta() {
     : "<p class='muted'>当前 workspace 还没有其他对话。</p>";
 
   meta.innerHTML = `
-    <div class="workspace-meta-eyebrow">工作区 / 对话</div>
+    <div class="workspace-meta-eyebrow">当前工作区</div>
     <div class="workspace-meta-head">
       <div>
         <div class="workspace-title-row">
@@ -1111,34 +1176,14 @@ function renderSessionMeta() {
       </div>
       <div class="workspace-meta-actions">
         <button
-          id="newWorkspaceButton"
-          type="button"
-          class="ghost-button conversation-create-button"
-          title="新建独立工作区，适合换数据集或开始全新分析"
-        >新工作区</button>
-        <button
           id="newConversationButton"
           type="button"
           class="ghost-button conversation-create-button"
           title="保留当前工作区里的对象和结果，只开启新的聊天线程"
         >新对话</button>
-      </div>
+    </div>
     </div>
     ${workspaceStatus}
-    <div class="workspace-identity-grid">
-      <div class="workspace-identity-card">
-        <span>Workspace</span>
-        <strong>${escapeHTML(currentWorkspace?.id || "未设置")}</strong>
-      </div>
-      <div class="workspace-identity-card">
-        <span>当前对话</span>
-        <strong>${escapeHTML(session.id)}</strong>
-      </div>
-      <div class="workspace-identity-card">
-        <span>数据集</span>
-        <strong>${escapeHTML(currentWorkspace?.dataset_id || session.dataset_id || "未设置")}</strong>
-      </div>
-    </div>
     <div class="workspace-summary-grid">
       <div class="workspace-summary-item">
         <strong>${objects.length}</strong>
@@ -1153,27 +1198,13 @@ function renderSessionMeta() {
         <span>共享结果</span>
       </div>
     </div>
-    ${
-      showWorkspaceSwitcher
-        ? `
-          <div class="workspace-section-label">切换工作区</div>
-          ${workspaceListMarkup}
-        `
-        : ""
-    }
-    ${
-      showConversationSwitcher
-        ? `
-          <div class="workspace-section-label">切换对话</div>
-          ${conversationMarkup}
-        `
-        : ""
-    }
+    <div class="workspace-section-label">对话</div>
+    ${conversationMarkup}
   `;
   bindWorkspaceMeta(meta);
 }
 
-function bindWorkspaceMeta(container) {
+function bindWorkspaceNavigator(container) {
   const createWorkspaceButton = container.querySelector("#newWorkspaceButton");
   if (createWorkspaceButton) {
     createWorkspaceButton.addEventListener("click", async () => {
@@ -1181,16 +1212,18 @@ function bindWorkspaceMeta(container) {
     });
   }
 
+  for (const button of container.querySelectorAll("[data-workspace-id]")) {
+    button.addEventListener("click", async () => {
+      await switchWorkspace(button.dataset.workspaceId);
+    });
+  }
+}
+
+function bindWorkspaceMeta(container) {
   const createButton = container.querySelector("#newConversationButton");
   if (createButton) {
     createButton.addEventListener("click", async () => {
       await createConversation();
-    });
-  }
-
-  for (const button of container.querySelectorAll("[data-workspace-id]")) {
-    button.addEventListener("click", async () => {
-      await switchWorkspace(button.dataset.workspaceId);
     });
   }
 
