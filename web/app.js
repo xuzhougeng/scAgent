@@ -1454,7 +1454,13 @@ async function buildJobResultMarkup(job, assistantMessage) {
   );
   const showSummary = shouldRenderJobSummary(job, assistantMessage?.content || "");
   const cardClass = job.status === "failed" ? "failed" : job.status === "incomplete" ? "incomplete" : "done";
-  const detailMarkup = buildJobExecutionDetailsMarkup(job);
+  const phaseMarkup = buildJobPhasesMarkup(job);
+  const showInlinePhases = job.status === "failed";
+  const detailMarkup = buildJobExecutionDetailsMarkup(job, {
+    phasesMarkup: showInlinePhases ? "" : phaseMarkup,
+    summaryLabel: showInlinePhases ? "查看任务详情" : "查看过程信息",
+    summaryHint: showInlinePhases ? "计划与执行记录" : "阶段、计划与执行记录",
+  });
 
   return `
     <section class="message-job-card ${cardClass}">
@@ -1462,7 +1468,7 @@ async function buildJobResultMarkup(job, assistantMessage) {
         <strong>任务详情</strong>
         ${statusPill(statusKindForJob(job.status), formatJobStatus(job.status))}
       </div>
-      ${buildJobPhasesMarkup(job)}
+      ${showInlinePhases ? phaseMarkup : ""}
       ${
         showSummary && job.summary
           ? `<p class="message-job-summary">${escapeHTML(job.summary)}</p>`
@@ -1614,7 +1620,12 @@ function shouldRenderJobSummary(job, assistantContent = "") {
   return job.summary.trim() !== stepSummary;
 }
 
-function buildJobExecutionDetailsMarkup(job) {
+function buildJobExecutionDetailsMarkup(job, options = {}) {
+  const {
+    phasesMarkup = "",
+    summaryLabel = "查看任务详情",
+    summaryHint = "计划与执行记录",
+  } = options;
   const checkpointsMarkup = buildCheckpointMarkup(job);
   const planMarkup = buildPlanMarkup(job);
   const stepMarkup =
@@ -1641,17 +1652,18 @@ function buildJobExecutionDetailsMarkup(job) {
         </div>`
       : "";
 
-  if (!checkpointsMarkup && !planMarkup && !stepMarkup) {
+  if (!phasesMarkup && !checkpointsMarkup && !planMarkup && !stepMarkup) {
     return "";
   }
 
   return `
     <details class="message-plan-details message-job-details">
       <summary>
-        <span>查看任务详情</span>
-        <span class="message-plan-summary">计划与执行记录</span>
+        <span>${summaryLabel}</span>
+        <span class="message-plan-summary">${summaryHint}</span>
       </summary>
       <div class="message-job-extra">
+        ${phasesMarkup}
         ${checkpointsMarkup}
         ${planMarkup}
         ${stepMarkup}
