@@ -49,6 +49,7 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/scagent-mpl")
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 _ANALYSIS_MODULES: tuple[Any, Any, Any, Any, Any] | None = None
+BUILTIN_BUNDLE_ID = "builtin-core"
 BUILTIN_EXECUTABLE_SKILLS = [
     "inspect_dataset",
     "assess_dataset",
@@ -175,7 +176,28 @@ class RuntimeState:
         self.objects: dict[str, RuntimeObject] = {}
         self.sample_path = Path(os.environ.get("SCAGENT_SAMPLE_H5AD", "data/samples/pbmc3k.h5ad"))
         self.plugin_root = Path(os.environ.get("SCAGENT_PLUGIN_DIR", "data/skill-hub/plugins"))
+        self.plugin_state_path = Path(os.environ.get("SCAGENT_PLUGIN_STATE_PATH", str(self.plugin_root.parent / "state.json")))
         self.environment_report = build_environment_report(self.sample_path)
+
+    def load_disabled_bundles(self) -> set[str]:
+        if not self.plugin_state_path.exists():
+            return set()
+        try:
+            payload = json.loads(self.plugin_state_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return set()
+
+        disabled = set()
+        for item in payload.get("disabled_bundles", []):
+            bundle_id = str(item or "").strip()
+            if bundle_id:
+                disabled.add(bundle_id)
+        return disabled
+
+    def builtin_skills(self) -> list[str]:
+        if BUILTIN_BUNDLE_ID in self.load_disabled_bundles():
+            return []
+        return BUILTIN_EXECUTABLE_SKILLS.copy()
 
     def next_ref(self, session_id: str) -> str:
         self.counter += 1
@@ -185,6 +207,7 @@ class RuntimeState:
         skills: dict[str, dict[str, Any]] = {}
         if not self.plugin_root.exists():
             return skills
+        disabled_bundles = self.load_disabled_bundles()
 
         for manifest_path in sorted(self.plugin_root.rglob("plugin.json")):
             try:
@@ -193,6 +216,8 @@ class RuntimeState:
                 continue
 
             bundle_id = str(payload.get("id") or manifest_path.parent.name).strip() or manifest_path.parent.name
+            if bundle_id in disabled_bundles:
+                continue
             for skill_payload in payload.get("skills", []):
                 if not isinstance(skill_payload, dict):
                     continue
@@ -217,6 +242,11 @@ class RuntimeState:
                 }
 
         return skills
+
+    def skill_enabled(self, skill_name: str) -> bool:
+        if skill_name in BUILTIN_EXECUTABLE_SKILLS:
+            return BUILTIN_BUNDLE_ID not in self.load_disabled_bundles()
+        return skill_name in self.load_plugin_skills()
 
     def create_session_root(self, session_id: str, label: str, session_root: Path) -> dict[str, Any]:
         objects_dir = session_root / "objects"
@@ -764,6 +794,9 @@ class RuntimeState:
         session_root = Path(payload["session_root"])
         target = self.objects.get(payload.get("target_backend_ref", ""))
         params = payload.get("params", {})
+
+        if not self.skill_enabled(skill):
+            raise RuntimeError(f"技能 `{skill}` 当前已在 Skill Hub 中停用。")
 
         if skill in {"inspect_dataset", "assess_dataset"}:
             target = self._require_target(target, skill)
@@ -1321,13 +1354,16 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/healthz":
             plugin_skills = STATE.load_plugin_skills()
-            executable_skills = dedupe_list(BUILTIN_EXECUTABLE_SKILLS + sorted(plugin_skills.keys()))
+            executable_skills = dedupe_list(STATE.builtin_skills() + sorted(plugin_skills.keys()))
             notes = [
                 "运行时会读取真实的 h5ad 结构和注释信息。",
                 "常规预处理链、subset、recluster、marker 和 UMAP 已切到真实 AnnData/Scanpy 执行。",
                 "当现成 tool 不够时，可通过 run_python_analysis 在内存中的 AnnData 上执行短代码。",
                 "dotplot 和 violin 仍未开放给 planner，等真实实现完成后再升为 wired。",
             ]
+            disabled_bundles = STATE.load_disabled_bundles()
+            if disabled_bundles:
+                notes.append(f"Skill Hub 当前停用了 {len(disabled_bundles)} 个技能包，规划器与运行时都会跳过这些技能。")
             if plugin_skills:
                 notes.append(f"Skill Hub 已加载 {len(plugin_skills)} 个插件技能，可在当前会话中直接调用。")
             payload = {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"scagent/internal/orchestrator"
+	"scagent/internal/skill"
 )
 
 type Handler struct {
@@ -28,6 +29,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/fake/plan", h.handleFakePlan)
 	mux.HandleFunc("/api/skills", h.handleSkills)
 	mux.HandleFunc("/api/plugins", h.handlePlugins)
+	mux.HandleFunc("/api/plugins/", h.handlePluginRoutes)
 	mux.HandleFunc("/api/sessions", h.handleSessions)
 	mux.HandleFunc("/api/sessions/", h.handleSessionRoutes)
 	mux.HandleFunc("/api/messages", h.handleMessages)
@@ -66,7 +68,8 @@ func (h *Handler) handlePlugins(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"plugins": plugins,
+			"plugins": filterUploadedBundles(plugins),
+			"bundles": plugins,
 			"skills":  h.service.Skills(),
 		})
 	case http.MethodPost:
@@ -89,12 +92,50 @@ func (h *Handler) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		}
 
 		writeJSON(w, http.StatusCreated, map[string]any{
-			"plugin": pluginBundle,
-			"skills": h.service.Skills(),
+			"plugin":  pluginBundle,
+			"bundles": bundlesPayload(h.service),
+			"skills":  h.service.Skills(),
 		})
 	default:
 		writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 	}
+}
+
+func (h *Handler) handlePluginRoutes(w http.ResponseWriter, r *http.Request) {
+	bundleID := strings.TrimPrefix(r.URL.Path, "/api/plugins/")
+	bundleID = strings.TrimSpace(bundleID)
+	if bundleID == "" || strings.Contains(bundleID, "/") {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未找到插件资源"})
+		return
+	}
+
+	if r.Method != http.MethodPatch {
+		writeMethodNotAllowed(w, http.MethodPatch)
+		return
+	}
+
+	var payload struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid plugin state payload"})
+		return
+	}
+	if payload.Enabled == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing enabled field"})
+		return
+	}
+
+	bundle, err := h.service.SetPluginBundleEnabled(bundleID, *payload.Enabled)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"bundle":  bundle,
+		"bundles": bundlesPayload(h.service),
+		"skills":  h.service.Skills(),
+	})
 }
 
 func (h *Handler) handleFakePlan(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +179,25 @@ func (h *Handler) handleDocsIndex(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"docs": docs,
 	})
+}
+
+func filterUploadedBundles(bundles []skill.PluginBundle) []skill.PluginBundle {
+	out := make([]skill.PluginBundle, 0, len(bundles))
+	for _, bundle := range bundles {
+		if bundle.Builtin {
+			continue
+		}
+		out = append(out, bundle)
+	}
+	return out
+}
+
+func bundlesPayload(service *orchestrator.Service) []skill.PluginBundle {
+	bundles, err := service.PluginBundles()
+	if err != nil {
+		return nil
+	}
+	return bundles
 }
 
 func (h *Handler) handleDocContent(w http.ResponseWriter, r *http.Request) {

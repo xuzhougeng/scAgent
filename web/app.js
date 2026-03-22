@@ -9,7 +9,6 @@ const appState = {
   plannerPreview: null,
   chatRenderVersion: 0,
   artifactTextCache: new Map(),
-  pluginUploadStatus: "",
 };
 
 const quickActions = [
@@ -152,7 +151,7 @@ async function refreshCapabilityState() {
   ]);
   appState.systemStatus = status;
   appState.skills = skillsResponse.skills || [];
-  appState.plugins = pluginsResponse.plugins || [];
+  appState.plugins = pluginsResponse.bundles || pluginsResponse.plugins || [];
 }
 
 function bindComposer() {
@@ -464,113 +463,29 @@ function renderSessionMeta() {
 }
 
 function renderSkillHub() {
-  const container = document.getElementById("skillHub");
-  const plugins = appState.plugins || [];
+  const container = document.getElementById("skillHubEntry");
+  const bundles = appState.plugins || [];
+  const enabledBundles = bundles.filter((bundle) => bundle.enabled);
   container.innerHTML = renderSidebarCard({
     title: "Skill Hub",
-    badge: statusPill(plugins.length ? "ok" : "muted", `${plugins.length} 个插件`),
+    badge: statusPill(enabledBundles.length ? "ok" : "muted", `${enabledBundles.length}/${bundles.length || 0}`),
     open: false,
     body: `
-      <p class="muted">上传 zip bundle 后，新的技能会自动注册到规划器和运行时。</p>
-      <form id="pluginUploadForm" class="plugin-upload-form">
-        <label class="upload-label" for="pluginFileInput">上传插件</label>
-        <input id="pluginFileInput" name="file" type="file" accept=".zip,application/zip" />
-        <button type="submit" class="ghost-button">安装插件</button>
-      </form>
-      <div class="plugin-hub-actions">
-        <button id="pluginRefreshButton" type="button" class="ghost-button">刷新 Skill Hub</button>
+      <p class="muted">插件安装、启停和内置技能开关都已移到独立的 Skill Hub 页面统一管理。</p>
+      <div class="plugin-summary-grid">
+        <div class="plugin-summary-item">
+          <strong>${enabledBundles.length}</strong>
+          <span>启用中的技能包</span>
+        </div>
+        <div class="plugin-summary-item">
+          <strong>${appState.skills.length}</strong>
+          <span>当前已加载技能</span>
+        </div>
       </div>
-      <div id="pluginUploadStatus" class="upload-status muted">${escapeHTML(appState.pluginUploadStatus || "")}</div>
-      ${
-        plugins.length
-          ? `
-            <div class="plugin-list">
-              ${plugins
-                .map(
-                  (plugin) => `
-                    <section class="plugin-card">
-                      <div class="plugin-card-head">
-                        <strong>${escapeHTML(plugin.name || plugin.id)}</strong>
-                        <span class="muted">${escapeHTML(plugin.version || plugin.id)}</span>
-                      </div>
-                      ${
-                        plugin.description
-                          ? `<p class="muted">${escapeHTML(plugin.description)}</p>`
-                          : ""
-                      }
-                      <div class="plugin-skill-list">
-                        ${(plugin.skills || [])
-                          .map(
-                            (skill) => `
-                              <span class="plugin-skill-chip" title="${escapeAttribute(skill.description || skill.name)}">
-                                ${escapeHTML(formatSkillName(skill.name))}
-                              </span>
-                            `,
-                          )
-                          .join("")}
-                      </div>
-                    </section>
-                  `,
-                )
-                .join("")}
-            </div>
-          `
-          : `<p class="muted">当前还没有已加载的插件。把一个包含 <code>plugin.json</code> 的 zip bundle 上传到这里即可。</p>`
-      }
+      <div class="plugin-hub-actions">
+        <a class="ghost-button button-link" href="/plugins.html">打开插件管理页</a>
+      </div>
     `,
-  });
-  bindSkillHub(container);
-}
-
-function bindSkillHub(container) {
-  const form = container.querySelector("#pluginUploadForm");
-  const input = container.querySelector("#pluginFileInput");
-  const status = container.querySelector("#pluginUploadStatus");
-  const refreshButton = container.querySelector("#pluginRefreshButton");
-  if (!form || !input || !status || !refreshButton) {
-    return;
-  }
-
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const file = input.files?.[0];
-    if (!file) {
-      appState.pluginUploadStatus = "请先选择一个 zip 插件包。";
-      renderSkillHub();
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("file", file);
-    appState.pluginUploadStatus = `正在安装 ${file.name}...`;
-    status.textContent = appState.pluginUploadStatus;
-
-    try {
-      const response = await fetchJSON("/api/plugins", {
-        method: "POST",
-        body: formData,
-      });
-      appState.pluginUploadStatus = `${response.plugin?.name || file.name} 已加载。`;
-      input.value = "";
-      await refreshCapabilityState();
-      render();
-    } catch (error) {
-      appState.pluginUploadStatus = error.message;
-      renderSkillHub();
-    }
-  });
-
-  refreshButton.addEventListener("click", async () => {
-    appState.pluginUploadStatus = "正在刷新 Skill Hub...";
-    status.textContent = appState.pluginUploadStatus;
-    try {
-      await refreshCapabilityState();
-      appState.pluginUploadStatus = "Skill Hub 已刷新。";
-      render();
-    } catch (error) {
-      appState.pluginUploadStatus = error.message;
-      renderSkillHub();
-    }
   });
 }
 

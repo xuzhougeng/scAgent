@@ -29,6 +29,17 @@ func (s *Service) PluginBundles() ([]skill.PluginBundle, error) {
 	return s.skills.Bundles(), nil
 }
 
+func (s *Service) SetPluginBundleEnabled(bundleID string, enabled bool) (*skill.PluginBundle, error) {
+	if err := s.refreshSkills(); err != nil {
+		return nil, err
+	}
+	bundle, err := s.skills.SetBundleEnabled(bundleID, enabled)
+	if err != nil {
+		return nil, err
+	}
+	return &bundle, nil
+}
+
 func (s *Service) UploadPluginBundle(filename string, reader io.Reader) (*skill.PluginBundle, error) {
 	pluginRoot := s.pluginRoot()
 	if err := os.MkdirAll(pluginRoot, 0o755); err != nil {

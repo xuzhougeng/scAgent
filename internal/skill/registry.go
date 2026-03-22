@@ -33,6 +33,8 @@ type Definition struct {
 	BundleID     string                 `json:"bundle_id,omitempty"`
 }
 
+const BuiltinBundleID = "builtin-core"
+
 type registryFile struct {
 	Skills []Definition `json:"skills"`
 }
@@ -43,6 +45,8 @@ type PluginBundle struct {
 	Version     string       `json:"version,omitempty"`
 	Description string       `json:"description,omitempty"`
 	SourcePath  string       `json:"source_path,omitempty"`
+	Builtin     bool         `json:"builtin,omitempty"`
+	Enabled     bool         `json:"enabled"`
 	Skills      []Definition `json:"skills"`
 }
 
@@ -54,22 +58,32 @@ type pluginBundleFile struct {
 	Skills      []Definition `json:"skills"`
 }
 
+type registryStateFile struct {
+	DisabledBundles []string `json:"disabled_bundles,omitempty"`
+}
+
 type Registry struct {
 	mu        sync.RWMutex
 	basePath  string
 	pluginDir string
+	statePath string
 	skills    map[string]Definition
 	bundles   map[string]PluginBundle
 }
 
 func LoadRegistry(path string) (*Registry, error) {
-	return LoadRegistryWithPlugins(path, "")
+	return LoadRegistryWithPluginsAndState(path, "", "")
 }
 
 func LoadRegistryWithPlugins(path, pluginDir string) (*Registry, error) {
+	return LoadRegistryWithPluginsAndState(path, pluginDir, "")
+}
+
+func LoadRegistryWithPluginsAndState(path, pluginDir, statePath string) (*Registry, error) {
 	registry := &Registry{
 		basePath:  path,
 		pluginDir: pluginDir,
+		statePath: statePath,
 		skills:    make(map[string]Definition),
 		bundles:   make(map[string]PluginBundle),
 	}
@@ -92,22 +106,55 @@ func (r *Registry) Reload() error {
 	if err != nil {
 		return err
 	}
-
-	merged := make(map[string]Definition, len(baseSkills)+len(pluginSkills))
-	for name, definition := range baseSkills {
-		merged[name] = definition
-	}
-	for name, definition := range pluginSkills {
-		if _, exists := merged[name]; exists {
+	for name := range pluginSkills {
+		if _, exists := baseSkills[name]; exists {
 			return fmt.Errorf("duplicate skill %q from plugin bundle", name)
 		}
-		merged[name] = definition
+	}
+	state, err := loadRegistryState(r.statePath)
+	if err != nil {
+		return err
+	}
+
+	mergedBundles := make(map[string]PluginBundle, len(bundles)+1)
+	builtinBundle := PluginBundle{
+		ID:          BuiltinBundleID,
+		Name:        "内置技能",
+		Description: "系统默认提供的规划与分析技能集合。",
+		SourcePath:  r.basePath,
+		Builtin:     true,
+		Enabled:     !state.disabled(BuiltinBundleID),
+		Skills:      make([]Definition, 0, len(baseSkills)),
+	}
+	for _, definition := range baseSkills {
+		builtinBundle.Skills = append(builtinBundle.Skills, definition)
+	}
+	sort.Slice(builtinBundle.Skills, func(i, j int) bool {
+		return builtinBundle.Skills[i].Name < builtinBundle.Skills[j].Name
+	})
+	mergedBundles[builtinBundle.ID] = builtinBundle
+	for _, bundle := range bundles {
+		bundle.Enabled = !state.disabled(bundle.ID)
+		mergedBundles[bundle.ID] = bundle
+	}
+
+	merged := make(map[string]Definition, len(baseSkills)+len(pluginSkills))
+	if builtinBundle.Enabled {
+		for name, definition := range baseSkills {
+			merged[name] = definition
+		}
+	}
+	for name, definition := range pluginSkills {
+		bundle := mergedBundles[definition.BundleID]
+		if bundle.Enabled {
+			merged[name] = definition
+		}
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.skills = merged
-	r.bundles = bundles
+	r.bundles = mergedBundles
 	return nil
 }
 
@@ -158,9 +205,59 @@ func (r *Registry) Bundles() []PluginBundle {
 		out = append(out, bundle)
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].Builtin != out[j].Builtin {
+			return out[i].Builtin
+		}
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+func (r *Registry) SetBundleEnabled(bundleID string, enabled bool) (PluginBundle, error) {
+	if r == nil {
+		return PluginBundle{}, fmt.Errorf("registry is not configured")
+	}
+	if strings.TrimSpace(r.statePath) == "" {
+		return PluginBundle{}, fmt.Errorf("registry state path is not configured")
+	}
+	if err := r.Reload(); err != nil {
+		return PluginBundle{}, err
+	}
+
+	bundles := r.Bundles()
+	exists := false
+	for _, bundle := range bundles {
+		if bundle.ID == bundleID {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		return PluginBundle{}, fmt.Errorf("unknown plugin bundle %q", bundleID)
+	}
+
+	state, err := loadRegistryState(r.statePath)
+	if err != nil {
+		return PluginBundle{}, err
+	}
+	if enabled {
+		delete(state.DisabledBundles, bundleID)
+	} else {
+		state.DisabledBundles[bundleID] = struct{}{}
+	}
+	if err := saveRegistryState(r.statePath, state); err != nil {
+		return PluginBundle{}, err
+	}
+	if err := r.Reload(); err != nil {
+		return PluginBundle{}, err
+	}
+
+	for _, bundle := range r.Bundles() {
+		if bundle.ID == bundleID {
+			return bundle, nil
+		}
+	}
+	return PluginBundle{}, fmt.Errorf("failed to refresh plugin bundle %q", bundleID)
 }
 
 func (r *Registry) ValidatePlan(plan models.Plan) error {
@@ -221,6 +318,7 @@ func loadBaseSkills(path string) (map[string]Definition, error) {
 	skills := make(map[string]Definition, len(file.Skills))
 	for _, definition := range file.Skills {
 		definition.Source = "builtin"
+		definition.BundleID = BuiltinBundleID
 		if strings.TrimSpace(definition.Name) == "" {
 			return nil, fmt.Errorf("encountered builtin skill without name")
 		}
@@ -331,4 +429,65 @@ func decodePluginBundleFile(path string, data []byte) (*PluginBundle, error) {
 		return bundle.Skills[i].Name < bundle.Skills[j].Name
 	})
 	return bundle, nil
+}
+
+type registryState struct {
+	DisabledBundles map[string]struct{}
+}
+
+func (s registryState) disabled(bundleID string) bool {
+	_, ok := s.DisabledBundles[bundleID]
+	return ok
+}
+
+func loadRegistryState(path string) (registryState, error) {
+	state := registryState{DisabledBundles: make(map[string]struct{})}
+	if strings.TrimSpace(path) == "" {
+		return state, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return state, nil
+		}
+		return state, fmt.Errorf("read registry state: %w", err)
+	}
+
+	var file registryStateFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		return state, fmt.Errorf("decode registry state: %w", err)
+	}
+	for _, bundleID := range file.DisabledBundles {
+		bundleID = strings.TrimSpace(bundleID)
+		if bundleID == "" {
+			continue
+		}
+		state.DisabledBundles[bundleID] = struct{}{}
+	}
+	return state, nil
+}
+
+func saveRegistryState(path string, state registryState) error {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create registry state directory: %w", err)
+	}
+
+	disabledBundles := make([]string, 0, len(state.DisabledBundles))
+	for bundleID := range state.DisabledBundles {
+		disabledBundles = append(disabledBundles, bundleID)
+	}
+	sort.Strings(disabledBundles)
+
+	payload, err := json.MarshalIndent(registryStateFile{DisabledBundles: disabledBundles}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode registry state: %w", err)
+	}
+	payload = append(payload, '\n')
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		return fmt.Errorf("write registry state: %w", err)
+	}
+	return nil
 }

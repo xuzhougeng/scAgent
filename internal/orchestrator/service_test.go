@@ -175,7 +175,11 @@ func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
 
 func TestUploadPluginBundleRegistersSkills(t *testing.T) {
 	dataRoot := t.TempDir()
-	registry, err := skill.LoadRegistryWithPlugins(skillsRegistryPath(), filepath.Join(dataRoot, "skill-hub", "plugins"))
+	registry, err := skill.LoadRegistryWithPluginsAndState(
+		skillsRegistryPath(),
+		filepath.Join(dataRoot, "skill-hub", "plugins"),
+		filepath.Join(dataRoot, "skill-hub", "state.json"),
+	)
 	if err != nil {
 		t.Fatalf("load skills registry with plugin dir: %v", err)
 	}
@@ -224,6 +228,31 @@ func TestUploadPluginBundleRegistersSkills(t *testing.T) {
 
 	if _, ok := service.skills.Get("demo_runtime_skill"); !ok {
 		t.Fatalf("expected uploaded plugin skill to be registered")
+	}
+}
+
+func TestSetPluginBundleEnabledDisablesBuiltinBundle(t *testing.T) {
+	dataRoot := t.TempDir()
+	registry, err := skill.LoadRegistryWithPluginsAndState(
+		skillsRegistryPath(),
+		filepath.Join(dataRoot, "skill-hub", "plugins"),
+		filepath.Join(dataRoot, "skill-hub", "state.json"),
+	)
+	if err != nil {
+		t.Fatalf("load skills registry with state: %v", err)
+	}
+
+	service := NewService(session.NewStore(), registry, nil, NewFakePlanner(), dataRoot)
+
+	bundle, err := service.SetPluginBundleEnabled(skill.BuiltinBundleID, false)
+	if err != nil {
+		t.Fatalf("disable builtin bundle: %v", err)
+	}
+	if bundle.Enabled {
+		t.Fatalf("expected builtin bundle to be disabled")
+	}
+	if _, ok := service.skills.Get("inspect_dataset"); ok {
+		t.Fatalf("expected builtin inspect_dataset skill to be removed after disabling")
 	}
 }
 

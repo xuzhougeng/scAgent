@@ -17,6 +17,7 @@ import (
 type Config struct {
 	SkillsPath            string
 	PluginDir             string
+	PluginStatePath       string
 	DocsDir               string
 	RuntimeURL            string
 	DataDir               string
@@ -36,7 +37,7 @@ func NewServer(config Config) (http.Handler, error) {
 	loadRegistry := skill.LoadRegistry
 	if config.PluginDir != "" {
 		loadRegistry = func(path string) (*skill.Registry, error) {
-			return skill.LoadRegistryWithPlugins(path, config.PluginDir)
+			return skill.LoadRegistryWithPluginsAndState(path, config.PluginDir, config.PluginStatePath)
 		}
 	}
 	registry, err := loadRegistry(config.SkillsPath)

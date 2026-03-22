@@ -77,6 +77,13 @@ body {
   flex-shrink: 0;
 }
 
+.panel-head-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+}
+
 .panel-head h1,
 .panel-head h2 {
   margin: 6px 0 0;
@@ -199,6 +206,32 @@ body {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 10px;
+}
+
+.plugin-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.plugin-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid rgba(61, 107, 75, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.plugin-summary-item strong {
+  font-size: 1.2rem;
+}
+
+.plugin-summary-item span {
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .plugin-card {
@@ -460,6 +493,9 @@ body {
 }
 
 .ghost-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid rgba(61, 107, 75, 0.18);
   border-radius: 14px;
   background: rgba(223, 233, 216, 0.56);
@@ -467,6 +503,11 @@ body {
   padding: 10px 14px;
   font: inherit;
   cursor: pointer;
+  text-decoration: none;
+}
+
+.button-link {
+  text-decoration: none;
 }
 
 .upload-status {
