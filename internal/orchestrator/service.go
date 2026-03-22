@@ -47,6 +47,13 @@ type PlannerDebugPreview struct {
 	Note                  string          `json:"note,omitempty"`
 }
 
+type planBuildInfo struct {
+	Note           string
+	UsedFallback   bool
+	FallbackReason string
+	PlannerError   string
+}
+
 type SystemStatus struct {
 	SystemMode            string                `json:"system_mode"`
 	Summary               string                `json:"summary"`
@@ -471,16 +478,24 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		return
 	}
 
-	plan, fallbackNote, err := s.buildExecutablePlan(ctx, planningRequest)
+	plan, planningInfo, err := s.buildExecutablePlan(ctx, planningRequest)
 	if err != nil {
 		s.failJob(sessionID, jobID, fmt.Errorf("规划器执行失败：%w", err))
 		return
 	}
 
 	job.Plan = &plan
-	if fallbackNote != "" {
-		job.Summary = fallbackNote
-		s.appendJobCheckpoint(job, "planning", "warn", "初始规划", "规则兜底", fallbackNote)
+	if planningInfo.Note != "" {
+		job.Summary = planningInfo.Note
+		s.appendJobCheckpointWithMetadata(
+			job,
+			"planning",
+			"warn",
+			"初始规划",
+			"规则兜底",
+			planBuildCheckpointSummary(planningInfo),
+			planBuildCheckpointMetadata(planningInfo),
+		)
 	} else {
 		job.Summary = "编排器已接受执行计划。"
 		s.appendJobCheckpoint(
@@ -499,6 +514,8 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 	stepSummaries := make([]string, 0, len(plan.Steps))
 	pendingPlan := clonePlan(plan)
 	completionReason := ""
+	lastIncompleteReason := ""
+	jobCompleted := false
 
 	for len(pendingPlan.Steps) > 0 {
 		step := pendingPlan.Steps[0]
@@ -617,9 +634,9 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		s.store.SaveWorkspace(workspaceRecord)
 
 		evaluation, evalErr := s.evaluateCompletion(ctx, sessionRecord, job, message)
-		jobCompleted := false
 		switch {
 		case evalErr != nil:
+			lastIncompleteReason = ""
 			s.appendJobCheckpoint(
 				job,
 				"completion",
@@ -629,6 +646,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 				"完成判定暂时失败，继续按现有计划执行。",
 			)
 		case evaluation != nil && evaluation.Completed:
+			lastIncompleteReason = ""
 			s.appendJobCheckpoint(
 				job,
 				"completion",
@@ -648,6 +666,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 			s.publishSnapshot(sessionID)
 			jobCompleted = true
 		case evaluation != nil:
+			lastIncompleteReason = strings.TrimSpace(evaluation.Reason)
 			s.appendJobCheckpoint(
 				job,
 				"completion",
@@ -662,31 +681,39 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		}
 
 		remainingPlan := clonePlanWithSteps(pendingPlan.Steps[1:])
-		replannedPlan, replanNote, replanErr := s.replanRemainingSteps(ctx, sessionRecord, job, message)
+		replannedPlan, replanInfo, replanErr := s.replanRemainingSteps(ctx, sessionRecord, job, message)
 		switch {
 		case replanErr == nil && len(replannedPlan.Steps) > 0:
 			pendingPlan = replannedPlan
 			if plansEquivalent(replannedPlan, remainingPlan) {
-				s.appendJobCheckpoint(
+				s.appendJobCheckpointWithMetadata(
 					job,
 					"replan",
 					"muted",
 					"检查点重规划",
 					"计划不变",
-					fmt.Sprintf("检查点已确认后续 %d 步仍可继续执行。", len(replannedPlan.Steps)),
+					joinCheckpointSummary(
+						planBuildCheckpointSummary(replanInfo),
+						fmt.Sprintf("检查点已确认后续 %d 步仍可继续执行。", len(replannedPlan.Steps)),
+					),
+					planBuildCheckpointMetadata(replanInfo),
 				)
 			} else {
-				s.appendJobCheckpoint(
+				s.appendJobCheckpointWithMetadata(
 					job,
 					"replan",
 					"ok",
 					"检查点重规划",
 					"已更新计划",
-					joinCheckpointSummary(replanNote, fmt.Sprintf("已根据最新对象状态更新剩余计划，当前还有 %d 步待执行。", len(replannedPlan.Steps))),
+					joinCheckpointSummary(
+						planBuildCheckpointSummary(replanInfo),
+						fmt.Sprintf("已根据最新对象状态更新剩余计划，当前还有 %d 步待执行。", len(replannedPlan.Steps)),
+					),
+					planBuildCheckpointMetadata(replanInfo),
 				)
 			}
-			if replanNote != "" {
-				job.Summary = replanNote
+			if replanInfo.Note != "" {
+				job.Summary = replanInfo.Note
 			}
 		case replanErr != nil && len(remainingPlan.Steps) > 0:
 			pendingPlan = remainingPlan
@@ -719,11 +746,19 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 	}
 
 	finishedAt := time.Now().UTC()
-	job.Status = models.JobSucceeded
 	job.FinishedAt = &finishedAt
-	if completionReason != "" {
+	switch {
+	case jobCompleted:
+		job.Status = models.JobSucceeded
 		job.Summary = completionReason
-	} else {
+	case lastIncompleteReason != "":
+		job.Status = models.JobIncomplete
+		job.Summary = lastIncompleteReason
+	case completionReason != "":
+		job.Status = models.JobSucceeded
+		job.Summary = completionReason
+	default:
+		job.Status = models.JobSucceeded
 		job.Summary = strings.Join(stepSummaries, " ")
 	}
 	s.store.SaveJob(job)
@@ -755,62 +790,72 @@ func (s *Service) evaluateCompletion(ctx context.Context, sessionRecord *models.
 	return s.evaluator.Evaluate(ctx, request)
 }
 
-func (s *Service) replanRemainingSteps(ctx context.Context, sessionRecord *models.Session, job *models.Job, message string) (models.Plan, string, error) {
+func (s *Service) replanRemainingSteps(ctx context.Context, sessionRecord *models.Session, job *models.Job, message string) (models.Plan, planBuildInfo, error) {
 	request, err := s.buildExecutionPlanningRequest(sessionRecord, message, job)
 	if err != nil {
-		return models.Plan{}, "", err
+		return models.Plan{}, planBuildInfo{}, err
 	}
-	plan, note, err := s.buildExecutablePlan(ctx, request)
+	plan, info, err := s.buildExecutablePlan(ctx, request)
 	if err != nil {
-		return models.Plan{}, "", err
+		return models.Plan{}, planBuildInfo{}, err
 	}
-	return trimCompletedPlanPrefix(plan, job.Steps), note, nil
+	return trimCompletedPlanPrefix(plan, job.Steps), info, nil
 }
 
-func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningRequest) (models.Plan, string, error) {
+func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningRequest) (models.Plan, planBuildInfo, error) {
 	if err := s.refreshSkills(); err != nil {
-		return models.Plan{}, "", err
+		return models.Plan{}, planBuildInfo{}, err
 	}
 	plan, err := s.planner.Plan(ctx, request)
 	if err != nil {
 		if s.PlannerMode() != "llm" {
-			return models.Plan{}, "", err
+			return models.Plan{}, planBuildInfo{}, err
 		}
 
 		fallbackPlan, fallbackErr := NewFakePlanner().Plan(ctx, request)
 		if fallbackErr != nil {
-			return models.Plan{}, "", fmt.Errorf("规划器执行失败：%w；规则兜底也失败：%v", err, fallbackErr)
+			return models.Plan{}, planBuildInfo{}, fmt.Errorf("规划器执行失败：%w；规则兜底也失败：%v", err, fallbackErr)
 		}
 		fallbackPlan = NormalizePlan(fallbackPlan)
 		fallbackPlan = applyRecentPlotContext(request, fallbackPlan)
 		if fallbackValidateErr := s.skills.ValidatePlan(fallbackPlan); fallbackValidateErr != nil {
-			return models.Plan{}, "", fmt.Errorf("规划器执行失败：%w；规则兜底也失败：%v", err, fallbackValidateErr)
+			return models.Plan{}, planBuildInfo{}, fmt.Errorf("规划器执行失败：%w；规则兜底也失败：%v", err, fallbackValidateErr)
 		}
-		return fallbackPlan, "LLM 规划器请求失败，已切换到规则兜底计划。", nil
+		return fallbackPlan, planBuildInfo{
+			Note:           "LLM 规划器请求失败，已切换到规则兜底计划。",
+			UsedFallback:   true,
+			FallbackReason: "planner_request_failed",
+			PlannerError:   err.Error(),
+		}, nil
 	}
 
 	plan = NormalizePlan(plan)
 	plan = applyRecentPlotContext(request, plan)
 	validateErr := s.skills.ValidatePlan(plan)
 	if validateErr == nil {
-		return plan, "", nil
+		return plan, planBuildInfo{}, nil
 	}
 
 	if s.PlannerMode() != "llm" {
-		return models.Plan{}, "", fmt.Errorf("执行计划不合法：%w", validateErr)
+		return models.Plan{}, planBuildInfo{}, fmt.Errorf("执行计划不合法：%w", validateErr)
 	}
 
 	fallbackPlan, fallbackErr := NewFakePlanner().Plan(ctx, request)
 	if fallbackErr != nil {
-		return models.Plan{}, "", fmt.Errorf("执行计划不合法：%w；规则兜底也失败：%v", validateErr, fallbackErr)
+		return models.Plan{}, planBuildInfo{}, fmt.Errorf("执行计划不合法：%w；规则兜底也失败：%v", validateErr, fallbackErr)
 	}
 	fallbackPlan = NormalizePlan(fallbackPlan)
 	fallbackPlan = applyRecentPlotContext(request, fallbackPlan)
 	if fallbackValidateErr := s.skills.ValidatePlan(fallbackPlan); fallbackValidateErr != nil {
-		return models.Plan{}, "", fmt.Errorf("执行计划不合法：%w；规则兜底也失败：%v", validateErr, fallbackValidateErr)
+		return models.Plan{}, planBuildInfo{}, fmt.Errorf("执行计划不合法：%w；规则兜底也失败：%v", validateErr, fallbackValidateErr)
 	}
 
-	return fallbackPlan, "LLM 规划结果为空或无效，已切换到规则兜底计划。", nil
+	return fallbackPlan, planBuildInfo{
+		Note:           "LLM 规划结果为空或无效，已切换到规则兜底计划。",
+		UsedFallback:   true,
+		FallbackReason: "planner_invalid_plan",
+		PlannerError:   validateErr.Error(),
+	}, nil
 }
 
 func (s *Service) failJob(sessionID, jobID string, err error) {
@@ -913,7 +958,14 @@ func (s *Service) pathToURL(path string) string {
 
 func (s *Service) buildAssistantSummary(job *models.Job) string {
 	lines := make([]string, 0, len(job.Steps)+1)
-	lines = append(lines, "执行完成：")
+	headline := "执行完成："
+	switch job.Status {
+	case models.JobIncomplete:
+		headline = "执行未完成："
+	case models.JobFailed:
+		headline = "执行失败："
+	}
+	lines = append(lines, headline)
 	for _, step := range job.Steps {
 		lines = append(lines, fmt.Sprintf("%s：%s", step.Skill, step.Summary))
 	}
@@ -928,6 +980,10 @@ func backendRef(object *models.ObjectMeta) string {
 }
 
 func (s *Service) appendJobCheckpoint(job *models.Job, kind, tone, title, label, summary string) {
+	s.appendJobCheckpointWithMetadata(job, kind, tone, title, label, summary, nil)
+}
+
+func (s *Service) appendJobCheckpointWithMetadata(job *models.Job, kind, tone, title, label, summary string, metadata map[string]any) {
 	if job == nil {
 		return
 	}
@@ -937,6 +993,7 @@ func (s *Service) appendJobCheckpoint(job *models.Job, kind, tone, title, label,
 		Title:     title,
 		Label:     label,
 		Summary:   summary,
+		Metadata:  cloneParams(metadata),
 		CreatedAt: time.Now().UTC(),
 	})
 }
@@ -1260,4 +1317,33 @@ func joinCheckpointSummary(primary, fallback string) string {
 	default:
 		return primary + " " + fallback
 	}
+}
+
+func planBuildCheckpointSummary(info planBuildInfo) string {
+	summary := strings.TrimSpace(info.Note)
+	if strings.TrimSpace(info.PlannerError) == "" {
+		return summary
+	}
+	return joinCheckpointSummary(summary, "原始错误："+compactJSON(info.PlannerError))
+}
+
+func planBuildCheckpointMetadata(info planBuildInfo) map[string]any {
+	if !info.UsedFallback && strings.TrimSpace(info.PlannerError) == "" {
+		return nil
+	}
+
+	metadata := make(map[string]any, 3)
+	if info.UsedFallback {
+		metadata["fallback_used"] = true
+	}
+	if strings.TrimSpace(info.FallbackReason) != "" {
+		metadata["fallback_reason"] = info.FallbackReason
+	}
+	if strings.TrimSpace(info.PlannerError) != "" {
+		metadata["planner_error"] = info.PlannerError
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
 }

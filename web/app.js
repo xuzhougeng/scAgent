@@ -116,6 +116,7 @@ const jobStatusLabels = {
   pending: "等待中",
   running: "运行中",
   succeeded: "成功",
+  incomplete: "未完成",
   failed: "失败",
   canceled: "已取消",
 };
@@ -1374,7 +1375,7 @@ function buildJobStatusMarkup(job) {
     <section class="message-job-card pending">
       <div class="message-job-head">
         <strong>任务状态</strong>
-        ${statusPill(job.status === "running" ? "warn" : "muted", formatJobStatus(job.status))}
+        ${statusPill(statusKindForJob(job.status), formatJobStatus(job.status))}
       </div>
       <p class="message-job-summary">${escapeHTML(job.summary || "请求已接收，等待规划器和运行时返回更新。")}</p>
       ${buildCheckpointMarkup(job)}
@@ -1405,11 +1406,13 @@ async function buildJobResultMarkup(job) {
     relatedArtifacts.map((artifact) => buildArtifactCardMarkup(artifact, "chat")),
   );
   const showSummary = shouldRenderJobSummary(job);
+  const cardClass = job.status === "failed" ? "failed" : job.status === "incomplete" ? "incomplete" : "done";
+  const title = job.status === "succeeded" ? "分析结果" : "任务结果";
 
   return `
-    <section class="message-job-card ${job.status === "failed" ? "failed" : "done"}">
+    <section class="message-job-card ${cardClass}">
       <div class="message-job-head">
-        <strong>${job.status === "failed" ? "任务结果" : "分析结果"}</strong>
+        <strong>${title}</strong>
         ${statusPill(statusKindForJob(job.status), formatJobStatus(job.status))}
       </div>
       ${
@@ -2037,6 +2040,8 @@ function statusKindForJob(status) {
   switch (status) {
     case "succeeded":
       return "ok";
+    case "incomplete":
+      return "warn";
     case "failed":
       return "bad";
     case "running":

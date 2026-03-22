@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,13 +127,13 @@ func TestBuildExecutablePlanFallsBackWhenLLMReturnsEmptyPlan(t *testing.T) {
 	}
 
 	service := NewService(session.NewStore(), registry, nil, emptyLLMPlanner{}, t.TempDir())
-	plan, note, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
+	plan, info, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
 		Message: "完成常规的数据预处理",
 	})
 	if err != nil {
 		t.Fatalf("build executable plan: %v", err)
 	}
-	if note == "" {
+	if !info.UsedFallback || info.Note == "" {
 		t.Fatalf("expected fallback note when LLM returns empty plan")
 	}
 
@@ -161,14 +162,17 @@ func TestBuildExecutablePlanFallsBackWhenLLMRequestFails(t *testing.T) {
 	}
 
 	service := NewService(session.NewStore(), registry, nil, failingLLMPlanner{}, t.TempDir())
-	plan, note, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
+	plan, info, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
 		Message: "完成常规的数据预处理",
 	})
 	if err != nil {
 		t.Fatalf("build executable plan: %v", err)
 	}
-	if note == "" {
+	if !info.UsedFallback || info.Note == "" {
 		t.Fatalf("expected fallback note when LLM request fails")
+	}
+	if info.PlannerError == "" {
+		t.Fatalf("expected original planner error in fallback info")
 	}
 	if len(plan.Steps) == 0 || plan.Steps[0].Skill != "normalize_total" {
 		t.Fatalf("unexpected fallback plan: %+v", plan.Steps)
@@ -438,11 +442,14 @@ func TestRunJobReplansRemainingStepsFromCurrentState(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected job to exist after run")
 	}
-	if job.Status != models.JobSucceeded {
-		t.Fatalf("expected job to succeed, got %s (%s)", job.Status, job.Error)
+	if job.Status != models.JobIncomplete {
+		t.Fatalf("expected job to remain incomplete, got %s (%s)", job.Status, job.Error)
 	}
 	if len(job.Steps) != 3 {
 		t.Fatalf("expected 3 executed steps after replanning, got %+v", job.Steps)
+	}
+	if job.Summary == "" {
+		t.Fatalf("expected incomplete job summary to explain why the request is not done")
 	}
 
 	wantSkills := []string{"normalize_total", "log1p_transform", "run_pca"}
@@ -601,8 +608,8 @@ func TestRunJobKeepsOriginalRemainingStepsWhenCheckpointReplanFails(t *testing.T
 	if !ok {
 		t.Fatalf("expected job to exist after run")
 	}
-	if job.Status != models.JobSucceeded {
-		t.Fatalf("expected job to succeed, got %s (%s)", job.Status, job.Error)
+	if job.Status != models.JobIncomplete {
+		t.Fatalf("expected job to remain incomplete, got %s (%s)", job.Status, job.Error)
 	}
 	if len(job.Steps) != 2 {
 		t.Fatalf("expected original remaining steps to continue after replan failure, got %+v", job.Steps)
@@ -612,6 +619,75 @@ func TestRunJobKeepsOriginalRemainingStepsWhenCheckpointReplanFails(t *testing.T
 	}
 	if !jobHasCheckpoint(job, "检查点重规划", "沿用原计划") {
 		t.Fatalf("expected fallback replan checkpoint to be recorded, got %+v", job.Checkpoints)
+	}
+}
+
+func TestRunJobRecordsPlannerFallbackErrorAndIncompleteStatus(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	now := time.Now().UTC()
+	sessionRecord := store.CreateSession("test")
+	sessionRecord.ActiveObjectID = "obj_active"
+	store.SaveSession(sessionRecord)
+	store.SaveObject(&models.ObjectMeta{
+		ID:             "obj_active",
+		SessionID:      sessionRecord.ID,
+		Label:          "pbmc3k",
+		Kind:           models.ObjectRawDataset,
+		BackendRef:     "backend_seed",
+		State:          models.ObjectResident,
+		InMemory:       true,
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	})
+	store.SaveJob(&models.Job{
+		ID:        "job_fallback_incomplete",
+		SessionID: sessionRecord.ID,
+		Status:    models.JobQueued,
+		CreatedAt: now,
+	})
+
+	evaluator := &scriptedEvaluator{
+		results: []*CompletionEvaluation{
+			{Completed: false, Reason: "柱状图和统计结果都还没有生成。"},
+		},
+	}
+	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, failingLLMPlanner{}, evaluator, t.TempDir())
+
+	service.runJob(context.Background(), sessionRecord.ID, "job_fallback_incomplete", "接受louvain统计各个类型，画图")
+
+	job, ok := store.GetJob("job_fallback_incomplete")
+	if !ok {
+		t.Fatalf("expected job to exist after run")
+	}
+	if job.Status != models.JobIncomplete {
+		t.Fatalf("expected job to be incomplete, got %s (%s)", job.Status, job.Error)
+	}
+	if job.Summary != "柱状图和统计结果都还没有生成。" {
+		t.Fatalf("unexpected incomplete summary: %q", job.Summary)
+	}
+	if len(job.Checkpoints) == 0 {
+		t.Fatalf("expected planning checkpoint to be recorded")
+	}
+	planningCheckpoint := job.Checkpoints[0]
+	if planningCheckpoint.Title != "初始规划" || planningCheckpoint.Label != "规则兜底" {
+		t.Fatalf("unexpected planning checkpoint: %+v", planningCheckpoint)
+	}
+	if planningCheckpoint.Metadata == nil {
+		t.Fatalf("expected planning checkpoint metadata, got %+v", planningCheckpoint)
+	}
+	if planningCheckpoint.Metadata["planner_error"] == "" {
+		t.Fatalf("expected planner_error in checkpoint metadata, got %+v", planningCheckpoint.Metadata)
+	}
+	if planningCheckpoint.Metadata["fallback_reason"] != "planner_request_failed" {
+		t.Fatalf("unexpected fallback_reason: %+v", planningCheckpoint.Metadata)
+	}
+	if !strings.Contains(planningCheckpoint.Summary, "原始错误：") {
+		t.Fatalf("expected planning checkpoint summary to expose original error, got %q", planningCheckpoint.Summary)
 	}
 }
 

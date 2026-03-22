@@ -35,10 +35,11 @@ const (
 type JobStatus string
 
 const (
-	JobQueued    JobStatus = "queued"
-	JobRunning   JobStatus = "running"
-	JobSucceeded JobStatus = "succeeded"
-	JobFailed    JobStatus = "failed"
+	JobQueued     JobStatus = "queued"
+	JobRunning    JobStatus = "running"
+	JobSucceeded  JobStatus = "succeeded"
+	JobIncomplete JobStatus = "incomplete"
+	JobFailed     JobStatus = "failed"
 )
 
 type ArtifactKind string
@@ -153,12 +154,13 @@ type JobStep struct {
 }
 
 type JobCheckpoint struct {
-	Kind      string    `json:"kind,omitempty"`
-	Tone      string    `json:"tone,omitempty"`
-	Title     string    `json:"title"`
-	Label     string    `json:"label,omitempty"`
-	Summary   string    `json:"summary,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Kind      string         `json:"kind,omitempty"`
+	Tone      string         `json:"tone,omitempty"`
+	Title     string         `json:"title"`
+	Label     string         `json:"label,omitempty"`
+	Summary   string         `json:"summary,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
 }
 
 type Job struct {

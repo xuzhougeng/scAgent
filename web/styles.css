@@ -1022,6 +1022,11 @@ body.is-resizing {
   border-color: rgba(171, 68, 52, 0.18);
 }
 
+.message-job-card.incomplete {
+  background: rgba(255, 248, 236, 0.78);
+  border-color: rgba(197, 136, 49, 0.2);
+}
+
 .message-job-head,
 .message-step-head,
 .message-artifact-head {
