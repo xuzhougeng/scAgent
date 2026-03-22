@@ -79,14 +79,6 @@ if [[ "${SCAGENT_USE_PIXI}" != "0" ]]; then
 fi
 
 cleanup() {
-  if [[ -n "${BRIDGE_PID:-}" ]]; then
-    kill "${BRIDGE_PID}" >/dev/null 2>&1 || true
-    wait "${BRIDGE_PID}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${GO_PID:-}" ]]; then
-    kill "${GO_PID}" >/dev/null 2>&1 || true
-    wait "${GO_PID}" >/dev/null 2>&1 || true
-  fi
   if [[ -n "${RUNTIME_PID:-}" ]]; then
     kill "${RUNTIME_PID}" >/dev/null 2>&1 || true
     wait "${RUNTIME_PID}" >/dev/null 2>&1 || true
@@ -120,6 +112,11 @@ echo "runtime is healthy, starting Go control plane"
 
 : "${WEIXIN_BRIDGE_ENABLED:=0}"
 
+WEIXIN_FLAGS=()
+if [[ "${WEIXIN_BRIDGE_ENABLED}" == "1" ]]; then
+  WEIXIN_FLAGS+=(-weixin)
+fi
+
 go run ./cmd/scagent \
   -addr "${SCAGENT_ADDR}" \
   -runtime-url "${SCAGENT_RUNTIME_URL}" \
@@ -133,41 +130,5 @@ go run ./cmd/scagent \
   -openai-api-key "${SCAGENT_OPENAI_API_KEY}" \
   -openai-base-url "${SCAGENT_OPENAI_BASE_URL}" \
   -openai-model "${SCAGENT_OPENAI_MODEL}" \
-  -openai-reasoning "${SCAGENT_OPENAI_REASONING_EFFORT}" &
-GO_PID=$!
-
-# Wait for Go control plane to become healthy
-SCAGENT_BASE_URL="${SCAGENT_BASE_URL:-http://127.0.0.1${SCAGENT_ADDR}}"
-for _ in $(seq 1 30); do
-  if curl -s "${SCAGENT_BASE_URL}/healthz" >/dev/null; then
-    break
-  fi
-  sleep 1
-done
-
-if ! curl -s "${SCAGENT_BASE_URL}/healthz" >/dev/null; then
-  echo "Go control plane did not become healthy at ${SCAGENT_BASE_URL}" >&2
-  exit 1
-fi
-
-echo "control plane is healthy at ${SCAGENT_BASE_URL}"
-
-# --- WeChat bridge (optional) ---
-if [[ "${WEIXIN_BRIDGE_ENABLED}" == "1" ]]; then
-  if ! command -v node >/dev/null 2>&1; then
-    echo "WEIXIN_BRIDGE_ENABLED=1 but node is not in PATH" >&2
-    exit 1
-  fi
-
-  BRIDGE_DIR="${ROOT_DIR}/im/weixin"
-  if [[ ! -d "${BRIDGE_DIR}/node_modules" ]]; then
-    echo "Installing WeChat bridge dependencies..."
-    (cd "${BRIDGE_DIR}" && pnpm install --frozen-lockfile)
-  fi
-
-  echo "Starting WeChat bridge..."
-  (cd "${BRIDGE_DIR}" && SCAGENT_BASE_URL="${SCAGENT_BASE_URL}" node --import tsx src/index.ts) &
-  BRIDGE_PID=$!
-fi
-
-wait ${GO_PID}
+  -openai-reasoning "${SCAGENT_OPENAI_REASONING_EFFORT}" \
+  "${WEIXIN_FLAGS[@]}"

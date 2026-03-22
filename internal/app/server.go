@@ -27,9 +27,16 @@ type Config struct {
 	OpenAIBaseURL         string
 	OpenAIModel           string
 	OpenAIReasoningEffort string
+	WeixinEnabled         bool
 }
 
-func NewServer(config Config) (http.Handler, error) {
+type Server struct {
+	Handler http.Handler
+	Service *orchestrator.Service
+	Config  Config
+}
+
+func NewServer(config Config) (*Server, error) {
 	if err := os.MkdirAll(config.DataDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -85,7 +92,11 @@ func NewServer(config Config) (http.Handler, error) {
 	defer cancel()
 	_ = runtimeClient.Health(ctx)
 
-	return mux, nil
+	return &Server{
+		Handler: mux,
+		Service: service,
+		Config:  config,
+	}, nil
 }
 
 func cacheControl(next http.Handler) http.Handler {

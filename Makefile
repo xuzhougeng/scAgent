@@ -9,7 +9,7 @@ weixin:
 	WEIXIN_BRIDGE_ENABLED=1 ./start.sh
 
 weixin-login:
-	cd im/weixin && pnpm run login
+	go run ./cmd/scagent -weixin-login
 
 restore:
 	@echo "Resetting $(DATA_DIR)/state/store.db and $(DATA_DIR)/workspaces"

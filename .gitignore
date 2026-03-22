@@ -3,5 +3,3 @@ __pycache__/
 *.pyc
 /scagent
 .pixi/
-im/weixin/node_modules/
-im/weixin/dist/

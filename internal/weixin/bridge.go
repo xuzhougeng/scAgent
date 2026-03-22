@@ -1,0 +1,501 @@
+package weixin
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"scagent/internal/models"
+	"scagent/internal/orchestrator"
+)
+
+// BridgeConfig holds all settings for the WeChat bridge.
+type BridgeConfig struct {
+	DataDir      string
+	SessionLabel string
+	JobTimeout   time.Duration
+}
+
+// Bridge connects WeChat to the scAgent orchestrator.
+type Bridge struct {
+	client       *Client
+	service      *orchestrator.Service
+	config       BridgeConfig
+	sessions     map[string]string // wechat user id → scAgent session id
+	sessionsFile string
+	mu           sync.Mutex
+	typingTicket string
+}
+
+// NewBridge creates a bridge instance.
+func NewBridge(client *Client, service *orchestrator.Service, config BridgeConfig) *Bridge {
+	if config.SessionLabel == "" {
+		config.SessionLabel = "WeChat"
+	}
+	if config.JobTimeout == 0 {
+		config.JobTimeout = 5 * time.Minute
+	}
+
+	sessionsFile := filepath.Join(config.DataDir, "weixin-bridge", "sessions.json")
+	b := &Bridge{
+		client:       client,
+		service:      service,
+		config:       config,
+		sessions:     make(map[string]string),
+		sessionsFile: sessionsFile,
+	}
+	b.loadSessions()
+	return b
+}
+
+// Login performs QR code login interactively.
+func (b *Bridge) Login() error {
+	qr, err := b.client.GetQRCode()
+	if err != nil {
+		return fmt.Errorf("get QR code: %w", err)
+	}
+	if qr.QRCode == "" {
+		return fmt.Errorf("no QR code returned: %s", qr.Message)
+	}
+
+	fmt.Println("\n请用微信扫描以下二维码：")
+	if qr.QRCodeURL != "" {
+		fmt.Printf("二维码链接: %s\n", qr.QRCodeURL)
+	}
+	fmt.Printf("QR code: %s\n", qr.QRCode)
+	fmt.Println("\n等待扫码...")
+
+	status, err := b.client.PollQRCodeStatus(qr.QRCode, 8*time.Minute)
+	if err != nil {
+		return err
+	}
+
+	b.client.SetToken(status.BotToken)
+	if status.BaseURL != "" {
+		b.client = NewClient(status.BaseURL, status.BotToken)
+	}
+
+	// Persist account
+	account := map[string]string{
+		"token":      status.BotToken,
+		"base_url":   status.BaseURL,
+		"user_id":    status.UserID,
+		"account_id": status.AccountID,
+	}
+	if err := b.saveAccount(account); err != nil {
+		log.Printf("[weixin] warning: failed to save account: %v", err)
+	}
+
+	log.Printf("[weixin] login succeeded, account=%s", status.AccountID)
+	return nil
+}
+
+// LoadAccount loads a previously saved account. Returns false if none exists.
+func (b *Bridge) LoadAccount() bool {
+	path := filepath.Join(b.config.DataDir, "weixin-bridge", "account.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var account map[string]string
+	if err := json.Unmarshal(data, &account); err != nil {
+		return false
+	}
+	token := account["token"]
+	if token == "" {
+		return false
+	}
+	baseURL := account["base_url"]
+	if baseURL == "" {
+		baseURL = b.client.BaseURL()
+	}
+	b.client = NewClient(baseURL, token)
+	log.Printf("[weixin] loaded account %s", account["account_id"])
+	return true
+}
+
+// Run starts the long-polling message loop. Blocks until ctx is cancelled.
+func (b *Bridge) Run(ctx context.Context) error {
+	// Try to get typing ticket
+	if cfg, err := b.client.GetConfig(); err == nil && cfg.TypingTicket != "" {
+		b.typingTicket = cfg.TypingTicket
+	}
+
+	log.Printf("[weixin] bridge started, polling for messages")
+
+	var updatesBuf string
+	bufPath := filepath.Join(b.config.DataDir, "weixin-bridge", "sync_buf")
+	if data, err := os.ReadFile(bufPath); err == nil {
+		updatesBuf = string(data)
+		log.Printf("[weixin] restored sync buf from disk")
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		resp, err := b.client.GetUpdates(updatesBuf)
+		if err != nil {
+			log.Printf("[weixin] getUpdates error: %v", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		if resp.ErrCode == -14 {
+			log.Printf("[weixin] session expired (errcode -14), need re-login")
+			return fmt.Errorf("weixin session expired, please re-login")
+		}
+
+		if resp.GetUpdatesBuf != "" {
+			updatesBuf = resp.GetUpdatesBuf
+			// Persist buf for restart recovery
+			dir := filepath.Dir(bufPath)
+			_ = os.MkdirAll(dir, 0o755)
+			_ = os.WriteFile(bufPath, []byte(updatesBuf), 0o644)
+		}
+
+		for _, msg := range resp.Msgs {
+			if msg.MessageType != MessageTypeUser {
+				continue
+			}
+			text := extractText(msg)
+			if text == "" {
+				continue
+			}
+
+			go b.handleMessage(ctx, msg.FromUserID, text, msg.ContextToken)
+		}
+	}
+}
+
+func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextToken string) {
+	log.Printf("[weixin] %s: %s", fromUserID, truncate(text, 80))
+
+	// Handle slash commands
+	if strings.HasPrefix(text, "/") {
+		reply := b.handleSlashCommand(ctx, fromUserID, text)
+		if reply != "" {
+			_ = b.client.SendTextMessage(fromUserID, reply, contextToken)
+			return
+		}
+		// Not a recognized command — fall through to normal processing
+	}
+
+	// Send typing indicator
+	if b.typingTicket != "" {
+		_ = b.client.SendTyping(fromUserID, b.typingTicket, contextToken)
+	}
+
+	// Resolve or create scAgent session
+	sessionID, err := b.resolveSession(ctx, fromUserID)
+	if err != nil {
+		log.Printf("[weixin] session resolve error: %v", err)
+		_ = b.client.SendTextMessage(fromUserID, "系统错误，请稍后重试", contextToken)
+		return
+	}
+
+	// Submit message
+	job, _, err := b.service.SubmitMessage(ctx, sessionID, text)
+	if err != nil {
+		// Session may be stale — retry with new session
+		log.Printf("[weixin] submit failed for %s, recreating: %v", sessionID, err)
+		b.deleteSession(fromUserID)
+		sessionID, err = b.resolveSession(ctx, fromUserID)
+		if err != nil {
+			_ = b.client.SendTextMessage(fromUserID, "系统错误，请稍后重试", contextToken)
+			return
+		}
+		job, _, err = b.service.SubmitMessage(ctx, sessionID, text)
+		if err != nil {
+			log.Printf("[weixin] submit retry failed: %v", err)
+			_ = b.client.SendTextMessage(fromUserID, fmt.Sprintf("提交失败: %v", err), contextToken)
+			return
+		}
+	}
+
+	// Wait for job completion via event subscription
+	reply := b.waitForJob(ctx, sessionID, job.ID)
+	if err := b.client.SendTextMessage(fromUserID, reply, contextToken); err != nil {
+		log.Printf("[weixin] send reply error: %v", err)
+	}
+}
+
+// handleSlashCommand processes /commands from WeChat. Returns reply text, or "" if not a recognized command.
+func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string) string {
+	parts := strings.Fields(text)
+	cmd := strings.ToLower(parts[0])
+
+	switch cmd {
+	case "/help":
+		return "可用命令:\n" +
+			"/status — 查看当前会话状态\n" +
+			"/workspaces — 列出所有工作区\n" +
+			"/switch <workspace_id> — 切换到指定工作区\n" +
+			"/new — 创建新工作区+会话\n" +
+			"/reset — 重置会话映射（在当前工作区新建对话）\n" +
+			"/help — 显示此帮助"
+
+	case "/status":
+		b.mu.Lock()
+		sessionID := b.sessions[fromUserID]
+		b.mu.Unlock()
+		if sessionID == "" {
+			return "当前无活跃会话。发送任意消息开始。"
+		}
+		snapshot, err := b.service.GetSnapshot(sessionID)
+		if err != nil {
+			return fmt.Sprintf("会话 %s（已失效）", sessionID)
+		}
+		ws := snapshot.Workspace
+		if ws == nil {
+			return fmt.Sprintf("会话: %s\n标签: %s", snapshot.Session.ID, snapshot.Session.Label)
+		}
+		return fmt.Sprintf("会话: %s\n工作区: %s (%s)\n对象数: %d\n消息数: %d",
+			snapshot.Session.ID, ws.ID, ws.Label,
+			len(snapshot.Objects), len(snapshot.Messages))
+
+	case "/workspaces":
+		wsList := b.service.ListWorkspaces()
+		if wsList == nil || len(wsList.Workspaces) == 0 {
+			return "暂无工作区。发送任意消息将自动创建。"
+		}
+		var sb strings.Builder
+		sb.WriteString("工作区列表:\n")
+		for i, ws := range wsList.Workspaces {
+			marker := "  "
+			// Check if current session belongs to this workspace
+			b.mu.Lock()
+			sessionID := b.sessions[fromUserID]
+			b.mu.Unlock()
+			if sessionID != "" {
+				if snap, err := b.service.GetSnapshot(sessionID); err == nil && snap.Workspace != nil && snap.Workspace.ID == ws.ID {
+					marker = "→ "
+				}
+			}
+			sb.WriteString(fmt.Sprintf("%s%d. %s (%s)\n", marker, i+1, ws.ID, ws.Label))
+		}
+		sb.WriteString("\n用 /switch <workspace_id> 切换")
+		return sb.String()
+
+	case "/switch":
+		if len(parts) < 2 {
+			return "用法: /switch <workspace_id>\n用 /workspaces 查看可用工作区"
+		}
+		targetWS := parts[1]
+		label := fmt.Sprintf("%s-%s", b.config.SessionLabel, truncate(fromUserID, 12))
+		snapshot, err := b.service.CreateConversation(ctx, targetWS, label)
+		if err != nil {
+			return fmt.Sprintf("切换失败: %v", err)
+		}
+		b.setSession(fromUserID, snapshot.Session.ID)
+		wsLabel := ""
+		if snapshot.Workspace != nil {
+			wsLabel = snapshot.Workspace.Label
+		}
+		return fmt.Sprintf("已切换到工作区 %s (%s)\n新会话: %s", targetWS, wsLabel, snapshot.Session.ID)
+
+	case "/new":
+		label := fmt.Sprintf("%s-%s", b.config.SessionLabel, truncate(fromUserID, 12))
+		snapshot, err := b.service.CreateSession(ctx, label)
+		if err != nil {
+			return fmt.Sprintf("创建失败: %v", err)
+		}
+		b.setSession(fromUserID, snapshot.Session.ID)
+		return fmt.Sprintf("已创建新工作区\n会话: %s", snapshot.Session.ID)
+
+	case "/reset":
+		b.deleteSession(fromUserID)
+		return "会话已重置。下次发送消息将自动加入最近的工作区。"
+
+	default:
+		return "" // Not a recognized command
+	}
+}
+
+func (b *Bridge) waitForJob(ctx context.Context, sessionID, jobID string) string {
+	events, cancel := b.service.Subscribe(sessionID)
+	defer cancel()
+
+	timeout := time.After(b.config.JobTimeout)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "系统已停止"
+		case <-timeout:
+			return "分析超时，请稍后重试"
+		case event, ok := <-events:
+			if !ok {
+				return "事件流中断"
+			}
+			if event.Type != "session_updated" {
+				continue
+			}
+
+			snapshot, ok := event.Data.(*models.SessionSnapshot)
+			if !ok {
+				continue
+			}
+
+			for _, job := range snapshot.Jobs {
+				if job.ID != jobID {
+					continue
+				}
+				if job.Status == models.JobSucceeded {
+					return b.formatReply(snapshot, jobID)
+				}
+				if job.Status == models.JobFailed {
+					if job.Error != "" {
+						return fmt.Sprintf("分析失败: %s", job.Error)
+					}
+					return "分析失败"
+				}
+			}
+		}
+	}
+}
+
+func (b *Bridge) formatReply(snapshot *models.SessionSnapshot, jobID string) string {
+	// Find assistant message for this job
+	for i := len(snapshot.Messages) - 1; i >= 0; i-- {
+		msg := snapshot.Messages[i]
+		if msg.JobID == jobID && msg.Role == models.MessageAssistant {
+			text := msg.Content
+			// Append artifact info
+			var plots []string
+			for _, a := range snapshot.Artifacts {
+				if a.JobID == jobID && a.Kind == models.ArtifactPlot {
+					plots = append(plots, a.Title)
+				}
+			}
+			if len(plots) > 0 {
+				text += fmt.Sprintf("\n\n[图表: %s]", strings.Join(plots, ", "))
+			}
+			return text
+		}
+	}
+
+	// Fallback: find job summary
+	for _, job := range snapshot.Jobs {
+		if job.ID == jobID && job.Summary != "" {
+			return job.Summary
+		}
+	}
+	return "完成"
+}
+
+func (b *Bridge) resolveSession(ctx context.Context, weixinUserID string) (string, error) {
+	b.mu.Lock()
+	cached, ok := b.sessions[weixinUserID]
+	b.mu.Unlock()
+	if ok {
+		return cached, nil
+	}
+
+	label := fmt.Sprintf("%s-%s", b.config.SessionLabel, truncate(weixinUserID, 12))
+
+	// Try to reuse the most recent workspace
+	wsList := b.service.ListWorkspaces()
+	if wsList != nil && len(wsList.Workspaces) > 0 {
+		workspaces := make([]*models.Workspace, len(wsList.Workspaces))
+		copy(workspaces, wsList.Workspaces)
+		sort.Slice(workspaces, func(i, j int) bool {
+			return workspaces[i].LastAccessedAt.After(workspaces[j].LastAccessedAt)
+		})
+
+		ws := workspaces[0]
+		log.Printf("[weixin] %s → joining workspace %s (%q)", weixinUserID, ws.ID, ws.Label)
+		snapshot, err := b.service.CreateConversation(ctx, ws.ID, label)
+		if err == nil {
+			sessionID := snapshot.Session.ID
+			b.setSession(weixinUserID, sessionID)
+			return sessionID, nil
+		}
+		log.Printf("[weixin] create conversation in %s failed: %v, creating new", ws.ID, err)
+	}
+
+	// Create brand new session+workspace
+	log.Printf("[weixin] %s → creating new session %q", weixinUserID, label)
+	snapshot, err := b.service.CreateSession(ctx, label)
+	if err != nil {
+		return "", err
+	}
+	sessionID := snapshot.Session.ID
+	b.setSession(weixinUserID, sessionID)
+	return sessionID, nil
+}
+
+func (b *Bridge) setSession(weixinUserID, sessionID string) {
+	b.mu.Lock()
+	b.sessions[weixinUserID] = sessionID
+	b.mu.Unlock()
+	b.saveSessions()
+}
+
+func (b *Bridge) deleteSession(weixinUserID string) {
+	b.mu.Lock()
+	delete(b.sessions, weixinUserID)
+	b.mu.Unlock()
+	b.saveSessions()
+}
+
+func (b *Bridge) loadSessions() {
+	data, err := os.ReadFile(b.sessionsFile)
+	if err != nil {
+		return
+	}
+	_ = json.Unmarshal(data, &b.sessions)
+}
+
+func (b *Bridge) saveSessions() {
+	b.mu.Lock()
+	data, _ := json.MarshalIndent(b.sessions, "", "  ")
+	b.mu.Unlock()
+
+	dir := filepath.Dir(b.sessionsFile)
+	_ = os.MkdirAll(dir, 0o755)
+	tmp := b.sessionsFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, b.sessionsFile)
+}
+
+func (b *Bridge) saveAccount(account map[string]string) error {
+	dir := filepath.Join(b.config.DataDir, "weixin-bridge")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(account, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "account.json"), data, 0o644)
+}
+
+func extractText(msg WeixinMessage) string {
+	for _, item := range msg.ItemList {
+		if item.Type == ItemTypeText && item.TextItem != nil {
+			return strings.TrimSpace(item.TextItem.Text)
+		}
+	}
+	return ""
+}
+
+func truncate(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "..."
+}
