@@ -1,5 +1,5 @@
 data/
 __pycache__/
 *.pyc
-scagent
+/scagent
 .pixi/
