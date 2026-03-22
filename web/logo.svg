@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 80">
+  <defs>
+    <linearGradient id="iconBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4a7d58"/>
+      <stop offset="100%" stop-color="#2a5037"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Icon (same as favicon, scaled to 64x64 at offset 8,8) -->
+  <g transform="translate(8,8)">
+    <rect width="64" height="64" rx="15" fill="url(#iconBg)"/>
+    <circle cx="18" cy="19" r="8" fill="#fff" opacity="0.92"/>
+    <circle cx="31" cy="14" r="5.5" fill="#fff" opacity="0.62"/>
+    <circle cx="12" cy="33" r="4.5" fill="#fff" opacity="0.48"/>
+    <circle cx="27" cy="33" r="7" fill="#c58831"/>
+    <circle cx="43" cy="28" r="5" fill="#fff" opacity="0.58"/>
+    <circle cx="45" cy="43" r="6.5" fill="#fff" opacity="0.78"/>
+    <circle cx="31" cy="48" r="4" fill="#fff" opacity="0.42"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="88" y="38" font-family="'IBM Plex Sans','Noto Sans SC','PingFang SC',system-ui,sans-serif"
+        font-size="26" fill="#68746c" font-weight="300" letter-spacing="0.5">sc</text>
+  <text x="117" y="38" font-family="'IBM Plex Sans','Noto Sans SC','PingFang SC',system-ui,sans-serif"
+        font-size="26" fill="#234631" font-weight="600" letter-spacing="0.3">Agent</text>
+
+  <!-- Subtitle -->
+  <text x="88" y="60" font-family="'IBM Plex Sans','Noto Sans SC','PingFang SC',system-ui,sans-serif"
+        font-size="14" fill="#68746c" font-weight="400" letter-spacing="3">分析台</text>
+</svg>
