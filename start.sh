@@ -81,18 +81,28 @@ fi
 cleanup() {
   if [[ -n "${RUNTIME_PID:-}" ]]; then
     local runtime_target="${RUNTIME_PID}"
+    local watchdog_pid=""
     if [[ "${RUNTIME_OWN_PG:-0}" == "1" ]]; then
       runtime_target="-${RUNTIME_PID}"
     fi
 
     kill "${runtime_target}" >/dev/null 2>&1 || true
-    # Give Python 2s to shut down, then force kill
-    for _ in 1 2 3 4; do
-      kill -0 "${RUNTIME_PID}" 2>/dev/null || return 0
-      sleep 0.5
-    done
-    kill -9 "${runtime_target}" >/dev/null 2>&1 || true
+
+    # Give the runtime 2s to shut down before forcing it down.
+    (
+      sleep 2
+      kill -9 "${runtime_target}" >/dev/null 2>&1 || true
+    ) &
+    watchdog_pid=$!
+
     wait "${RUNTIME_PID}" >/dev/null 2>&1 || true
+    if [[ -n "${watchdog_pid}" ]]; then
+      kill "${watchdog_pid}" >/dev/null 2>&1 || true
+      wait "${watchdog_pid}" >/dev/null 2>&1 || true
+    fi
+
+    RUNTIME_PID=""
+    RUNTIME_OWN_PG=0
   fi
 }
 
