@@ -220,6 +220,40 @@ func (s *Service) ListWorkspaces() *models.WorkspaceList {
 	}
 }
 
+func (s *Service) DeleteConversation(_ context.Context, sessionID string) error {
+	sessionRecord, ok := s.store.GetSession(sessionID)
+	if !ok {
+		return fmt.Errorf("未找到会话 %q", sessionID)
+	}
+
+	workspaceSnapshot, err := s.store.WorkspaceSnapshot(sessionRecord.WorkspaceID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.store.DeleteSession(sessionID); err != nil {
+		return err
+	}
+
+	for _, conversation := range workspaceSnapshot.Conversations {
+		if conversation == nil || conversation.ID == sessionID {
+			continue
+		}
+		s.publishSnapshot(conversation.ID)
+	}
+	return nil
+}
+
+func (s *Service) DeleteWorkspace(_ context.Context, workspaceID string) error {
+	if _, err := s.store.WorkspaceSnapshot(workspaceID); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(s.workspaceRoot(workspaceID)); err != nil {
+		return fmt.Errorf("删除 workspace 数据目录失败: %w", err)
+	}
+	return s.store.DeleteWorkspace(workspaceID)
+}
+
 func (s *Service) CreateConversation(_ context.Context, workspaceID, label string) (*models.SessionSnapshot, error) {
 	workspaceRecord, ok := s.store.GetWorkspace(workspaceID)
 	if !ok {

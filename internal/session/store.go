@@ -339,6 +339,99 @@ func (s *Store) ListWorkspaces() []*models.Workspace {
 	return workspaces
 }
 
+func (s *Store) DeleteSession(sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+
+	conversationCount := 0
+	for _, candidate := range s.sessions {
+		if candidate.WorkspaceID == session.WorkspaceID {
+			conversationCount++
+		}
+	}
+	if conversationCount <= 1 {
+		return fmt.Errorf("当前 workspace 只剩最后一个对话，请直接删除 workspace")
+	}
+
+	delete(s.sessions, sessionID)
+	delete(s.messages, sessionID)
+	for id, job := range s.jobs {
+		if job.SessionID == sessionID {
+			delete(s.jobs, id)
+		}
+	}
+	for id, object := range s.objects {
+		if object.SessionID == sessionID && object.WorkspaceID == "" {
+			delete(s.objects, id)
+		}
+	}
+	for id, artifact := range s.artifacts {
+		if artifact.SessionID == sessionID && artifact.WorkspaceID == "" {
+			delete(s.artifacts, id)
+		}
+	}
+	s.closeSubscribersLocked(sessionID)
+	s.persistLocked()
+	return nil
+}
+
+func (s *Store) DeleteWorkspace(workspaceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.workspaces[workspaceID]; !ok {
+		return fmt.Errorf("workspace %q not found", workspaceID)
+	}
+
+	sessionIDs := make(map[string]struct{})
+	for id, session := range s.sessions {
+		if session.WorkspaceID != workspaceID {
+			continue
+		}
+		sessionIDs[id] = struct{}{}
+		delete(s.sessions, id)
+		delete(s.messages, id)
+		s.closeSubscribersLocked(id)
+	}
+
+	for id, job := range s.jobs {
+		if _, ok := sessionIDs[job.SessionID]; ok {
+			delete(s.jobs, id)
+		}
+	}
+	for id, object := range s.objects {
+		if object.WorkspaceID == workspaceID {
+			delete(s.objects, id)
+			continue
+		}
+		if object.WorkspaceID == "" {
+			if _, ok := sessionIDs[object.SessionID]; ok {
+				delete(s.objects, id)
+			}
+		}
+	}
+	for id, artifact := range s.artifacts {
+		if artifact.WorkspaceID == workspaceID {
+			delete(s.artifacts, id)
+			continue
+		}
+		if artifact.WorkspaceID == "" {
+			if _, ok := sessionIDs[artifact.SessionID]; ok {
+				delete(s.artifacts, id)
+			}
+		}
+	}
+
+	delete(s.workspaces, workspaceID)
+	s.persistLocked()
+	return nil
+}
+
 func (s *Store) Subscribe(sessionID string) (<-chan models.Event, func()) {
 	ch := make(chan models.Event, 16)
 
@@ -353,12 +446,14 @@ func (s *Store) Subscribe(sessionID string) (<-chan models.Event, func()) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if subscribers, ok := s.subscribers[sessionID]; ok {
-			delete(subscribers, ch)
-			if len(subscribers) == 0 {
-				delete(s.subscribers, sessionID)
+			if _, present := subscribers[ch]; present {
+				delete(subscribers, ch)
+				if len(subscribers) == 0 {
+					delete(s.subscribers, sessionID)
+				}
+				close(ch)
 			}
 		}
-		close(ch)
 	}
 
 	return ch, cancel
@@ -374,6 +469,18 @@ func (s *Store) Publish(sessionID string, event models.Event) {
 		default:
 		}
 	}
+}
+
+func (s *Store) closeSubscribersLocked(sessionID string) {
+	subscribers, ok := s.subscribers[sessionID]
+	if !ok {
+		return
+	}
+	for subscriber := range subscribers {
+		delete(subscribers, subscriber)
+		close(subscriber)
+	}
+	delete(s.subscribers, sessionID)
 }
 
 func cloneSession(in *models.Session) *models.Session {

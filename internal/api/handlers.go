@@ -279,21 +279,24 @@ func (h *Handler) handleWorkspaceRoutes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if r.Method != http.MethodGet {
-		writeMethodNotAllowed(w, http.MethodGet)
-		return
-	}
-
 	workspaceID := strings.Trim(path, "/")
-	workspaceSnapshot, err := h.service.GetWorkspaceSnapshot(workspaceID)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
+	switch r.Method {
+	case http.MethodGet:
+		workspaceSnapshot, err := h.service.GetWorkspaceSnapshot(workspaceID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, workspaceSnapshot)
+	case http.MethodDelete:
+		if err := h.service.DeleteWorkspace(r.Context(), workspaceID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodDelete)
 	}
-
-	writeJSON(w, http.StatusOK, workspaceSnapshot)
-	return
-
 }
 
 func (h *Handler) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
@@ -317,18 +320,24 @@ func (h *Handler) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method != http.MethodGet {
-		writeMethodNotAllowed(w, http.MethodGet)
-		return
-	}
-
 	sessionID := strings.Trim(path, "/")
-	snapshot, err := h.service.GetSnapshot(sessionID)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
+	switch r.Method {
+	case http.MethodGet:
+		snapshot, err := h.service.GetSnapshot(sessionID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, snapshot)
+	case http.MethodDelete:
+		if err := h.service.DeleteConversation(r.Context(), sessionID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodDelete)
 	}
-	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (h *Handler) handleCreateConversation(w http.ResponseWriter, r *http.Request, workspaceID string) {
