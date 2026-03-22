@@ -15,17 +15,17 @@ This catalog organizes common single-cell analysis skills by workflow stage.
 
 ## Quality Control
 
-- `summarize_qc` (`planned`): calculate standard QC metrics
-- `plot_qc_metrics` (`planned`): visualize QC distributions
-- `filter_cells` (`planned`): filter cells by QC thresholds
-- `filter_genes` (`planned`): filter genes by detection thresholds
+- `summarize_qc` (`wired`): calculate standard QC metrics
+- `plot_qc_metrics` (`wired`): visualize QC distributions
+- `filter_cells` (`wired`): filter cells by QC thresholds
+- `filter_genes` (`wired`): filter genes by detection thresholds
 
 ## Preprocessing
 
 - `normalize_total` (`wired`): library-size normalization
 - `log1p_transform` (`wired`): log1p transform counts
 - `select_hvg` (`wired`): select highly variable genes
-- `scale_matrix` (`planned`): scale expression matrix
+- `scale_matrix` (`wired`): scale expression matrix
 
 ## Embedding
 
@@ -37,13 +37,13 @@ This catalog organizes common single-cell analysis skills by workflow stage.
 ## Subsetting And Scoring
 
 - `subset_cells` (`wired`): filter cells into a child object
-- `score_gene_set` (`planned`): score marker/gene signatures
+- `score_gene_set` (`wired`): score marker/gene signatures
 
 ## Clustering
 
 - `recluster` (`wired`): recluster the active object
-- `subcluster_group` (`planned`): isolate one cluster or cell group and recluster only that subgroup
-- `rename_clusters` (`planned`): rename cluster labels
+- `subcluster_group` (`wired`): isolate one cluster or cell group and recluster only that subgroup
+- `rename_clusters` (`wired`): rename cluster labels
 
 ## Annotation
 
@@ -58,10 +58,10 @@ This catalog organizes common single-cell analysis skills by workflow stage.
 
 - `plot_umap` (`wired`): UMAP overview with configurable params such as `color_by`, `legend_loc`, `title`, and figure size
 - `plot_gene_umap` (`wired`): UMAP colored by gene expression
-- `plot_dotplot` (`planned`): marker or gene dotplot
-- `plot_violin` (`planned`): violin plot for genes
-- `plot_heatmap` (`planned`): heatmap for selected genes
-- `plot_celltype_composition` (`planned`): cell-type composition by sample or condition
+- `plot_dotplot` (`wired`): marker or gene dotplot
+- `plot_violin` (`wired`): violin plot for genes
+- `plot_heatmap` (`wired`): heatmap for selected genes
+- `plot_celltype_composition` (`wired`): cell-type composition by sample or condition
 
 ## Custom
 
@@ -74,7 +74,7 @@ This catalog organizes common single-cell analysis skills by workflow stage.
 ## Export
 
 - `export_h5ad` (`wired`): materialize current object as `.h5ad`
-- `export_markers_csv` (`planned`): export result table as CSV
+- `export_markers_csv` (`wired`): export result table as CSV
 
 ## Suggested Implementation Order
 

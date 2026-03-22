@@ -53,22 +53,35 @@ BUILTIN_BUNDLE_ID = "builtin-core"
 BUILTIN_EXECUTABLE_SKILLS = [
     "inspect_dataset",
     "assess_dataset",
+    "summarize_qc",
+    "plot_qc_metrics",
+    "filter_cells",
+    "filter_genes",
     "normalize_total",
     "log1p_transform",
     "select_hvg",
+    "scale_matrix",
     "run_pca",
     "compute_neighbors",
     "run_umap",
     "prepare_umap",
     "subset_cells",
     "subcluster_from_global",
+    "score_gene_set",
     "recluster",
     "reanalyze_subset",
+    "subcluster_group",
+    "rename_clusters",
     "find_markers",
     "plot_umap",
     "plot_gene_umap",
+    "plot_dotplot",
+    "plot_violin",
+    "plot_heatmap",
+    "plot_celltype_composition",
     "run_python_analysis",
     "export_h5ad",
+    "export_markers_csv",
 ]
 SAFE_IMPORT_MODULES = {
     "anndata",
@@ -334,8 +347,8 @@ class RuntimeState:
         kind = str(descriptor.get("kind") or "unknown").strip() or "unknown"
         state = str(descriptor.get("state") or "resident").strip() or "resident"
         metadata = descriptor.get("metadata")
-        if not isinstance(metadata, dict) or not metadata:
-            metadata = inspect_h5ad_metadata(materialized_path)
+        if not isinstance(metadata, dict):
+            metadata = {}
 
         try:
             n_obs = int(descriptor.get("n_obs") or 0)
@@ -345,8 +358,14 @@ class RuntimeState:
             n_vars = int(descriptor.get("n_vars") or 0)
         except (TypeError, ValueError):
             n_vars = 0
-        if n_obs <= 0 or n_vars <= 0:
-            n_obs, n_vars = inspect_h5ad_shape(materialized_path)
+        h5ad_backed_kinds = {"raw_dataset", "filtered_dataset", "subset", "reclustered_subset", "unknown"}
+        if kind in h5ad_backed_kinds:
+            if not metadata:
+                metadata = inspect_h5ad_metadata(materialized_path)
+            if n_obs <= 0 or n_vars <= 0:
+                n_obs, n_vars = inspect_h5ad_shape(materialized_path)
+        else:
+            metadata = metadata or {}
 
         if backend_ref == "":
             backend_ref = self.next_ref(session_id)
@@ -387,6 +406,14 @@ class RuntimeState:
         if matrix_has_negative_values(adata.X):
             if adata.raw is None:
                 raise RuntimeError("当前对象缺少可用于预处理的原始 counts，请先提供原始矩阵或带 raw 的 h5ad。")
+            adata = adata.raw.to_adata()
+            adata.var_names_make_unique()
+        return adata
+
+    def _load_qc_adata(self, target: RuntimeObject) -> Any:
+        adata = self._load_adata(target)
+        assessment = (target.metadata or {}).get("assessment") or {}
+        if adata.raw is not None and assessment.get("preprocessing_state") not in {"", "raw_like"}:
             adata = adata.raw.to_adata()
             adata.var_names_make_unique()
         return adata
@@ -440,6 +467,24 @@ class RuntimeState:
                 return candidate
 
         raise RuntimeError("当前对象缺少可用的聚类字段。")
+
+    def _categorical_field(self, target: RuntimeObject, adata: Any, requested: str | None = None) -> str:
+        if requested and requested in adata.obs.columns:
+            return requested
+
+        metadata = target.metadata or {}
+        for annotation_key in ("cluster_annotation", "cell_type_annotation"):
+            annotation = metadata.get(annotation_key) or {}
+            field = str(annotation.get("field") or "").strip()
+            if field and field in adata.obs.columns:
+                return field
+
+        for item in metadata.get("categorical_obs_fields", []):
+            field = str(item.get("field") or "").strip()
+            if field and field in adata.obs.columns:
+                return field
+
+        return self._cluster_field(target, adata, requested)
 
     def _default_kind_after_processing(self, target: RuntimeObject) -> str:
         if target.kind == "raw_dataset":
@@ -521,6 +566,110 @@ class RuntimeState:
     def _plot_path(self, workspace_root: Path, skill: str, label: str, request_id: str | None = None) -> Path:
         return self._artifact_path(workspace_root, f"{skill}_{label}", "png", request_id)
 
+    def _infer_mt_prefix(self, adata: Any, explicit_prefix: Any = None) -> str | None:
+        prefix = str(explicit_prefix or "").strip()
+        if prefix:
+            return prefix
+
+        for candidate in ("MT-", "mt-", "Mt-"):
+            if any(str(name).startswith(candidate) for name in adata.var_names):
+                return candidate
+
+        for column in ("gene_symbol", "gene_name", "symbol", "feature_name", "features"):
+            if column not in adata.var.columns:
+                continue
+            values = adata.var[column].astype(str)
+            for candidate in ("MT-", "mt-", "Mt-"):
+                if bool(values.str.startswith(candidate).any()):
+                    return candidate
+        return None
+
+    def _ensure_qc_metrics(self, adata: Any, mt_prefix: Any = None) -> dict[str, Any]:
+        _, sc, _, _, _ = analysis_modules()
+        prefix = self._infer_mt_prefix(adata, mt_prefix)
+        qc_vars: list[str] | None = None
+        if prefix is not None:
+            adata.var["mt"] = [str(name).startswith(prefix) for name in adata.var_names]
+            qc_vars = ["mt"]
+
+        sc.pp.calculate_qc_metrics(adata, qc_vars=qc_vars, percent_top=None, log1p=False, inplace=True)
+        if "pct_counts_mt" not in adata.obs.columns:
+            adata.obs["pct_counts_mt"] = 0.0
+        else:
+            adata.obs["pct_counts_mt"] = adata.obs["pct_counts_mt"].fillna(0.0)
+
+        metrics = [metric for metric in ("total_counts", "n_genes_by_counts", "pct_counts_mt") if metric in adata.obs.columns]
+        return {
+            "metrics": metrics,
+            "mt_prefix": prefix,
+        }
+
+    def _normalize_qc_metric_names(self, raw_value: Any, available_fields: list[str] | None = None) -> list[str]:
+        available = set(available_fields or [])
+        if raw_value is None:
+            requested: list[str] = []
+        elif isinstance(raw_value, str):
+            requested = [item for item in re.split(r"[\s,，;；]+", raw_value) if item]
+        elif isinstance(raw_value, list):
+            requested = [str(item or "").strip() for item in raw_value if str(item or "").strip()]
+        else:
+            text = str(raw_value or "").strip()
+            requested = [text] if text else []
+
+        aliases = {
+            "counts": "total_counts",
+            "ncounts": "total_counts",
+            "totalcounts": "total_counts",
+            "umi": "total_counts",
+            "umis": "total_counts",
+            "genes": "n_genes_by_counts",
+            "ngenes": "n_genes_by_counts",
+            "detectedgenes": "n_genes_by_counts",
+            "genesbycounts": "n_genes_by_counts",
+            "ngenesbycounts": "n_genes_by_counts",
+            "mt": "pct_counts_mt",
+            "mito": "pct_counts_mt",
+            "mitochondrial": "pct_counts_mt",
+            "pctmt": "pct_counts_mt",
+            "percentmt": "pct_counts_mt",
+            "mtpct": "pct_counts_mt",
+            "mitopct": "pct_counts_mt",
+            "mitochondrialpct": "pct_counts_mt",
+            "pctcountsmt": "pct_counts_mt",
+        }
+
+        normalized: list[str] = []
+        for item in requested:
+            if item in available:
+                normalized.append(item)
+                continue
+            key = re.sub(r"[^a-z0-9]+", "", item.lower())
+            candidate = aliases.get(key)
+            if candidate:
+                normalized.append(candidate)
+                continue
+            normalized.append(item)
+
+        if not normalized:
+            normalized = ["total_counts", "n_genes_by_counts", "pct_counts_mt"]
+
+        return dedupe_list([item for item in normalized if not available or item in available])
+
+    def _metric_stats(self, adata: Any, metric: str) -> dict[str, float] | None:
+        _, _, _, np, _ = analysis_modules()
+        if metric not in adata.obs.columns:
+            return None
+        values = np.asarray(adata.obs[metric], dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return None
+        return {
+            "min": round(float(values.min()), 4),
+            "median": round(float(np.median(values)), 4),
+            "mean": round(float(values.mean()), 4),
+            "max": round(float(values.max()), 4),
+        }
+
     def _normalize_gene_list(self, raw_value: Any) -> list[str]:
         if raw_value is None:
             return []
@@ -539,6 +688,34 @@ class RuntimeState:
                 candidates.append(text)
 
         return dedupe_list([candidate for candidate in candidates if candidate])
+
+    def _resolve_gene_keys(self, adata: Any, raw_value: Any, *, require_at_least_one: bool = False) -> tuple[list[str], list[dict[str, str]], list[str]]:
+        requested = self._normalize_gene_list(raw_value)
+        resolved: list[dict[str, str]] = []
+        missing: list[str] = []
+        seen_keys: set[str] = set()
+
+        for gene in requested:
+            gene_key = self._resolve_gene_var_key(adata, gene)
+            if gene_key is None:
+                missing.append(gene)
+                continue
+            if gene_key in seen_keys:
+                continue
+            seen_keys.add(gene_key)
+            resolved.append(
+                {
+                    "requested": gene,
+                    "feature_key": gene_key,
+                }
+            )
+
+        if require_at_least_one and not resolved:
+            if missing:
+                raise RuntimeError(f"当前对象中未找到请求基因：{format_list_zh(missing)}。")
+            raise RuntimeError("至少需要一个基因。")
+
+        return requested, resolved, missing
 
     def _resolve_gene_var_key(self, adata: Any, gene: str) -> str | None:
         requested = str(gene or "").strip()
@@ -572,6 +749,12 @@ class RuntimeState:
         if sp.issparse(values):
             return np.asarray(values.toarray()).reshape(-1)
         return np.asarray(values).reshape(-1)
+
+    def _dense_matrix(self, values: Any) -> Any:
+        _, _, _, np, sp = analysis_modules()
+        if sp.issparse(values):
+            return np.asarray(values.toarray())
+        return np.asarray(values)
 
     def _resolve_gene_expression(self, adata: Any, gene: str, layer: str | None = None) -> tuple[str, str, Any, str]:
         requested = str(gene or "").strip()
@@ -784,6 +967,195 @@ class RuntimeState:
         fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
         plt.close(fig)
 
+    def _save_qc_metrics_plot(self, adata: Any, path: Path, metrics: list[str], *, title: str | None = None) -> None:
+        _, _, plt, np, _ = analysis_modules()
+        figure_title = str(title or "QC metrics").strip() or "QC metrics"
+        figure_width = max(5.4, len(metrics) * 3.2)
+        fig, axes = plt.subplots(1, len(metrics), figsize=(figure_width, 3.8))
+        if len(metrics) == 1:
+            axes = [axes]
+
+        for axis, metric in zip(axes, metrics):
+            values = np.asarray(adata.obs[metric], dtype=float)
+            values = values[np.isfinite(values)]
+            bins = min(40, max(10, int(np.sqrt(max(len(values), 1)))))
+            axis.hist(values, bins=bins, color="#2f7d4a", alpha=0.85, edgecolor="white")
+            if values.size > 0:
+                median = float(np.median(values))
+                axis.axvline(median, color="#c44e52", linestyle="--", linewidth=1.1)
+            axis.set_title(metric)
+            axis.set_xlabel(metric)
+            axis.set_ylabel("Cells")
+            axis.spines["top"].set_visible(False)
+            axis.spines["right"].set_visible(False)
+
+        fig.suptitle(figure_title)
+        fig.tight_layout()
+        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+
+    def _save_dotplot(
+        self,
+        path: Path,
+        group_labels: list[str],
+        gene_labels: list[str],
+        mean_values: Any,
+        pct_values: Any,
+        *,
+        title: str | None = None,
+        palette: str | None = None,
+    ) -> None:
+        _, _, plt, np, _ = analysis_modules()
+        figure_title = str(title or "Dotplot").strip() or "Dotplot"
+        fig, ax = plt.subplots(
+            figsize=(max(5.8, len(gene_labels) * 0.72 + 2.8), max(4.2, len(group_labels) * 0.48 + 1.8))
+        )
+
+        xs = np.tile(np.arange(len(gene_labels)), len(group_labels))
+        ys = np.repeat(np.arange(len(group_labels)), len(gene_labels))
+        colors = np.asarray(mean_values, dtype=float).reshape(-1)
+        pct = np.clip(np.asarray(pct_values, dtype=float).reshape(-1), 0.0, 100.0)
+        sizes = pct * 4.5 + 12.0
+
+        cmap_name = str(palette or "viridis")
+        try:
+            scatter = ax.scatter(xs, ys, s=sizes, c=colors, cmap=cmap_name, edgecolors="none")
+        except ValueError:
+            scatter = ax.scatter(xs, ys, s=sizes, c=colors, cmap="viridis", edgecolors="none")
+
+        ax.set_xticks(np.arange(len(gene_labels)), gene_labels, rotation=45, ha="right")
+        ax.set_yticks(np.arange(len(group_labels)), group_labels)
+        ax.invert_yaxis()
+        ax.set_xlabel("Genes")
+        ax.set_ylabel("Groups")
+        ax.set_title(figure_title)
+        ax.grid(axis="x", linestyle=":", linewidth=0.5, alpha=0.4)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+        colorbar = fig.colorbar(scatter, ax=ax, fraction=0.045, pad=0.04)
+        colorbar.set_label("Mean expression")
+
+        for value in (25, 50, 75):
+            ax.scatter([], [], s=value * 4.5 + 12.0, c="#b8c2cc", label=f"{value}%")
+        ax.legend(title="% expressing", frameon=False, loc="upper left", bbox_to_anchor=(1.02, 1.0))
+
+        fig.tight_layout()
+        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+
+    def _save_group_heatmap(
+        self,
+        path: Path,
+        group_labels: list[str],
+        gene_labels: list[str],
+        values: Any,
+        *,
+        title: str | None = None,
+        palette: str | None = None,
+    ) -> None:
+        _, _, plt, np, _ = analysis_modules()
+        figure_title = str(title or "Heatmap").strip() or "Heatmap"
+        fig, ax = plt.subplots(
+            figsize=(max(5.2, len(gene_labels) * 0.62 + 2.6), max(4.0, len(group_labels) * 0.46 + 1.8))
+        )
+
+        cmap_name = str(palette or "viridis")
+        try:
+            image = ax.imshow(np.asarray(values, dtype=float), aspect="auto", cmap=cmap_name)
+        except ValueError:
+            image = ax.imshow(np.asarray(values, dtype=float), aspect="auto", cmap="viridis")
+
+        ax.set_xticks(np.arange(len(gene_labels)), gene_labels, rotation=45, ha="right")
+        ax.set_yticks(np.arange(len(group_labels)), group_labels)
+        ax.set_xlabel("Genes")
+        ax.set_ylabel("Groups")
+        ax.set_title(figure_title)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+        colorbar = fig.colorbar(image, ax=ax, fraction=0.045, pad=0.04)
+        colorbar.set_label("Mean expression")
+
+        fig.tight_layout()
+        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+
+    def _save_violin_plot(
+        self,
+        path: Path,
+        group_labels: list[str],
+        gene_labels: list[str],
+        grouped_values: list[list[Any]],
+        *,
+        title: str | None = None,
+    ) -> None:
+        _, _, plt, np, _ = analysis_modules()
+        figure_title = str(title or "Violin plot").strip() or "Violin plot"
+        fig, axes = plt.subplots(
+            len(gene_labels),
+            1,
+            figsize=(max(6.2, len(group_labels) * 0.72 + 2.5), max(3.4, len(gene_labels) * 2.6)),
+            squeeze=False,
+        )
+        positions = np.arange(1, len(group_labels) + 1)
+
+        for index, gene_label in enumerate(gene_labels):
+            axis = axes[index][0]
+            values = []
+            for group_values in grouped_values[index]:
+                numeric = np.asarray(group_values, dtype=float)
+                numeric = numeric[np.isfinite(numeric)]
+                values.append(numeric if numeric.size > 0 else np.asarray([0.0]))
+
+            violin = axis.violinplot(values, positions=positions, showmedians=True, showextrema=False)
+            for body in violin["bodies"]:
+                body.set_facecolor("#2f7d4a")
+                body.set_edgecolor("none")
+                body.set_alpha(0.72)
+            if "cmedians" in violin:
+                violin["cmedians"].set_color("#1f2933")
+                violin["cmedians"].set_linewidth(1.1)
+
+            axis.set_title(gene_label, loc="left", fontsize=10)
+            axis.set_ylabel("Expression")
+            axis.set_xticks(positions, group_labels if index == len(gene_labels) - 1 else [""] * len(group_labels), rotation=45, ha="right")
+            axis.spines["top"].set_visible(False)
+            axis.spines["right"].set_visible(False)
+
+        fig.suptitle(figure_title)
+        fig.tight_layout()
+        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+
+    def _save_stacked_bar_plot(self, path: Path, composition: Any, *, title: str | None = None) -> None:
+        _, _, plt, np, _ = analysis_modules()
+        figure_title = str(title or "Composition").strip() or "Composition"
+        fig, ax = plt.subplots(figsize=(max(6.2, len(composition.index) * 0.85 + 2.5), 4.8))
+        x = np.arange(len(composition.index))
+        bottom = np.zeros(len(composition.index), dtype=float)
+
+        cmap = plt.get_cmap("tab20")
+        denominator = max(1, len(composition.columns) - 1)
+        for index, column in enumerate(composition.columns):
+            values = composition[column].to_numpy(dtype=float)
+            color = cmap(index / denominator)
+            ax.bar(x, values, width=0.72, bottom=bottom, label=str(column), color=color)
+            bottom += values
+
+        ax.set_xticks(x, [str(item) for item in composition.index], rotation=45, ha="right")
+        ax.set_ylim(0, 100)
+        ax.set_ylabel("Fraction of cells (%)")
+        ax.set_xlabel("Groups")
+        ax.set_title(figure_title)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.legend(title="Cell groups", frameon=False, loc="upper left", bbox_to_anchor=(1.02, 1.0))
+
+        fig.tight_layout()
+        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+
     def _save_custom_figure(self, figure: Any, workspace_root: Path, stem: str, request_id: str | None = None) -> Path:
         path = self._artifact_path(workspace_root, stem, "png", request_id)
         figure.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
@@ -795,6 +1167,40 @@ class RuntimeState:
         path = self._artifact_path(workspace_root, stem, "csv", request_id)
         table.to_csv(path, index=False)
         return path
+
+    def _table_source_path(self, target: RuntimeObject) -> Path:
+        candidates = [target.materialized_path]
+        metadata = target.metadata or {}
+        for key in ("csv_path", "table_path", "source_table_path", "artifact_path"):
+            value = str(metadata.get(key) or "").strip()
+            if value:
+                candidates.append(value)
+
+        for candidate in candidates:
+            path = Path(str(candidate or "").strip())
+            if path.exists() and path.is_file():
+                return path
+        raise RuntimeError(f"当前结果对象 `{target.label}` 缺少可导出的表文件。")
+
+    def _latest_marker_artifact_path(self, workspace_root: Path, target: RuntimeObject | None = None) -> Path | None:
+        artifacts_dir = workspace_root / "artifacts"
+        if not artifacts_dir.exists():
+            return None
+
+        candidates = sorted(
+            [path for path in artifacts_dir.glob("markers_*.csv") if path.is_file()],
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            return None
+
+        if target is not None:
+            label_slug = slug(target.label)
+            for candidate in candidates:
+                if label_slug and label_slug in candidate.stem:
+                    return candidate
+        return candidates[0]
 
     def _plugin_object_context(self, target: RuntimeObject | None) -> dict[str, Any] | None:
         if target is None:
@@ -962,6 +1368,158 @@ class RuntimeState:
                 },
             }
 
+        if skill == "summarize_qc":
+            target = self._require_target(target, skill)
+            adata = self._load_qc_adata(target)
+            qc_info = self._ensure_qc_metrics(adata, params.get("mt_prefix"))
+            stats = {metric: self._metric_stats(adata, metric) for metric in qc_info["metrics"]}
+            facts = {
+                "cell_count": int(adata.n_obs),
+                "gene_count": int(adata.n_vars),
+                "mt_prefix": qc_info["mt_prefix"],
+                "qc_metrics": stats,
+            }
+
+            summary_bits = [f"已为 {target.label} 计算 QC 指标。"]
+            total_counts_stats = stats.get("total_counts") or {}
+            genes_stats = stats.get("n_genes_by_counts") or {}
+            mt_stats = stats.get("pct_counts_mt") or {}
+            if total_counts_stats:
+                summary_bits.append(f"每细胞 total_counts 中位数为 {total_counts_stats['median']:g}。")
+            if genes_stats:
+                summary_bits.append(f"每细胞检测基因数中位数为 {genes_stats['median']:g}。")
+            if mt_stats:
+                summary_bits.append(f"线粒体占比中位数为 {mt_stats['median']:g}%。")
+            if qc_info["mt_prefix"]:
+                summary_bits.append(f"线粒体基因前缀识别为 `{qc_info['mt_prefix']}`。")
+            else:
+                summary_bits.append("未识别线粒体基因前缀，pct_counts_mt 按 0 处理。")
+
+            return {
+                "summary": "".join(summary_bits),
+                "facts": facts,
+                "metadata": {
+                    "qc_metrics": stats,
+                    "mt_prefix": qc_info["mt_prefix"],
+                },
+            }
+
+        if skill == "plot_qc_metrics":
+            target = self._require_target(target, skill)
+            adata = self._load_qc_adata(target)
+            qc_info = self._ensure_qc_metrics(adata, params.get("mt_prefix"))
+            metrics = self._normalize_qc_metric_names(params.get("metrics"), qc_info["metrics"])
+            if not metrics:
+                raise RuntimeError("plot_qc_metrics 没有可绘制的 QC 指标。")
+
+            title = str(params.get("title") or "").strip() or None
+            path = self._plot_path(workspace_root, skill, target.label, request_id)
+            self._save_qc_metrics_plot(adata, path, metrics, title=title)
+            return {
+                "summary": f"已为 {target.label} 生成 QC 分布图（指标：{format_list_zh(metrics)}）。",
+                "artifacts": [
+                    {
+                        "kind": "plot",
+                        "title": f"{target.label} 的 QC 指标图",
+                        "path": str(path),
+                        "content_type": "image/png",
+                        "summary": f"{target.label} 的 QC 指标分布图。",
+                    }
+                ],
+                "metadata": {
+                    "metrics": metrics,
+                    "mt_prefix": qc_info["mt_prefix"],
+                },
+            }
+
+        if skill == "filter_cells":
+            target = self._require_target(target, skill)
+            _, _, _, np, _ = analysis_modules()
+            adata = self._load_qc_adata(target)
+            qc_info = self._ensure_qc_metrics(adata, params.get("mt_prefix"))
+
+            thresholds: dict[str, float] = {}
+            if params.get("min_genes") is not None:
+                thresholds["min_genes"] = float(params["min_genes"])
+            if params.get("max_genes") is not None:
+                thresholds["max_genes"] = float(params["max_genes"])
+            if params.get("max_mt_pct") is not None:
+                thresholds["max_mt_pct"] = float(params["max_mt_pct"])
+            if not thresholds:
+                raise RuntimeError("filter_cells 至少需要一个阈值：min_genes、max_genes 或 max_mt_pct。")
+
+            mask = np.ones(adata.n_obs, dtype=bool)
+            if "min_genes" in thresholds:
+                mask &= np.asarray(adata.obs["n_genes_by_counts"], dtype=float) >= thresholds["min_genes"]
+            if "max_genes" in thresholds:
+                mask &= np.asarray(adata.obs["n_genes_by_counts"], dtype=float) <= thresholds["max_genes"]
+            if "max_mt_pct" in thresholds:
+                mask &= np.asarray(adata.obs["pct_counts_mt"], dtype=float) <= thresholds["max_mt_pct"]
+
+            filtered = adata[mask].copy()
+            if filtered.n_obs == 0:
+                raise RuntimeError("filter_cells 的筛选结果为空，请检查阈值。")
+
+            removed = adata.n_obs - filtered.n_obs
+            threshold_bits = [f"{name}={value:g}" for name, value in thresholds.items()]
+            return self._persist_adata_object(
+                session_id=session_id,
+                workspace_root=workspace_root,
+                label=f"filtered_cells_{target.label}",
+                kind="filtered_dataset",
+                adata=filtered,
+                summary=(
+                    f"已对 {target.label} 应用细胞过滤（{', '.join(threshold_bits)}），"
+                    f"保留 {filtered.n_obs} 个细胞，移除 {removed} 个细胞。"
+                ),
+            )
+
+        if skill == "filter_genes":
+            target = self._require_target(target, skill)
+            _, _, _, np, sp = analysis_modules()
+            adata = self._load_qc_adata(target)
+
+            thresholds: dict[str, float] = {}
+            if params.get("min_cells") is not None:
+                thresholds["min_cells"] = float(params["min_cells"])
+            if params.get("min_counts") is not None:
+                thresholds["min_counts"] = float(params["min_counts"])
+            if not thresholds:
+                raise RuntimeError("filter_genes 至少需要一个阈值：min_cells 或 min_counts。")
+
+            matrix = adata.X
+            if sp.issparse(matrix):
+                detected_cells = np.asarray((matrix > 0).sum(axis=0)).reshape(-1)
+                total_counts = np.asarray(matrix.sum(axis=0)).reshape(-1)
+            else:
+                dense = np.asarray(matrix)
+                detected_cells = (dense > 0).sum(axis=0)
+                total_counts = dense.sum(axis=0)
+
+            gene_mask = np.ones(adata.n_vars, dtype=bool)
+            if "min_cells" in thresholds:
+                gene_mask &= detected_cells >= thresholds["min_cells"]
+            if "min_counts" in thresholds:
+                gene_mask &= total_counts >= thresholds["min_counts"]
+
+            filtered = adata[:, gene_mask].copy()
+            if filtered.n_vars == 0:
+                raise RuntimeError("filter_genes 的筛选结果为空，请检查阈值。")
+
+            removed = adata.n_vars - filtered.n_vars
+            threshold_bits = [f"{name}={value:g}" for name, value in thresholds.items()]
+            return self._persist_adata_object(
+                session_id=session_id,
+                workspace_root=workspace_root,
+                label=f"filtered_genes_{target.label}",
+                kind="filtered_dataset",
+                adata=filtered,
+                summary=(
+                    f"已对 {target.label} 应用基因过滤（{', '.join(threshold_bits)}），"
+                    f"保留 {filtered.n_vars} 个基因，移除 {removed} 个基因。"
+                ),
+            )
+
         if skill == "normalize_total":
             target = self._require_target(target, skill)
             _, sc, _, _, _ = analysis_modules()
@@ -1016,6 +1574,27 @@ class RuntimeState:
                 kind=self._default_kind_after_processing(target),
                 adata=adata,
                 summary=f"已为 {target.label} 选择高变基因（n_top_genes={n_top_genes}，实际标记 {n_hvg} 个）。",
+            )
+
+        if skill == "scale_matrix":
+            target = self._require_target(target, skill)
+            _, sc, _, _, _ = analysis_modules()
+            adata = self._load_adata(target)
+            max_value = params.get("max_value")
+            if max_value is not None:
+                sc.pp.scale(adata, max_value=float(max_value))
+            else:
+                sc.pp.scale(adata)
+            summary = f"已对 {target.label} 完成表达矩阵缩放。"
+            if max_value is not None:
+                summary = f"已对 {target.label} 完成表达矩阵缩放（max_value={float(max_value):g}）。"
+            return self._persist_adata_object(
+                session_id=session_id,
+                workspace_root=workspace_root,
+                label=f"scaled_{target.label}",
+                kind=self._default_kind_after_processing(target),
+                adata=adata,
+                summary=summary,
             )
 
         if skill == "run_pca":
@@ -1139,6 +1718,32 @@ class RuntimeState:
                 ),
             )
 
+        if skill == "score_gene_set":
+            target = self._require_target(target, skill)
+            _, sc, _, _, _ = analysis_modules()
+            adata = self._load_adata(target)
+            requested_genes, resolved_genes, missing_genes = self._resolve_gene_keys(adata, params.get("genes"), require_at_least_one=True)
+            score_name = str(params.get("score_name") or "").strip() or f"score_{slug('_'.join(item['requested'] for item in resolved_genes[:4])) or 'gene_set'}"
+            sc.tl.score_genes(adata, gene_list=[item["feature_key"] for item in resolved_genes], score_name=score_name, use_raw=adata.raw is not None)
+            summary_bits = [f"已为 {target.label} 计算基因集得分，并写入 obs 字段 `{score_name}`。"]
+            if missing_genes:
+                summary_bits.append(f"未命中的基因：{format_list_zh(missing_genes)}。")
+            persisted = self._persist_adata_object(
+                session_id=session_id,
+                workspace_root=workspace_root,
+                label=f"scored_{target.label}",
+                kind=self._default_kind_after_processing(target),
+                adata=adata,
+                summary="".join(summary_bits),
+            )
+            persisted["metadata"] = {
+                "score_name": score_name,
+                "genes": requested_genes,
+                "resolved_genes": resolved_genes,
+                "missing_genes": missing_genes,
+            }
+            return persisted
+
         if skill == "recluster":
             target = self._require_target(target, skill)
             _, sc, _, _, _ = analysis_modules()
@@ -1174,6 +1779,58 @@ class RuntimeState:
                 ),
             )
 
+        if skill == "subcluster_group":
+            target = self._require_target(target, skill)
+            adata = self._load_counts_adata(target)
+            groupby = str(params.get("groupby") or "").strip()
+            groups = params.get("groups")
+            if groupby == "":
+                raise RuntimeError("subcluster_group 需要 groupby。")
+            if not isinstance(groups, list) or not groups:
+                raise RuntimeError("subcluster_group 需要非空的 groups。")
+
+            mask = self._build_obs_mask(adata, groupby, "in", groups)
+            subset = adata[mask].copy()
+            if subset.n_obs == 0:
+                raise RuntimeError("subcluster_group 的筛选结果为空，请检查 groups。")
+
+            analyzed_subset, workflow = self._run_subcluster_workflow(subset, params)
+            group_label = slug("_".join(str(item) for item in groups)) or "selected"
+            return self._persist_adata_object(
+                session_id=session_id,
+                workspace_root=workspace_root,
+                label=f"subcluster_{groupby}_{group_label}",
+                kind="reclustered_subset",
+                adata=analyzed_subset,
+                summary=(
+                    f"已从 {target.label} 中提取 {groupby}={format_list_zh([str(item) for item in groups])} 的 {analyzed_subset.n_obs} 个细胞，"
+                    f"并完成亚群重分析（resolution={workflow['resolution']}）。"
+                ),
+            )
+
+        if skill == "rename_clusters":
+            target = self._require_target(target, skill)
+            adata = self._load_adata(target)
+            groupby = str(params.get("groupby") or "").strip()
+            mapping = params.get("mapping")
+            if groupby == "":
+                raise RuntimeError("rename_clusters 需要 groupby。")
+            if groupby not in adata.obs.columns:
+                raise RuntimeError(f"当前对象缺少 obs 字段 `{groupby}`。")
+            if not isinstance(mapping, dict) or not mapping:
+                raise RuntimeError("rename_clusters 需要非空的 mapping。")
+
+            renamed = adata.obs[groupby].astype(str).replace({str(key): str(value) for key, value in mapping.items()})
+            adata.obs[groupby] = renamed.astype("category")
+            return self._persist_adata_object(
+                session_id=session_id,
+                workspace_root=workspace_root,
+                label=f"renamed_{target.label}",
+                kind=target.kind,
+                adata=adata,
+                summary=f"已在 {target.label} 中重命名 `{groupby}` 的类别标签，共应用 {len(mapping)} 条映射。",
+            )
+
         if skill == "find_markers":
             target = self._require_target(target, skill)
             _, sc, _, _, _ = analysis_modules()
@@ -1202,7 +1859,8 @@ class RuntimeState:
             target = self._require_target(target, skill)
             adata = self._load_adata(target)
             color_by = str(params.get("color_by") or "").strip()
-            legend_loc = self._normalize_legend_loc(params.get("legend_loc"))
+            legend_loc_param = str(params.get("legend_loc") or "").strip()
+            legend_loc = self._normalize_legend_loc(legend_loc_param)
             palette = str(params.get("palette") or "").strip() or None
             title = str(params.get("title") or "").strip() or None
             point_size = self._coerce_positive_float(params.get("point_size"), 8.0)
@@ -1215,6 +1873,12 @@ class RuntimeState:
                     color_by = ""
             if color_by and color_by not in adata.obs.columns:
                 raise RuntimeError(f"`{color_by}` 不是 obs 字段；如果要按基因表达着色，请使用 plot_gene_umap。")
+            if color_by and legend_loc_param == "":
+                series = adata.obs[color_by]
+                if getattr(series.dtype, "kind", "") not in {"i", "u", "f"}:
+                    categories = series.astype("category")
+                    if len(categories.cat.categories) > 4:
+                        legend_loc = "on data"
             path = self._plot_path(workspace_root, skill, target.label, request_id)
             self._save_umap_plot(
                 adata,
@@ -1299,6 +1963,238 @@ class RuntimeState:
                     "genes": requested_genes,
                     "resolved_genes": resolved_genes,
                     "layer": layer_name,
+                },
+            }
+
+        if skill == "plot_dotplot":
+            target = self._require_target(target, skill)
+            _, _, _, np, _ = analysis_modules()
+            adata = self._load_adata(target)
+            requested_genes, resolved_genes, missing_genes = self._resolve_gene_keys(adata, params.get("genes"), require_at_least_one=True)
+            requested_groupby = str(params.get("groupby") or "").strip()
+            groupby = self._categorical_field(target, adata, requested_groupby if requested_groupby else None)
+            categories = adata.obs[groupby].astype("category")
+            codes = categories.cat.codes.to_numpy()
+            group_labels = [str(item) for item in categories.cat.categories]
+            gene_keys = [item["feature_key"] for item in resolved_genes]
+            gene_labels = [item["requested"] for item in resolved_genes]
+            expression = self._dense_matrix(adata[:, gene_keys].X)
+
+            mean_values = []
+            pct_values = []
+            for index in range(len(group_labels)):
+                group_mask = codes == index
+                subset = expression[group_mask]
+                if subset.shape[0] == 0:
+                    mean_values.append(np.zeros(len(gene_keys), dtype=float))
+                    pct_values.append(np.zeros(len(gene_keys), dtype=float))
+                    continue
+                mean_values.append(np.asarray(subset.mean(axis=0), dtype=float).reshape(-1))
+                pct_values.append(np.asarray((subset > 0).mean(axis=0) * 100.0, dtype=float).reshape(-1))
+
+            title = str(params.get("title") or "").strip() or None
+            palette = str(params.get("palette") or "").strip() or None
+            path = self._plot_path(workspace_root, skill, target.label, request_id)
+            self._save_dotplot(
+                path,
+                group_labels,
+                gene_labels,
+                np.vstack(mean_values),
+                np.vstack(pct_values),
+                title=title,
+                palette=palette,
+            )
+            summary_bits = [f"已为 {target.label} 生成 dotplot（groupby={groupby}，基因：{format_list_zh(gene_labels)}）。"]
+            if missing_genes:
+                summary_bits.append(f"未命中的基因：{format_list_zh(missing_genes)}。")
+            return {
+                "summary": "".join(summary_bits),
+                "artifacts": [
+                    {
+                        "kind": "plot",
+                        "title": f"{target.label} 的 dotplot",
+                        "path": str(path),
+                        "content_type": "image/png",
+                        "summary": f"{target.label} 按 {groupby} 汇总的 dotplot。",
+                    }
+                ],
+                "metadata": {
+                    "groupby": groupby,
+                    "genes": requested_genes,
+                    "resolved_genes": resolved_genes,
+                    "missing_genes": missing_genes,
+                },
+            }
+
+        if skill == "plot_violin":
+            target = self._require_target(target, skill)
+            _, _, _, np, _ = analysis_modules()
+            adata = self._load_adata(target)
+            requested_genes, resolved_genes, missing_genes = self._resolve_gene_keys(adata, params.get("genes"), require_at_least_one=True)
+            requested_groupby = str(params.get("groupby") or "").strip()
+            if requested_groupby:
+                if requested_groupby not in adata.obs.columns:
+                    raise RuntimeError(f"当前对象缺少 obs 字段 `{requested_groupby}`。")
+                groupby = requested_groupby
+            else:
+                try:
+                    groupby = self._categorical_field(target, adata, None)
+                except RuntimeError:
+                    groupby = ""
+
+            if groupby:
+                categories = adata.obs[groupby].astype("category")
+                codes = categories.cat.codes.to_numpy()
+                group_labels = [str(item) for item in categories.cat.categories]
+            else:
+                codes = np.zeros(adata.n_obs, dtype=int)
+                group_labels = ["all cells"]
+
+            grouped_values: list[list[Any]] = []
+            for item in resolved_genes:
+                expression = self._dense_vector(adata[:, [item["feature_key"]]].X)
+                gene_groups = []
+                for index in range(len(group_labels)):
+                    gene_groups.append(expression[codes == index])
+                grouped_values.append(gene_groups)
+
+            title = str(params.get("title") or "").strip() or None
+            path = self._plot_path(workspace_root, skill, target.label, request_id)
+            self._save_violin_plot(path, group_labels, [item["requested"] for item in resolved_genes], grouped_values, title=title)
+            summary_bits = [f"已为 {target.label} 生成小提琴图（基因：{format_list_zh([item['requested'] for item in resolved_genes])}）。"]
+            if groupby:
+                summary_bits.append(f"分组字段：{groupby}。")
+            if missing_genes:
+                summary_bits.append(f"未命中的基因：{format_list_zh(missing_genes)}。")
+            return {
+                "summary": "".join(summary_bits),
+                "artifacts": [
+                    {
+                        "kind": "plot",
+                        "title": f"{target.label} 的小提琴图",
+                        "path": str(path),
+                        "content_type": "image/png",
+                        "summary": f"{target.label} 的基因表达小提琴图。",
+                    }
+                ],
+                "metadata": {
+                    "groupby": groupby or None,
+                    "genes": requested_genes,
+                    "resolved_genes": resolved_genes,
+                    "missing_genes": missing_genes,
+                },
+            }
+
+        if skill == "plot_heatmap":
+            target = self._require_target(target, skill)
+            _, _, _, np, _ = analysis_modules()
+            adata = self._load_adata(target)
+            requested_genes, resolved_genes, missing_genes = self._resolve_gene_keys(adata, params.get("genes"), require_at_least_one=True)
+            requested_groupby = str(params.get("groupby") or "").strip()
+            if requested_groupby:
+                if requested_groupby not in adata.obs.columns:
+                    raise RuntimeError(f"当前对象缺少 obs 字段 `{requested_groupby}`。")
+                groupby = requested_groupby
+            else:
+                try:
+                    groupby = self._categorical_field(target, adata, None)
+                except RuntimeError:
+                    groupby = ""
+
+            gene_keys = [item["feature_key"] for item in resolved_genes]
+            expression = self._dense_matrix(adata[:, gene_keys].X)
+            if groupby:
+                categories = adata.obs[groupby].astype("category")
+                codes = categories.cat.codes.to_numpy()
+                group_labels = [str(item) for item in categories.cat.categories]
+                mean_values = []
+                for index in range(len(group_labels)):
+                    subset = expression[codes == index]
+                    if subset.shape[0] == 0:
+                        mean_values.append(np.zeros(len(gene_keys), dtype=float))
+                    else:
+                        mean_values.append(np.asarray(subset.mean(axis=0), dtype=float).reshape(-1))
+                heatmap_values = np.vstack(mean_values)
+            else:
+                group_labels = ["all cells"]
+                heatmap_values = np.asarray(expression.mean(axis=0), dtype=float).reshape(1, -1)
+
+            title = str(params.get("title") or "").strip() or None
+            palette = str(params.get("palette") or "").strip() or None
+            path = self._plot_path(workspace_root, skill, target.label, request_id)
+            self._save_group_heatmap(
+                path,
+                group_labels,
+                [item["requested"] for item in resolved_genes],
+                heatmap_values,
+                title=title,
+                palette=palette,
+            )
+            summary_bits = [f"已为 {target.label} 生成热图（基因：{format_list_zh([item['requested'] for item in resolved_genes])}）。"]
+            if groupby:
+                summary_bits.append(f"分组字段：{groupby}。")
+            if missing_genes:
+                summary_bits.append(f"未命中的基因：{format_list_zh(missing_genes)}。")
+            return {
+                "summary": "".join(summary_bits),
+                "artifacts": [
+                    {
+                        "kind": "plot",
+                        "title": f"{target.label} 的热图",
+                        "path": str(path),
+                        "content_type": "image/png",
+                        "summary": f"{target.label} 的基因表达热图。",
+                    }
+                ],
+                "metadata": {
+                    "groupby": groupby or None,
+                    "genes": requested_genes,
+                    "resolved_genes": resolved_genes,
+                    "missing_genes": missing_genes,
+                },
+            }
+
+        if skill == "plot_celltype_composition":
+            target = self._require_target(target, skill)
+            import pandas as pd
+
+            adata = self._load_adata(target)
+            groupby = str(params.get("groupby") or "").strip()
+            split_by = str(params.get("split_by") or "").strip()
+            if groupby == "" or split_by == "":
+                raise RuntimeError("plot_celltype_composition 需要 groupby 和 split_by。")
+            if groupby not in adata.obs.columns:
+                raise RuntimeError(f"当前对象缺少 obs 字段 `{groupby}`。")
+            if split_by not in adata.obs.columns:
+                raise RuntimeError(f"当前对象缺少 obs 字段 `{split_by}`。")
+
+            composition = pd.crosstab(
+                adata.obs[split_by].astype(str),
+                adata.obs[groupby].astype(str),
+                normalize="index",
+            ) * 100.0
+            if composition.empty:
+                raise RuntimeError("plot_celltype_composition 没有可绘制的数据。")
+
+            title = str(params.get("title") or "").strip() or None
+            path = self._plot_path(workspace_root, skill, target.label, request_id)
+            self._save_stacked_bar_plot(path, composition, title=title)
+            return {
+                "summary": f"已为 {target.label} 生成组成图（groupby={groupby}，split_by={split_by}）。",
+                "artifacts": [
+                    {
+                        "kind": "plot",
+                        "title": f"{target.label} 的组成图",
+                        "path": str(path),
+                        "content_type": "image/png",
+                        "summary": f"{target.label} 按 {split_by} 分层的 {groupby} 组成图。",
+                    }
+                ],
+                "metadata": {
+                    "groupby": groupby,
+                    "split_by": split_by,
+                    "n_groups": int(len(composition.columns)),
+                    "n_splits": int(len(composition.index)),
                 },
             }
 
@@ -1456,6 +2352,41 @@ class RuntimeState:
                 ],
             }
 
+        if skill == "export_markers_csv":
+            target = self._require_target(target, skill)
+            import pandas as pd
+
+            source_path = self._table_source_path(target)
+            export_path = self._artifact_path(workspace_root, f"{target.label}_markers", "csv", request_id)
+            suffix = source_path.suffix.lower()
+            if suffix == ".csv":
+                shutil.copy2(source_path, export_path)
+            elif suffix in {".tsv", ".txt"}:
+                table = pd.read_csv(source_path, sep="\t")
+                table.to_csv(export_path, index=False)
+            else:
+                try:
+                    table = pd.read_csv(source_path)
+                except Exception:
+                    table = pd.read_csv(source_path, sep="\t")
+                table.to_csv(export_path, index=False)
+
+            return {
+                "summary": f"已将 {target.label} 导出为 CSV 文件。",
+                "artifacts": [
+                    {
+                        "kind": "file",
+                        "title": f"{target.label}.csv",
+                        "path": str(export_path),
+                        "content_type": "text/csv",
+                        "summary": "marker / differential expression 结果导出文件。",
+                    }
+                ],
+                "metadata": {
+                    "source_path": str(source_path),
+                },
+            }
+
         raise RuntimeError(f"暂不支持的技能：{skill}")
 
     def _descriptor(self, obj: RuntimeObject) -> dict[str, Any]:
@@ -1564,9 +2495,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             executable_skills = dedupe_list(STATE.builtin_skills() + sorted(plugin_skills.keys()))
             notes = [
                 "运行时会读取真实的 h5ad 结构和注释信息。",
-                "常规预处理链、subset、recluster、marker 和 UMAP 已切到真实 AnnData/Scanpy 执行。",
+                "常规预处理链、QC、subset、recluster、marker 和主要图形技能已切到真实 AnnData/Scanpy 执行。",
                 "当现成 tool 不够时，可通过 run_python_analysis 在内存中的 AnnData 上执行短代码。",
-                "dotplot 和 violin 仍未开放给 planner，等真实实现完成后再升为 wired。",
             ]
             disabled_bundles = STATE.load_disabled_bundles()
             if disabled_bundles:
@@ -1976,13 +2906,26 @@ def build_dataset_assessment(metadata: dict[str, Any]) -> dict[str, Any]:
     else:
         preprocessing_state = "raw_like"
 
-    available_analyses = ["inspect_dataset", "subset_cells", "run_python_analysis", "export_h5ad"]
+    available_analyses = [
+        "inspect_dataset",
+        "summarize_qc",
+        "plot_qc_metrics",
+        "filter_cells",
+        "filter_genes",
+        "subset_cells",
+        "run_python_analysis",
+        "export_h5ad",
+    ]
     if has_pca or has_neighbors:
         available_analyses.append("recluster")
+    if has_pca:
+        available_analyses.append("score_gene_set")
     if has_umap:
         available_analyses.extend(["plot_umap", "plot_gene_umap"])
     if has_clusters:
-        available_analyses.append("find_markers")
+        available_analyses.extend(["find_markers", "subcluster_group", "rename_clusters", "plot_dotplot", "plot_violin", "plot_heatmap"])
+    if metadata.get("categorical_obs_fields"):
+        available_analyses.append("plot_celltype_composition")
 
     missing_requirements = []
     if not has_pca:

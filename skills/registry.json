@@ -68,7 +68,7 @@
       "name": "summarize_qc",
       "label": "Summarize QC",
       "category": "quality_control",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Compute standard single-cell QC metrics such as total counts, genes detected, and mitochondrial fraction.",
       "target_kinds": ["raw_dataset", "filtered_dataset"],
       "input": {
@@ -92,7 +92,7 @@
       "name": "plot_qc_metrics",
       "label": "Plot QC metrics",
       "category": "quality_control",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Render QC distributions such as total counts, genes per cell, and mitochondrial fraction.",
       "target_kinds": ["raw_dataset", "filtered_dataset"],
       "input": {
@@ -116,7 +116,7 @@
       "name": "filter_cells",
       "label": "Filter cells",
       "category": "quality_control",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Create a filtered dataset by applying cell-level QC thresholds.",
       "target_kinds": ["raw_dataset", "filtered_dataset"],
       "input": {
@@ -150,7 +150,7 @@
       "name": "filter_genes",
       "label": "Filter genes",
       "category": "quality_control",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Remove low-information genes based on detection frequency or count thresholds.",
       "target_kinds": ["raw_dataset", "filtered_dataset"],
       "input": {
@@ -251,7 +251,7 @@
       "name": "scale_matrix",
       "label": "Scale matrix",
       "category": "preprocessing",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Scale the expression matrix, optionally clipping extreme values.",
       "target_kinds": ["filtered_dataset", "subset", "reclustered_subset"],
       "input": {
@@ -550,7 +550,7 @@
       "name": "score_gene_set",
       "label": "Score gene set",
       "category": "subsetting",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Compute a gene-set score and attach it as an observation column.",
       "target_kinds": ["filtered_dataset", "subset", "reclustered_subset"],
       "input": {
@@ -642,7 +642,7 @@
       "name": "subcluster_group",
       "label": "Subcluster group",
       "category": "clustering",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Take one or more existing clusters, create a subset object, and recluster only that subgroup.",
       "target_kinds": ["filtered_dataset", "subset", "reclustered_subset"],
       "input": {
@@ -676,7 +676,7 @@
       "name": "rename_clusters",
       "label": "Rename clusters",
       "category": "clustering",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Rename cluster labels in an observation column.",
       "target_kinds": ["subset", "reclustered_subset"],
       "input": {
@@ -792,7 +792,7 @@
       "name": "plot_dotplot",
       "label": "Plot dotplot",
       "category": "visualization",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Render a dotplot summary for selected genes or markers.",
       "target_kinds": ["subset", "reclustered_subset"],
       "input": {
@@ -803,8 +803,13 @@
         },
         "genes": {
           "type": "array",
+          "required": true,
+          "description": "Genes to include."
+        },
+        "groupby": {
+          "type": "string",
           "required": false,
-          "description": "Optional genes to include."
+          "description": "Obs field used to define groups."
         }
       },
       "output": {
@@ -816,7 +821,7 @@
       "name": "plot_violin",
       "label": "Plot violin",
       "category": "visualization",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Render a violin-style summary plot for one or more genes.",
       "target_kinds": ["subset", "reclustered_subset"],
       "input": {
@@ -827,8 +832,13 @@
         },
         "genes": {
           "type": "array",
+          "required": true,
+          "description": "Genes to include."
+        },
+        "groupby": {
+          "type": "string",
           "required": false,
-          "description": "Optional genes to include."
+          "description": "Obs field used to define groups."
         }
       },
       "output": {
@@ -840,7 +850,7 @@
       "name": "plot_heatmap",
       "label": "Plot heatmap",
       "category": "visualization",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Render a heatmap for selected genes across clusters or groups.",
       "target_kinds": ["subset", "reclustered_subset"],
       "input": {
@@ -869,7 +879,7 @@
       "name": "plot_celltype_composition",
       "label": "Plot composition",
       "category": "visualization",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Plot cell-type or cluster composition across samples or conditions.",
       "target_kinds": ["filtered_dataset", "subset", "reclustered_subset"],
       "input": {
@@ -982,7 +992,7 @@
       "name": "export_markers_csv",
       "label": "Export markers CSV",
       "category": "export",
-      "support_level": "planned",
+      "support_level": "wired",
       "description": "Export the latest marker or differential expression result as CSV.",
       "target_kinds": ["marker_result", "de_result"],
       "input": {
