@@ -106,7 +106,13 @@ cleanup() {
   fi
 }
 
-trap cleanup EXIT INT TERM
+handle_interrupt() {
+  cleanup
+  exit 0
+}
+
+trap cleanup EXIT TERM
+trap handle_interrupt INT
 
 echo "scAgent startup configuration"
 echo "  planner mode:    ${SCAGENT_PLANNER_MODE}"

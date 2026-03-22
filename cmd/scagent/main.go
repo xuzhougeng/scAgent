@@ -5,9 +5,11 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -100,18 +102,32 @@ func main() {
 	httpServer := &http.Server{
 		Addr:    *addr,
 		Handler: server.Handler,
+		BaseContext: func(_ net.Listener) context.Context {
+			return shutdownCtx
+		},
 	}
 	serverErrCh := make(chan error, 1)
+	listener, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	go func() {
-		log.Printf("scAgent listening on %s", *addr)
-		err := httpServer.ListenAndServe()
+		err := httpServer.Serve(listener)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErrCh <- err
 			return
 		}
 		serverErrCh <- nil
 	}()
+
+	log.Printf("scAgent listening on %s", listener.Addr())
+	log.Printf(
+		"startup complete: web=%s runtime=%s weixin=%s",
+		displayWebURL(listener.Addr().String()),
+		*runtimeURL,
+		weixinStatus(*weixinEnabled),
+	)
 
 	select {
 	case err := <-serverErrCh:
@@ -156,4 +172,28 @@ func parseDuration(ms string) time.Duration {
 		return 5 * time.Minute
 	}
 	return time.Duration(v) * time.Millisecond
+}
+
+func displayWebURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		if strings.HasPrefix(addr, ":") {
+			return "http://127.0.0.1" + addr
+		}
+		return "http://" + addr
+	}
+
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	}
+
+	return "http://" + net.JoinHostPort(host, port)
+}
+
+func weixinStatus(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
 }
