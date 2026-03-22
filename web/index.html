@@ -10,14 +10,27 @@
     <div class="shell">
       <aside class="panel explorer">
         <div class="panel-head">
-          <p class="eyebrow">对象浏览</p>
-          <h1>共享对象</h1>
+          <p class="eyebrow">分析导航</p>
+          <h1>工作区与对象</h1>
         </div>
         <div id="sessionMeta" class="session-meta"></div>
+        <div class="object-tree-section-head">
+          <strong>分析对象</strong>
+          <span>技能会作用到当前选中的对象</span>
+        </div>
         <div id="objectTree" class="object-tree"></div>
         <div id="skillHubEntry" class="skill-hub"></div>
         <div id="statusOverviewEntry" class="status-overview-slot"></div>
       </aside>
+
+      <div
+        id="leftSidebarHandle"
+        class="sidebar-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整左侧信息栏宽度"
+        tabindex="0"
+      ></div>
 
       <main class="panel console">
         <div class="panel-head">
@@ -52,7 +65,25 @@
         </div>
       </main>
 
-      <aside class="panel inspector">
+      <div
+        id="rightSidebarHandle"
+        class="sidebar-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整右侧信息栏宽度"
+        tabindex="0"
+      >
+        <button
+          id="rightSidebarToggle"
+          type="button"
+          class="sidebar-collapse-button"
+          aria-label="收起右侧信息栏"
+          aria-controls="rightInspectorPanel"
+          aria-expanded="true"
+        >></button>
+      </div>
+
+      <aside id="rightInspectorPanel" class="panel inspector">
         <div class="panel-head">
           <p class="eyebrow">检查器 / 上下文</p>
           <h2>当前上下文</h2>

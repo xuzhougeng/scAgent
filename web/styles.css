@@ -37,13 +37,104 @@ body {
 }
 
 .shell {
+  --left-panel-width: 300px;
+  --right-panel-width: 360px;
+  --resize-handle-width: 12px;
   display: grid;
-  grid-template-columns: 300px minmax(420px, 1fr) 360px;
-  gap: 18px;
+  grid-template-columns:
+    var(--left-panel-width)
+    var(--resize-handle-width)
+    minmax(420px, 1fr)
+    var(--resize-handle-width)
+    var(--right-panel-width);
+  gap: 12px;
   min-height: 100vh;
   height: 100vh;
   padding: 18px;
   overflow: hidden;
+}
+
+.sidebar-resize-handle {
+  position: relative;
+  min-height: 0;
+  cursor: col-resize;
+  touch-action: none;
+  border-radius: 999px;
+  outline: none;
+}
+
+.sidebar-resize-handle::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 50%;
+  width: 4px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(61, 107, 75, 0.12);
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+.sidebar-resize-handle:hover::before,
+.sidebar-resize-handle:focus-visible::before,
+.sidebar-resize-handle.active::before {
+  background: rgba(61, 107, 75, 0.28);
+  box-shadow: 0 0 0 3px rgba(61, 107, 75, 0.08);
+}
+
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.sidebar-collapse-button {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 34px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(61, 107, 75, 0.18);
+  border-radius: 999px;
+  background: rgba(248, 251, 244, 0.98);
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(26, 40, 26, 0.1);
+}
+
+.sidebar-collapse-button:hover,
+.sidebar-collapse-button:focus-visible {
+  background: white;
+  outline: none;
+}
+
+.shell.right-sidebar-collapsed {
+  grid-template-columns:
+    var(--left-panel-width)
+    var(--resize-handle-width)
+    minmax(420px, 1fr)
+    var(--resize-handle-width)
+    0px;
+}
+
+.shell.right-sidebar-collapsed .inspector {
+  display: none;
+}
+
+.shell.right-sidebar-collapsed #rightSidebarHandle {
+  cursor: default;
+}
+
+.shell.right-sidebar-collapsed #rightSidebarHandle::before {
+  background: rgba(61, 107, 75, 0.22);
 }
 
 .panel {
@@ -115,6 +206,14 @@ body {
   margin-bottom: 12px;
 }
 
+.workspace-meta-eyebrow {
+  margin-bottom: 10px;
+  color: var(--warm);
+  font-size: 0.74rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .workspace-meta-actions {
   display: flex;
   flex-wrap: wrap;
@@ -127,15 +226,17 @@ body {
   line-height: 1.35;
 }
 
-.workspace-subtitle,
 .workspace-section-label,
 .workspace-status {
   color: var(--muted);
   font-size: 0.82rem;
 }
 
-.workspace-subtitle {
-  margin-top: 4px;
+.workspace-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .workspace-status {
@@ -144,6 +245,97 @@ body {
 
 .workspace-section-label {
   margin: 14px 0 8px;
+}
+
+.workspace-help-popover {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.workspace-help-popover summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(61, 107, 75, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.workspace-help-popover summary::-webkit-details-marker {
+  display: none;
+}
+
+.workspace-help-body {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 2;
+  width: min(280px, calc(100vw - 96px));
+  padding: 12px;
+  border: 1px solid rgba(61, 107, 75, 0.12);
+  border-radius: 14px;
+  background: rgba(250, 252, 247, 0.98);
+  box-shadow: 0 18px 38px rgba(26, 40, 26, 0.12);
+}
+
+.workspace-help-body p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.workspace-help-body p + p {
+  margin-top: 8px;
+}
+
+.workspace-help-body strong {
+  color: var(--ink);
+}
+
+.workspace-identity-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.workspace-identity-card,
+.workspace-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid rgba(61, 107, 75, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.62);
+  min-width: 0;
+}
+
+.workspace-identity-card span,
+.workspace-summary-item span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.workspace-identity-card strong,
+.workspace-summary-item strong {
+  font-size: 0.94rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.workspace-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .conversation-create-button {
@@ -233,11 +425,30 @@ body {
   flex-shrink: 0;
 }
 
+.object-tree-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.object-tree-section-head strong {
+  font-size: 0.96rem;
+}
+
+.object-tree-section-head span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: right;
+}
+
 .object-tree {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  margin-top: 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1187,8 +1398,17 @@ body {
 
   .shell {
     grid-template-columns: 1fr;
+    gap: 18px;
     height: auto;
     overflow: visible;
+  }
+
+  .sidebar-resize-handle {
+    display: none;
+  }
+
+  .shell.right-sidebar-collapsed .inspector {
+    display: flex;
   }
 
   .panel {
@@ -1212,6 +1432,20 @@ body {
 
   .plugin-upload-form {
     grid-template-columns: 1fr;
+  }
+
+  .workspace-identity-grid,
+  .workspace-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .object-tree-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .object-tree-section-head span {
+    text-align: left;
   }
 
   .image-modal-head {

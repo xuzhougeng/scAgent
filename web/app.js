@@ -18,6 +18,18 @@ const appState = {
 const storageKeys = {
   workspaceId: "scagent.workspaceId",
   sessionId: "scagent.sessionId",
+  leftPanelWidth: "scagent.leftPanelWidth",
+  rightPanelWidth: "scagent.rightPanelWidth",
+  rightPanelCollapsed: "scagent.rightPanelCollapsed",
+};
+
+const layoutConfig = {
+  defaultLeftPanelWidth: 300,
+  defaultRightPanelWidth: 360,
+  minLeftPanelWidth: 260,
+  minRightPanelWidth: 280,
+  minConsoleWidth: 420,
+  keyboardResizeStep: 24,
 };
 
 const quickActions = [
@@ -133,6 +145,7 @@ const analysisStateLabels = {
 };
 
 document.addEventListener("DOMContentLoaded", async () => {
+  bindSidebarResize();
   bindComposer();
   bindUpload();
   bindPlannerPreview();
@@ -262,6 +275,235 @@ function loadPersistedContext() {
   } catch (_error) {
     return { workspaceId: "", sessionId: "" };
   }
+}
+
+function bindSidebarResize() {
+  const shell = document.querySelector(".shell");
+  const leftHandle = document.getElementById("leftSidebarHandle");
+  const rightHandle = document.getElementById("rightSidebarHandle");
+  const rightToggle = document.getElementById("rightSidebarToggle");
+  if (!shell || !leftHandle || !rightHandle || !rightToggle) {
+    return;
+  }
+
+  applySidebarWidths(shell, restoreSidebarWidths(), false);
+  setRightSidebarCollapsed(shell, restoreRightSidebarCollapsed(), false);
+
+  bindSidebarHandle({
+    shell,
+    handle: leftHandle,
+    side: "left",
+  });
+  bindSidebarHandle({
+    shell,
+    handle: rightHandle,
+    side: "right",
+  });
+
+  rightToggle.addEventListener("click", () => {
+    setRightSidebarCollapsed(shell, !isRightSidebarCollapsed(shell), true);
+  });
+
+  window.addEventListener("resize", () => {
+    applySidebarWidths(shell, readSidebarWidths(shell), false);
+    if (window.matchMedia("(max-width: 1100px)").matches) {
+      setRightSidebarCollapsed(shell, false, false);
+    } else {
+      setRightSidebarCollapsed(shell, restoreRightSidebarCollapsed(), false);
+    }
+  });
+}
+
+function bindSidebarHandle({ shell, handle, side }) {
+  handle.addEventListener("pointerdown", (event) => {
+    if (window.matchMedia("(max-width: 1100px)").matches) {
+      return;
+    }
+    if (event.target.closest(".sidebar-collapse-button")) {
+      return;
+    }
+    if (side === "right" && isRightSidebarCollapsed(shell)) {
+      return;
+    }
+
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidths = readSidebarWidths(shell);
+
+    document.body.classList.add("is-resizing");
+    handle.classList.add("active");
+    handle.setPointerCapture?.(event.pointerId);
+
+    const onPointerMove = (moveEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const nextWidths =
+        side === "left"
+          ? { ...startWidths, left: startWidths.left + delta }
+          : { ...startWidths, right: startWidths.right - delta };
+      applySidebarWidths(shell, nextWidths, true);
+    };
+
+    const stopResize = () => {
+      document.body.classList.remove("is-resizing");
+      handle.classList.remove("active");
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    if (window.matchMedia("(max-width: 1100px)").matches) {
+      return;
+    }
+    if (side === "right" && isRightSidebarCollapsed(shell)) {
+      return;
+    }
+
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      return;
+    }
+
+    const delta = event.key === "ArrowLeft" ? -layoutConfig.keyboardResizeStep : layoutConfig.keyboardResizeStep;
+    const widths = readSidebarWidths(shell);
+    const nextWidths =
+      side === "left"
+        ? { ...widths, left: widths.left + delta }
+        : { ...widths, right: widths.right - delta };
+
+    applySidebarWidths(shell, nextWidths, true);
+    event.preventDefault();
+  });
+}
+
+function restoreSidebarWidths() {
+  try {
+    const left = parseStoredWidth(window.localStorage.getItem(storageKeys.leftPanelWidth));
+    const right = parseStoredWidth(window.localStorage.getItem(storageKeys.rightPanelWidth));
+    return {
+      left: left || layoutConfig.defaultLeftPanelWidth,
+      right: right || layoutConfig.defaultRightPanelWidth,
+    };
+  } catch (_error) {
+    return {
+      left: layoutConfig.defaultLeftPanelWidth,
+      right: layoutConfig.defaultRightPanelWidth,
+    };
+  }
+}
+
+function restoreRightSidebarCollapsed() {
+  try {
+    return window.localStorage.getItem(storageKeys.rightPanelCollapsed) === "true";
+  } catch (_error) {
+    return false;
+  }
+}
+
+function readSidebarWidths(shell) {
+  const styles = getComputedStyle(shell);
+  return {
+    left: parseCSSPixelValue(styles.getPropertyValue("--left-panel-width"), layoutConfig.defaultLeftPanelWidth),
+    right: parseCSSPixelValue(styles.getPropertyValue("--right-panel-width"), layoutConfig.defaultRightPanelWidth),
+  };
+}
+
+function applySidebarWidths(shell, widths, persist = false) {
+  const nextWidths = clampSidebarWidths(shell, widths);
+  shell.style.setProperty("--left-panel-width", `${nextWidths.left}px`);
+  shell.style.setProperty("--right-panel-width", `${nextWidths.right}px`);
+
+  if (!persist) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(storageKeys.leftPanelWidth, String(Math.round(nextWidths.left)));
+    window.localStorage.setItem(storageKeys.rightPanelWidth, String(Math.round(nextWidths.right)));
+  } catch (_error) {
+  }
+}
+
+function isRightSidebarCollapsed(shell) {
+  return shell.classList.contains("right-sidebar-collapsed");
+}
+
+function setRightSidebarCollapsed(shell, collapsed, persist = false) {
+  const shouldCollapse = !window.matchMedia("(max-width: 1100px)").matches && collapsed;
+  shell.classList.toggle("right-sidebar-collapsed", shouldCollapse);
+  syncRightSidebarToggle(shell);
+
+  if (!persist) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(storageKeys.rightPanelCollapsed, String(shouldCollapse));
+  } catch (_error) {
+  }
+}
+
+function syncRightSidebarToggle(shell) {
+  const button = document.getElementById("rightSidebarToggle");
+  if (!button) {
+    return;
+  }
+
+  const collapsed = isRightSidebarCollapsed(shell);
+  button.textContent = collapsed ? "<" : ">";
+  button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  button.setAttribute("aria-label", collapsed ? "展开右侧信息栏" : "收起右侧信息栏");
+  button.title = collapsed ? "展开右侧信息栏" : "收起右侧信息栏";
+}
+
+function clampSidebarWidths(shell, widths) {
+  const styles = getComputedStyle(shell);
+  const paddingLeft = parseFloat(styles.paddingLeft) || 0;
+  const paddingRight = parseFloat(styles.paddingRight) || 0;
+  const contentWidth = shell.clientWidth - paddingLeft - paddingRight;
+  const handleWidth = parseCSSPixelValue(styles.getPropertyValue("--resize-handle-width"), 12);
+  const usableWidth = Math.max(0, contentWidth - handleWidth * 2);
+
+  let left = clampNumber(widths.left, layoutConfig.minLeftPanelWidth, usableWidth);
+  let right = clampNumber(widths.right, layoutConfig.minRightPanelWidth, usableWidth);
+
+  const maxLeft = Math.max(
+    layoutConfig.minLeftPanelWidth,
+    usableWidth - layoutConfig.minConsoleWidth - right,
+  );
+  left = clampNumber(left, layoutConfig.minLeftPanelWidth, maxLeft);
+
+  const maxRight = Math.max(
+    layoutConfig.minRightPanelWidth,
+    usableWidth - layoutConfig.minConsoleWidth - left,
+  );
+  right = clampNumber(right, layoutConfig.minRightPanelWidth, maxRight);
+
+  const finalMaxLeft = Math.max(
+    layoutConfig.minLeftPanelWidth,
+    usableWidth - layoutConfig.minConsoleWidth - right,
+  );
+  left = clampNumber(left, layoutConfig.minLeftPanelWidth, finalMaxLeft);
+
+  return { left, right };
+}
+
+function parseStoredWidth(value) {
+  const width = Number.parseFloat(value || "");
+  return Number.isFinite(width) && width > 0 ? width : 0;
+}
+
+function parseCSSPixelValue(value, fallback) {
+  const width = Number.parseFloat(String(value || "").trim());
+  return Number.isFinite(width) ? width : fallback;
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max);
 }
 
 async function createWorkspaceWithLabel(label) {
@@ -809,6 +1051,8 @@ function renderSessionMeta() {
   const currentWorkspace = appState.workspaceSnapshot?.workspace || workspace;
   const workspaceLabel = currentWorkspace?.label || "未命名 workspace";
   const workspaceStatus = appState.workspaceStatus ? `<p class="workspace-status muted">${escapeHTML(appState.workspaceStatus)}</p>` : "";
+  const showWorkspaceSwitcher = workspaceList.length > 1;
+  const showConversationSwitcher = conversations.length > 1;
   const workspaceListMarkup = workspaceList.length
     ? `
       <div class="workspace-list">
@@ -851,27 +1095,80 @@ function renderSessionMeta() {
     : "<p class='muted'>当前 workspace 还没有其他对话。</p>";
 
   meta.innerHTML = `
+    <div class="workspace-meta-eyebrow">工作区 / 对话</div>
     <div class="workspace-meta-head">
       <div>
-        <div class="workspace-title">${escapeHTML(workspaceLabel)}</div>
-        <div class="workspace-subtitle">共享 workspace / 独立对话</div>
+        <div class="workspace-title-row">
+          <div class="workspace-title">${escapeHTML(workspaceLabel)}</div>
+          <details class="workspace-help-popover">
+            <summary aria-label="查看工作区与对话说明">?</summary>
+            <div class="workspace-help-body">
+              <p><strong>新工作区</strong>：新建独立容器，适合换数据集或重新开始。</p>
+              <p><strong>新对话</strong>：复用当前工作区对象与结果，只开启新线程。</p>
+            </div>
+          </details>
+        </div>
       </div>
       <div class="workspace-meta-actions">
-        <button id="newWorkspaceButton" type="button" class="ghost-button conversation-create-button">新 workspace</button>
-        <button id="newConversationButton" type="button" class="ghost-button conversation-create-button">新对话</button>
+        <button
+          id="newWorkspaceButton"
+          type="button"
+          class="ghost-button conversation-create-button"
+          title="新建独立工作区，适合换数据集或开始全新分析"
+        >新工作区</button>
+        <button
+          id="newConversationButton"
+          type="button"
+          class="ghost-button conversation-create-button"
+          title="保留当前工作区里的对象和结果，只开启新的聊天线程"
+        >新对话</button>
       </div>
     </div>
     ${workspaceStatus}
-    <div class="kv"><span>Workspace</span><span>${escapeHTML(currentWorkspace?.id || "未设置")}</span></div>
-    <div class="kv"><span>当前对话</span><span>${escapeHTML(session.id)}</span></div>
-    <div class="kv"><span>数据集</span><span>${escapeHTML(currentWorkspace?.dataset_id || session.dataset_id || "未设置")}</span></div>
-    <div class="kv"><span>共享对象</span><span>${objects.length}</span></div>
-    <div class="kv"><span>本对话任务</span><span>${jobs.length}</span></div>
-    <div class="kv"><span>共享结果</span><span>${artifacts.length}</span></div>
-    <div class="workspace-section-label">Workspace 列表</div>
-    ${workspaceListMarkup}
-    <div class="workspace-section-label">对话列表</div>
-    ${conversationMarkup}
+    <div class="workspace-identity-grid">
+      <div class="workspace-identity-card">
+        <span>Workspace</span>
+        <strong>${escapeHTML(currentWorkspace?.id || "未设置")}</strong>
+      </div>
+      <div class="workspace-identity-card">
+        <span>当前对话</span>
+        <strong>${escapeHTML(session.id)}</strong>
+      </div>
+      <div class="workspace-identity-card">
+        <span>数据集</span>
+        <strong>${escapeHTML(currentWorkspace?.dataset_id || session.dataset_id || "未设置")}</strong>
+      </div>
+    </div>
+    <div class="workspace-summary-grid">
+      <div class="workspace-summary-item">
+        <strong>${objects.length}</strong>
+        <span>共享对象</span>
+      </div>
+      <div class="workspace-summary-item">
+        <strong>${jobs.length}</strong>
+        <span>本对话任务</span>
+      </div>
+      <div class="workspace-summary-item">
+        <strong>${artifacts.length}</strong>
+        <span>共享结果</span>
+      </div>
+    </div>
+    ${
+      showWorkspaceSwitcher
+        ? `
+          <div class="workspace-section-label">切换工作区</div>
+          ${workspaceListMarkup}
+        `
+        : ""
+    }
+    ${
+      showConversationSwitcher
+        ? `
+          <div class="workspace-section-label">切换对话</div>
+          ${conversationMarkup}
+        `
+        : ""
+    }
   `;
   bindWorkspaceMeta(meta);
 }
@@ -936,7 +1233,7 @@ function renderObjectTree() {
   container.innerHTML = "";
 
   if (!appState.snapshot?.objects?.length) {
-    container.innerHTML = "<p class='muted'>当前还没有对象。</p>";
+    container.innerHTML = "<p class='muted'>当前 workspace 还没有分析对象。</p>";
     return;
   }
 
