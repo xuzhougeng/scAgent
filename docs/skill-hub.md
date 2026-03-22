@@ -2,20 +2,38 @@
 
 ## 定位
 
-`Skill Hub` 用来在不重启 `scAgent` 的情况下，动态增加新的 skill。
+`Skill Hub` 用来在不重启 `scAgent` 的情况下，动态增加、启用或关闭技能包。
+
+当前入口是独立的插件管理页 `plugins.html`。主页面只保留摘要入口，具体上传和管理动作都放在插件页里。
 
 它支持两种来源：
 
 1. 自动注册
    直接把插件目录放到 `data/skill-hub/plugins/`
 2. 手动上传
-   在 Web 左侧 `Skill Hub` 卡片上传 zip bundle
+   在 `plugins.html` 上传 zip bundle
 
 上传或放入目录后：
 
 - Go 侧 registry 会自动 reload
-- LLM planner 会把新的 `wired` skill 纳入可选集合
+- 只有 `wired` skill 会进入 planner 的可执行集合
 - Python runtime 会在执行时动态扫描插件目录
+
+## 插件管理页现在能做什么
+
+插件管理页当前支持：
+
+- 上传 zip 插件包
+- 刷新当前 Skill Hub 状态
+- 启用或关闭某个技能包
+- 查看内置技能包和外部插件包的差异
+- 点击某个技能查看详细规范
+
+技能详情使用悬浮窗展示：
+
+- `ESC` 可关闭
+- 方向键可在不同技能间切换
+- 详情里会显示输入参数、输出约定和运行配置
 
 ## 插件包格式
 
@@ -93,6 +111,21 @@ def run(context):
 - `persist_adata(label, adata, kind=...)`
 - `save_figure(fig, stem, title=..., summary=...)`
 - `save_table(df, stem, title=..., summary=...)`
+
+## 执行与规划的关系
+
+Skill Hub 里注册的 skill 并不会因为“出现在 registry 中”就自动可执行。
+
+- `planned`
+  只表示 schema 已注册，当前不会被正常规划执行。
+- `wired`
+  表示 planner 和 runtime 都可以真正使用它。
+
+因此一个插件 skill 想被自动调用，至少要满足：
+
+1. `support_level` 为 `wired`
+2. `plugin.py` 中存在真实入口
+3. bundle 当前是启用状态
 
 ## 设计原则
 

@@ -9,7 +9,7 @@
 - [x] 推断候选 cell type 字段和 cluster 字段
 - [x] 给出 preprocessing 状态：`raw_like / partially_processed / analysis_ready`
 - [x] 给出当前可做分析和缺失前置条件
-- [x] 上传后前端 inspector 直接展示这些评估信息
+- [x] 上传后前端结果卡和对象概览直接展示这些评估信息
 
 ### 已落地的 UMAP / gene UMAP 能力（原 P1）
 
@@ -25,6 +25,13 @@
 
 - [x] `docs/*.md` 自动渲染成 HTML 帮助页
 - [x] 中文帮助文档首页
+
+### 已落地的执行编排增强
+
+- [x] 每个 step 后引入显式 completion / evaluator 判定
+- [x] 基于当前对象状态做 checkpoint 重规划
+- [x] job 保存结构化 `checkpoints`
+- [x] 前端任务卡展示执行检查点，而不是只显示纯文本摘要
 
 ## 进行中
 

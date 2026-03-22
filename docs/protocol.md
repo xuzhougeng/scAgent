@@ -15,8 +15,36 @@
 
 `Job`
 
-- Represents one user message translated into a validated plan.
-- Contains step-by-step execution status and artifact/object outputs.
+- Represents one user request submitted through `POST /api/messages`.
+- Is created immediately, then continues running asynchronously in the background.
+- Contains:
+  - `plan`
+  - executed `steps`
+  - `checkpoints`
+  - `summary`
+  - `error`
+
+`JobCheckpoint`
+
+- Records orchestration milestones that are not well represented by a single step summary.
+- Common examples:
+  - `初始规划`
+  - `完成判定`
+  - `检查点重规划`
+  - `执行失败`
+
+Example:
+
+```json
+{
+  "kind": "completion",
+  "tone": "warn",
+  "title": "完成判定",
+  "label": "继续执行",
+  "summary": "当前请求尚未完成，需要继续执行或重规划。",
+  "created_at": "2026-03-22T12:34:56Z"
+}
+```
 
 `Artifact`
 
@@ -93,20 +121,22 @@ Response:
 
 ### `GET /api/status`
 
-Returns the current effective system status shown in the UI:
+Returns the current effective system status shown in the UI.
+
+Example live response:
 
 ```json
 {
-  "system_mode": "demo",
-  "summary": "Demo mode: fake planner is active; h5ad inspection is real, but analysis execution is still mock.",
-  "planner_mode": "fake",
+  "system_mode": "live",
+  "summary": "当前处于正式模式：LLM 规划器已启用，分析执行为真实运行。",
+  "planner_mode": "llm",
   "planner_ready": true,
-  "llm_loaded": false,
+  "llm_loaded": true,
   "runtime_connected": true,
-  "runtime_mode": "hybrid_demo",
+  "runtime_mode": "live",
   "real_h5ad_inspection": true,
-  "real_analysis_execution": false,
-  "executable_skills": []
+  "real_analysis_execution": true,
+  "executable_skills": ["assess_dataset", "normalize_total", "run_umap"]
 }
 ```
 
@@ -134,6 +164,28 @@ Preview the deterministic fake planner without touching the runtime:
 ```json
 {
   "message": "把 cortex 细胞拿出来重新聚类，然后画一下 marker"
+}
+```
+
+Response:
+
+```json
+{
+  "planner_mode": "fake",
+  "plan": {
+    "steps": [
+      {
+        "id": "step_1",
+        "skill": "subset_cells",
+        "target_object_id": "$active",
+        "params": {
+          "obs_field": "cell_type",
+          "op": "eq",
+          "value": "cortex"
+        }
+      }
+    ]
+  }
 }
 ```
 
@@ -169,36 +221,40 @@ Response shape:
 In `fake` mode this is mainly object context plus a note.
 In `llm` mode it also includes the prompt/request preview built from the current `.h5ad` metadata.
 
-Response:
-
-```json
-{
-  "planner_mode": "fake",
-  "plan": {
-    "steps": [
-      {
-        "id": "step_1",
-        "skill": "subset_cells",
-        "target_object_id": "$active",
-        "params": {
-          "obs_field": "cell_type",
-          "op": "eq",
-          "value": "cortex"
-        }
-      }
-    ]
-  }
-}
-```
-
 ### `GET /api/skills`
 
-Returns the skill registry and the active planner mode:
+Returns the current registry snapshot and planner mode:
 
 ```json
 {
   "planner_mode": "fake",
   "skills": []
+}
+```
+
+### `GET /api/plugins`
+
+Returns Skill Hub bundles plus the current skill list:
+
+```json
+{
+  "plugins": [],
+  "bundles": [],
+  "skills": []
+}
+```
+
+### `POST /api/plugins`
+
+Accepts a multipart zip upload and installs a plugin bundle.
+
+### `PATCH /api/plugins/{bundleID}`
+
+Enables or disables one bundle:
+
+```json
+{
+  "enabled": false
 }
 ```
 
@@ -227,11 +283,27 @@ Accepts:
 }
 ```
 
-The Go orchestrator plans, validates, executes, and then streams updates.
+Behavior:
+
+1. Saves the user message
+2. Creates a queued job
+3. Returns immediately with the current `job` and `snapshot`
+4. Continues execution in the background
+
+During execution, the job may update multiple times:
+
+- `summary` can change
+- `plan` can change because checkpoint replanning may replace the remaining steps
+- `steps` grows as execution proceeds
+- `checkpoints` grows as planning, completion evaluation, or fallback decisions are recorded
 
 ### `GET /api/sessions/{id}/events`
 
 SSE stream with:
 
-- `session_updated`
 - `job_updated`
+  emits the current job payload, including `plan`, `steps`, and `checkpoints`
+- `session_updated`
+  emits the full snapshot, including messages and newly created artifacts
+
+There is no separate `message_added` event today; new assistant messages are observed through `session_updated`.

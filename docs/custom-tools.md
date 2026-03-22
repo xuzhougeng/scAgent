@@ -254,7 +254,7 @@ def run(context):
 
 上传方式：
 
-- Web 端左侧 `Skill Hub` 卡片上传 zip
+- 打开 `plugins.html`，在插件管理页上传 zip
 - 或者手动把插件目录放到 `data/skill-hub/plugins/`
 
 系统行为：
