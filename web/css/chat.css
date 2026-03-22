@@ -24,9 +24,56 @@
 }
 
 .upload-bar input[type="file"] {
-  width: 100%;
-  font: inherit;
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.upload-file-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1.5px dashed rgba(61, 107, 75, 0.3);
+  border-radius: 12px;
+  background: rgba(223, 233, 216, 0.36);
+  color: var(--accent-deep);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.upload-file-trigger:hover {
+  border-color: var(--accent);
+  background: rgba(223, 233, 216, 0.7);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(61, 107, 75, 0.1);
+}
+
+.upload-file-trigger:active {
+  transform: translateY(0);
+}
+
+.upload-file-trigger svg {
+  flex-shrink: 0;
+}
+
+.upload-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.upload-file-name.has-file {
+  color: var(--accent-deep);
+  font-weight: 500;
 }
 
 .upload-status {

@@ -378,7 +378,7 @@ func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string
 
 	case "/new":
 		label := fmt.Sprintf("%s-%s", b.config.SessionLabel, truncate(fromUserID, 12))
-		snapshot, err := b.service.CreateSession(ctx, label)
+		snapshot, err := b.service.CreateSession(ctx, label, true)
 		if err != nil {
 			return fmt.Sprintf("创建失败: %v", err)
 		}
@@ -498,7 +498,7 @@ func (b *Bridge) resolveSession(ctx context.Context, weixinUserID string) (strin
 
 	// Create brand new session+workspace
 	log.Printf("[weixin] %s → creating new session %q", weixinUserID, label)
-	snapshot, err := b.service.CreateSession(ctx, label)
+	snapshot, err := b.service.CreateSession(ctx, label, true)
 	if err != nil {
 		return "", err
 	}

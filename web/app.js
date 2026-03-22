@@ -159,11 +159,11 @@ async function startApp() {
     }
   }
 
-  async function createWorkspaceWithLabel(label) {
+  async function createWorkspaceWithLabel(label, { withSample = true } = {}) {
     return fetchJSON("/api/workspaces", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ label }),
+      body: JSON.stringify({ label, with_sample: withSample }),
     });
   }
 
@@ -303,7 +303,7 @@ async function startApp() {
     renderSessionMeta();
 
     try {
-      const snapshot = await createWorkspaceWithLabel(`分析工作区 ${nextIndex}`);
+      const snapshot = await createWorkspaceWithLabel(`分析工作区 ${nextIndex}`, { withSample: false });
       appState.plannerPreview = null;
       syncSnapshot(snapshot);
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
@@ -400,20 +400,22 @@ async function startApp() {
     const form = document.getElementById("uploadForm");
     const input = document.getElementById("fileInput");
     const status = document.getElementById("uploadStatus");
+    const fileNameEl = document.getElementById("fileName");
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
+    async function doUpload() {
       const file = input.files?.[0];
       if (!file || !appState.sessionId) {
         status.textContent = "请先选择一个 .h5ad 文件。";
         return;
       }
 
-      const formData = new FormData();
-      formData.append("file", file);
+      fileNameEl.textContent = file.name;
+      fileNameEl.classList.add("has-file");
       status.textContent = `正在上传 ${file.name}...`;
 
       try {
+        const formData = new FormData();
+        formData.append("file", file);
         const response = await fetchJSON(`/api/sessions/${appState.sessionId}/upload`, {
           method: "POST",
           body: formData,
@@ -422,10 +424,26 @@ async function startApp() {
         appState.activeObjectId = response.object.id;
         status.textContent = `${file.name} 已作为 ${response.object.label} 附加到当前 workspace。`;
         input.value = "";
+        fileNameEl.textContent = "选择文件后将自动上传";
+        fileNameEl.classList.remove("has-file");
         render();
       } catch (error) {
         status.textContent = error.message;
+        fileNameEl.textContent = "上传失败，请重试";
+        fileNameEl.classList.remove("has-file");
+        input.value = "";
       }
+    }
+
+    input.addEventListener("change", () => {
+      if (input.files?.length) {
+        doUpload();
+      }
+    });
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      doUpload();
     });
   }
 

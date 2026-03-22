@@ -278,7 +278,7 @@ func (s *Service) CreateConversation(_ context.Context, workspaceID, label strin
 	return s.store.Snapshot(sessionRecord.ID)
 }
 
-func (s *Service) CreateSession(ctx context.Context, label string) (*models.SessionSnapshot, error) {
+func (s *Service) CreateSession(ctx context.Context, label string, withSample bool) (*models.SessionSnapshot, error) {
 	if label == "" {
 		label = "植物单细胞分析会话"
 	}
@@ -300,55 +300,67 @@ func (s *Service) CreateSession(ctx context.Context, label string) (*models.Sess
 		return nil, fmt.Errorf("create objects directory: %w", err)
 	}
 
-	response, err := s.runtime.InitSession(ctx, runtime.InitSessionRequest{
-		SessionID:     sessionRecord.ID,
-		DatasetID:     workspaceRecord.DatasetID,
-		Label:         label,
-		WorkspaceRoot: workspaceRoot,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	now := time.Now().UTC()
-	rootObject := &models.ObjectMeta{
-		ID:               s.store.NextID("obj"),
-		WorkspaceID:      workspaceRecord.ID,
-		SessionID:        sessionRecord.ID,
-		DatasetID:        workspaceRecord.DatasetID,
-		Kind:             response.Object.Kind,
-		Label:            response.Object.Label,
-		BackendRef:       response.Object.BackendRef,
-		NObs:             response.Object.NObs,
-		NVars:            response.Object.NVars,
-		State:            response.Object.State,
-		InMemory:         response.Object.InMemory,
-		MaterializedPath: response.Object.MaterializedPath,
-		MaterializedURL:  s.pathToURL(response.Object.MaterializedPath),
-		Metadata:         response.Object.Metadata,
-		CreatedAt:        now,
-		LastAccessedAt:   now,
-	}
-	s.store.SaveObject(rootObject)
 
-	workspaceRecord.ActiveObjectID = rootObject.ID
+	if withSample {
+		response, err := s.runtime.InitSession(ctx, runtime.InitSessionRequest{
+			SessionID:     sessionRecord.ID,
+			DatasetID:     workspaceRecord.DatasetID,
+			Label:         label,
+			WorkspaceRoot: workspaceRoot,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		rootObject := &models.ObjectMeta{
+			ID:               s.store.NextID("obj"),
+			WorkspaceID:      workspaceRecord.ID,
+			SessionID:        sessionRecord.ID,
+			DatasetID:        workspaceRecord.DatasetID,
+			Kind:             response.Object.Kind,
+			Label:            response.Object.Label,
+			BackendRef:       response.Object.BackendRef,
+			NObs:             response.Object.NObs,
+			NVars:            response.Object.NVars,
+			State:            response.Object.State,
+			InMemory:         response.Object.InMemory,
+			MaterializedPath: response.Object.MaterializedPath,
+			MaterializedURL:  s.pathToURL(response.Object.MaterializedPath),
+			Metadata:         response.Object.Metadata,
+			CreatedAt:        now,
+			LastAccessedAt:   now,
+		}
+		s.store.SaveObject(rootObject)
+
+		workspaceRecord.ActiveObjectID = rootObject.ID
+		sessionRecord.ActiveObjectID = rootObject.ID
+		sessionRecord.DatasetID = workspaceRecord.DatasetID
+
+		s.store.AddMessage(&models.Message{
+			ID:        s.store.NextID("msg"),
+			SessionID: sessionRecord.ID,
+			Role:      models.MessageSystem,
+			Content:   response.Summary,
+			CreatedAt: now,
+		})
+	} else {
+		s.store.AddMessage(&models.Message{
+			ID:        s.store.NextID("msg"),
+			SessionID: sessionRecord.ID,
+			Role:      models.MessageSystem,
+			Content:   "新工作区已创建。请上传 .h5ad 文件以开始分析。",
+			CreatedAt: now,
+		})
+	}
+
 	workspaceRecord.UpdatedAt = now
 	workspaceRecord.LastAccessedAt = now
 	s.store.SaveWorkspace(workspaceRecord)
 
-	sessionRecord.DatasetID = workspaceRecord.DatasetID
-	sessionRecord.ActiveObjectID = rootObject.ID
 	sessionRecord.UpdatedAt = now
 	sessionRecord.LastAccessedAt = now
 	s.store.SaveSession(sessionRecord)
-
-	s.store.AddMessage(&models.Message{
-		ID:        s.store.NextID("msg"),
-		SessionID: sessionRecord.ID,
-		Role:      models.MessageSystem,
-		Content:   response.Summary,
-		CreatedAt: now,
-	})
 
 	s.publishSnapshot(sessionRecord.ID)
 	return s.store.Snapshot(sessionRecord.ID)

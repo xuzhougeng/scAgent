@@ -231,14 +231,16 @@ func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload struct {
-		Label string `json:"label"`
+		Label      string `json:"label"`
+		WithSample *bool  `json:"with_sample,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil && err.Error() != "EOF" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session payload"})
 		return
 	}
+	withSample := payload.WithSample == nil || *payload.WithSample
 
-	snapshot, err := h.service.CreateSession(r.Context(), payload.Label)
+	snapshot, err := h.service.CreateSession(r.Context(), payload.Label, withSample)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -252,14 +254,16 @@ func (h *Handler) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, h.service.ListWorkspaces())
 	case http.MethodPost:
 		var payload struct {
-			Label string `json:"label"`
+			Label      string `json:"label"`
+			WithSample *bool  `json:"with_sample,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil && err.Error() != "EOF" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid workspace payload"})
 			return
 		}
+		withSample := payload.WithSample == nil || *payload.WithSample
 
-		snapshot, err := h.service.CreateSession(r.Context(), payload.Label)
+		snapshot, err := h.service.CreateSession(r.Context(), payload.Label, withSample)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
