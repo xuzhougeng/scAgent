@@ -25,6 +25,6 @@
         font-size="26" fill="#234631" font-weight="600" letter-spacing="0.3">Agent</text>
 
   <!-- Subtitle -->
-  <text x="88" y="60" font-family="'IBM Plex Sans','Noto Sans SC','PingFang SC',system-ui,sans-serif"
-        font-size="14" fill="#68746c" font-weight="400" letter-spacing="3">分析台</text>
+  <text x="88" y="60" font-family="'IBM Plex Sans',system-ui,sans-serif"
+        font-size="13" fill="#68746c" font-weight="400" letter-spacing="2">single-cell analysis</text>
 </svg>

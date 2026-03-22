@@ -345,7 +345,6 @@
   cursor: pointer;
 }
 
-.inspector-card,
 .artifact-card {
   padding: 14px 16px;
   border: 1px solid var(--border);
@@ -354,7 +353,6 @@
   margin-bottom: 12px;
 }
 
-.inspector-card h3,
 .artifact-card h3 {
   margin: 0 0 10px;
   font-size: 1rem;

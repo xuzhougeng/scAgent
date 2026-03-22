@@ -132,13 +132,6 @@
   color: var(--ink);
 }
 
-.workspace-identity-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
 .workspace-identity-card,
 .workspace-summary-item {
   display: flex;
@@ -333,20 +326,6 @@
   margin-left: 54px;
 }
 
-.plugin-upload-form {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 10px;
-  align-items: center;
-  margin-bottom: 10px;
-}
-
-.plugin-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 .plugin-hub-actions {
   display: flex;
   justify-content: flex-end;
@@ -377,42 +356,6 @@
 .plugin-summary-item span {
   color: var(--muted);
   font-size: 0.85rem;
-}
-
-.plugin-card {
-  border: 1px solid rgba(61, 107, 75, 0.1);
-  border-radius: 14px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.56);
-}
-
-.plugin-card p {
-  margin: 8px 0 0;
-  line-height: 1.5;
-}
-
-.plugin-card-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.plugin-skill-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.plugin-skill-chip {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  padding: 6px 10px;
-  background: rgba(61, 107, 75, 0.1);
-  color: var(--accent-deep);
-  font-size: 0.84rem;
 }
 
 .sidebar-card {
@@ -472,13 +415,6 @@
   padding: 0 16px 14px;
 }
 
-.status-card-head {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-
 .status-pills {
   display: flex;
   flex-wrap: wrap;
@@ -526,38 +462,6 @@
 
 .status-detail-grid.compact {
   margin-top: 8px;
-}
-
-.status-section {
-  margin-top: 14px;
-}
-
-.status-inline-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.status-section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: baseline;
-  margin-bottom: 10px;
-}
-
-.status-checks-toggle {
-  min-width: 0;
-}
-
-.status-checks-toggle summary {
-  list-style: none;
-  cursor: pointer;
-}
-
-.status-checks-toggle summary::-webkit-details-marker {
-  display: none;
 }
 
 .status-check-failures {
@@ -682,12 +586,6 @@
   gap: 8px;
 }
 
-.status-overview-link {
-  color: var(--accent);
-  font-size: 0.86rem;
-  font-weight: 600;
-}
-
 .planner-preview {
   margin-bottom: 12px;
 }
@@ -710,8 +608,6 @@
     overflow: visible;
   }
 
-  .plugin-upload-form,
-  .workspace-identity-grid,
   .workspace-summary-grid {
     grid-template-columns: 1fr;
   }
