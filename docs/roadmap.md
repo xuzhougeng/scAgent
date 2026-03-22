@@ -63,7 +63,7 @@
 
 - [ ] `set_active_object` 做成真实后端能力
 - [ ] pin / evict / reload 策略
-- [ ] SQLite 持久化 session / object / job / artifact
+- [x] SQLite 持久化 session / object / job / artifact
 
 ### 帮助站补全（原 P5）
 
@@ -96,7 +96,7 @@
 
 - [ ] 实现 `set_active_object`
 - [ ] 明确对象缓存与回收策略
-- [ ] 引入 SQLite 持久化 session / object / job / artifact
+- [x] 引入 SQLite 持久化 session / object / job / artifact
 
 ### 4. 补帮助站内容，降低非技术用户门槛
 

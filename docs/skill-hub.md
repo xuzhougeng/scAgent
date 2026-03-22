@@ -112,6 +112,11 @@ def run(context):
 - `save_figure(fig, stem, title=..., summary=...)`
 - `save_table(df, stem, title=..., summary=...)`
 
+补充说明：
+
+- `session_root` 是历史字段名
+- 当前它实际指向 workspace 根目录，而不是 conversation 独占目录
+
 ## 执行与规划的关系
 
 Skill Hub 里注册的 skill 并不会因为“出现在 registry 中”就自动可执行。

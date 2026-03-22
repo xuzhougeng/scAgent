@@ -1,7 +1,11 @@
 const appState = {
   sessionId: null,
+  workspaceId: null,
   activeObjectId: null,
   snapshot: null,
+  workspaceSnapshot: null,
+  workspaceList: [],
+  workspaceStatus: "",
   skills: [],
   plugins: [],
   systemStatus: null,
@@ -9,6 +13,11 @@ const appState = {
   plannerPreview: null,
   chatRenderVersion: 0,
   artifactTextCache: new Map(),
+};
+
+const storageKeys = {
+  workspaceId: "scagent.workspaceId",
+  sessionId: "scagent.sessionId",
 };
 
 const quickActions = [
@@ -134,17 +143,281 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 async function bootstrap() {
   await refreshCapabilityState();
-
-  const snapshot = await fetchJSON("/api/sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label: "拟南芥图谱会话" }),
-  });
-  appState.sessionId = snapshot.session.id;
-  appState.snapshot = snapshot;
-  appState.activeObjectId = snapshot.session.active_object_id;
+  const restored = await restoreContext();
+  if (!restored) {
+    const snapshot = await createWorkspaceWithLabel("PBMC3K 测试会话");
+    syncSnapshot(snapshot);
+    await refreshWorkspaceSnapshot();
+  }
   connectEvents();
   render();
+}
+
+function syncSnapshot(snapshot) {
+  appState.snapshot = snapshot;
+  appState.sessionId = snapshot?.session?.id || null;
+  appState.workspaceId = snapshot?.workspace?.id || snapshot?.session?.workspace_id || null;
+  appState.activeObjectId = snapshot?.session?.active_object_id || null;
+  persistContext();
+
+  if (!snapshot?.workspace) {
+    return;
+  }
+
+  const currentConversations =
+    appState.workspaceSnapshot?.workspace?.id === snapshot.workspace.id
+      ? appState.workspaceSnapshot.conversations || []
+      : [];
+
+  appState.workspaceSnapshot = {
+    workspace: snapshot.workspace,
+    conversations: upsertConversation(currentConversations, snapshot.session),
+    objects: snapshot.objects || [],
+    artifacts: snapshot.artifacts || [],
+  };
+  appState.workspaceList = upsertWorkspace(appState.workspaceList, snapshot.workspace);
+}
+
+function upsertConversation(conversations, session) {
+  const next = Array.isArray(conversations) ? [...conversations] : [];
+  if (!session?.id) {
+    return next.sort(compareConversationCreatedAt);
+  }
+
+  const index = next.findIndex((item) => item.id === session.id);
+  if (index >= 0) {
+    next[index] = session;
+  } else {
+    next.push(session);
+  }
+  return next.sort(compareConversationCreatedAt);
+}
+
+function compareConversationCreatedAt(a, b) {
+  return compareByTimestamp(
+    a?.last_accessed_at || a?.updated_at || a?.created_at,
+    b?.last_accessed_at || b?.updated_at || b?.created_at,
+  );
+}
+
+function upsertWorkspace(workspaces, workspace) {
+  const next = Array.isArray(workspaces) ? [...workspaces] : [];
+  if (!workspace?.id) {
+    return next.sort(compareWorkspaceRecency);
+  }
+
+  const index = next.findIndex((item) => item.id === workspace.id);
+  if (index >= 0) {
+    next[index] = workspace;
+  } else {
+    next.push(workspace);
+  }
+  return next.sort(compareWorkspaceRecency);
+}
+
+function compareWorkspaceRecency(a, b) {
+  return compareByTimestamp(
+    a?.last_accessed_at || a?.updated_at || a?.created_at,
+    b?.last_accessed_at || b?.updated_at || b?.created_at,
+  );
+}
+
+function compareByTimestamp(a, b) {
+  return String(b || "").localeCompare(String(a || ""));
+}
+
+async function refreshWorkspaceSnapshot() {
+  if (!appState.workspaceId) {
+    appState.workspaceSnapshot = null;
+    return;
+  }
+  appState.workspaceSnapshot = await fetchJSON(`/api/workspaces/${appState.workspaceId}`);
+}
+
+async function refreshWorkspaceList() {
+  const payload = await fetchJSON("/api/workspaces");
+  appState.workspaceList = (payload?.workspaces || []).sort(compareWorkspaceRecency);
+  return appState.workspaceList;
+}
+
+function persistContext() {
+  try {
+    if (appState.workspaceId) {
+      window.localStorage.setItem(storageKeys.workspaceId, appState.workspaceId);
+    }
+    if (appState.sessionId) {
+      window.localStorage.setItem(storageKeys.sessionId, appState.sessionId);
+    }
+  } catch (_error) {
+  }
+}
+
+function loadPersistedContext() {
+  try {
+    return {
+      workspaceId: window.localStorage.getItem(storageKeys.workspaceId) || "",
+      sessionId: window.localStorage.getItem(storageKeys.sessionId) || "",
+    };
+  } catch (_error) {
+    return { workspaceId: "", sessionId: "" };
+  }
+}
+
+async function createWorkspaceWithLabel(label) {
+  return fetchJSON("/api/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+}
+
+function preferredConversation(workspaceSnapshot, preferredSessionId = "") {
+  const conversations = workspaceSnapshot?.conversations || [];
+  if (!conversations.length) {
+    return null;
+  }
+  if (preferredSessionId) {
+    const exact = conversations.find((conversation) => conversation.id === preferredSessionId);
+    if (exact) {
+      return exact;
+    }
+  }
+  return [...conversations].sort(compareConversationCreatedAt)[0] || null;
+}
+
+async function restoreContext() {
+  const persisted = loadPersistedContext();
+
+  if (persisted.sessionId) {
+    try {
+      const snapshot = await fetchJSON(`/api/sessions/${persisted.sessionId}`);
+      syncSnapshot(snapshot);
+      await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
+      return true;
+    } catch (_error) {
+    }
+  }
+
+  await refreshWorkspaceList();
+  const fallbackWorkspaceId = persisted.workspaceId || appState.workspaceList[0]?.id;
+  if (!fallbackWorkspaceId) {
+    return false;
+  }
+
+  try {
+    const workspaceSnapshot = await fetchJSON(`/api/workspaces/${fallbackWorkspaceId}`);
+    const conversation = preferredConversation(workspaceSnapshot, persisted.sessionId);
+    if (!conversation) {
+      return false;
+    }
+    appState.workspaceSnapshot = workspaceSnapshot;
+    const snapshot = await fetchJSON(`/api/sessions/${conversation.id}`);
+    syncSnapshot(snapshot);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function switchConversation(sessionId) {
+  if (!sessionId || sessionId === appState.sessionId) {
+    return;
+  }
+
+  appState.workspaceStatus = "正在切换对话...";
+  renderSessionMeta();
+
+  try {
+    const snapshot = await fetchJSON(`/api/sessions/${sessionId}`);
+    appState.plannerPreview = null;
+    syncSnapshot(snapshot);
+    await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
+    appState.workspaceStatus = `已切换到 ${formatConversationLabel(snapshot.session)}。`;
+    connectEvents();
+    render();
+  } catch (error) {
+    appState.workspaceStatus = error.message;
+    renderSessionMeta();
+  }
+}
+
+async function createConversation() {
+  if (!appState.workspaceId) {
+    return;
+  }
+
+  const nextIndex = (appState.workspaceSnapshot?.conversations?.length || 0) + 1;
+  appState.workspaceStatus = "正在创建新对话...";
+  renderSessionMeta();
+
+  try {
+    const snapshot = await fetchJSON(`/api/workspaces/${appState.workspaceId}/conversations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: `分析对话 ${nextIndex}` }),
+    });
+    appState.plannerPreview = null;
+    syncSnapshot(snapshot);
+    await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
+    appState.workspaceStatus = `已创建并切换到 ${formatConversationLabel(snapshot.session)}。`;
+    connectEvents();
+    render();
+  } catch (error) {
+    appState.workspaceStatus = error.message;
+    renderSessionMeta();
+  }
+}
+
+async function switchWorkspace(workspaceId) {
+  if (!workspaceId) {
+    return;
+  }
+  if (workspaceId === appState.workspaceId) {
+    appState.workspaceStatus = "当前已在该 workspace。";
+    renderSessionMeta();
+    return;
+  }
+
+  appState.workspaceStatus = "正在切换 workspace...";
+  renderSessionMeta();
+
+  try {
+    const workspaceSnapshot = await fetchJSON(`/api/workspaces/${workspaceId}`);
+    const conversation = preferredConversation(workspaceSnapshot);
+    if (!conversation) {
+      throw new Error("目标 workspace 暂无可用对话。");
+    }
+    appState.workspaceSnapshot = workspaceSnapshot;
+    const snapshot = await fetchJSON(`/api/sessions/${conversation.id}`);
+    appState.plannerPreview = null;
+    syncSnapshot(snapshot);
+    await refreshWorkspaceList();
+    appState.workspaceStatus = `已切换到 ${workspaceSnapshot.workspace?.label || workspaceId}。`;
+    connectEvents();
+    render();
+  } catch (error) {
+    appState.workspaceStatus = error.message;
+    renderSessionMeta();
+  }
+}
+
+async function createWorkspace() {
+  const nextIndex = (appState.workspaceList?.length || 0) + 1;
+  appState.workspaceStatus = "正在创建 workspace...";
+  renderSessionMeta();
+
+  try {
+    const snapshot = await createWorkspaceWithLabel(`分析工作区 ${nextIndex}`);
+    appState.plannerPreview = null;
+    syncSnapshot(snapshot);
+    await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
+    appState.workspaceStatus = `已创建 ${snapshot.workspace?.label || "新 workspace"}。`;
+    connectEvents();
+    render();
+  } catch (error) {
+    appState.workspaceStatus = error.message;
+    renderSessionMeta();
+  }
 }
 
 async function refreshCapabilityState() {
@@ -191,8 +464,7 @@ async function submitMessage() {
       message,
     }),
   });
-  appState.snapshot = response.snapshot;
-  appState.activeObjectId = response.snapshot.session.active_object_id;
+  syncSnapshot(response.snapshot);
   render();
 }
 
@@ -218,9 +490,9 @@ function bindUpload() {
         method: "POST",
         body: formData,
       });
-      appState.snapshot = response.snapshot;
+      syncSnapshot(response.snapshot);
       appState.activeObjectId = response.object.id;
-      status.textContent = `${file.name} 已作为 ${response.object.label} 附加到当前会话。`;
+      status.textContent = `${file.name} 已作为 ${response.object.label} 附加到当前 workspace。`;
       input.value = "";
       render();
     } catch (error) {
@@ -308,8 +580,7 @@ function connectEvents() {
   }
   appState.eventSource = new EventSource(`/api/sessions/${appState.sessionId}/events`);
   appState.eventSource.addEventListener("session_updated", (event) => {
-    appState.snapshot = JSON.parse(event.data);
-    appState.activeObjectId = appState.snapshot.session.active_object_id;
+    syncSnapshot(JSON.parse(event.data));
     render();
   });
 }
@@ -456,14 +727,105 @@ function renderSessionMeta() {
     meta.innerHTML = "<p class='muted'>尚未加载会话。</p>";
     return;
   }
-  const { session, objects, jobs, artifacts } = appState.snapshot;
+  const { session, workspace, objects, jobs, artifacts } = appState.snapshot;
+  const workspaceList = appState.workspaceList || [];
+  const conversations = appState.workspaceSnapshot?.conversations || (session ? [session] : []);
+  const currentWorkspace = appState.workspaceSnapshot?.workspace || workspace;
+  const workspaceLabel = currentWorkspace?.label || "未命名 workspace";
+  const workspaceStatus = appState.workspaceStatus ? `<p class="workspace-status muted">${escapeHTML(appState.workspaceStatus)}</p>` : "";
+  const workspaceListMarkup = workspaceList.length
+    ? `
+      <div class="workspace-list">
+        ${workspaceList
+          .map(
+            (item) => `
+              <button
+                type="button"
+                class="workspace-chip ${item.id === currentWorkspace?.id ? "active" : ""}"
+                data-workspace-id="${escapeAttribute(item.id)}"
+              >
+                <span class="workspace-chip-label">${escapeHTML(item.label || item.id)}</span>
+                <span class="workspace-chip-id">${escapeHTML(item.id)}</span>
+              </button>
+            `,
+          )
+          .join("")}
+      </div>
+    `
+    : "<p class='muted'>当前还没有其他 workspace。</p>";
+  const conversationMarkup = conversations.length
+    ? `
+      <div class="conversation-list">
+        ${conversations
+          .map(
+            (conversation) => `
+              <button
+                type="button"
+                class="conversation-chip ${conversation.id === session.id ? "active" : ""}"
+                data-conversation-id="${escapeAttribute(conversation.id)}"
+              >
+                <span class="conversation-chip-label">${escapeHTML(formatConversationLabel(conversation))}</span>
+                <span class="conversation-chip-id">${escapeHTML(conversation.id)}</span>
+              </button>
+            `,
+          )
+          .join("")}
+      </div>
+    `
+    : "<p class='muted'>当前 workspace 还没有其他对话。</p>";
+
   meta.innerHTML = `
-    <div class="kv"><span>会话</span><span>${session.id}</span></div>
-    <div class="kv"><span>数据集</span><span>${escapeHTML(session.dataset_id || "未设置")}</span></div>
-    <div class="kv"><span>对象</span><span>${objects.length}</span></div>
-    <div class="kv"><span>任务</span><span>${jobs.length}</span></div>
-    <div class="kv"><span>结果</span><span>${artifacts.length}</span></div>
+    <div class="workspace-meta-head">
+      <div>
+        <div class="workspace-title">${escapeHTML(workspaceLabel)}</div>
+        <div class="workspace-subtitle">共享 workspace / 独立对话</div>
+      </div>
+      <div class="workspace-meta-actions">
+        <button id="newWorkspaceButton" type="button" class="ghost-button conversation-create-button">新 workspace</button>
+        <button id="newConversationButton" type="button" class="ghost-button conversation-create-button">新对话</button>
+      </div>
+    </div>
+    ${workspaceStatus}
+    <div class="kv"><span>Workspace</span><span>${escapeHTML(currentWorkspace?.id || "未设置")}</span></div>
+    <div class="kv"><span>当前对话</span><span>${escapeHTML(session.id)}</span></div>
+    <div class="kv"><span>数据集</span><span>${escapeHTML(currentWorkspace?.dataset_id || session.dataset_id || "未设置")}</span></div>
+    <div class="kv"><span>共享对象</span><span>${objects.length}</span></div>
+    <div class="kv"><span>本对话任务</span><span>${jobs.length}</span></div>
+    <div class="kv"><span>共享结果</span><span>${artifacts.length}</span></div>
+    <div class="workspace-section-label">Workspace 列表</div>
+    ${workspaceListMarkup}
+    <div class="workspace-section-label">对话列表</div>
+    ${conversationMarkup}
   `;
+  bindWorkspaceMeta(meta);
+}
+
+function bindWorkspaceMeta(container) {
+  const createWorkspaceButton = container.querySelector("#newWorkspaceButton");
+  if (createWorkspaceButton) {
+    createWorkspaceButton.addEventListener("click", async () => {
+      await createWorkspace();
+    });
+  }
+
+  const createButton = container.querySelector("#newConversationButton");
+  if (createButton) {
+    createButton.addEventListener("click", async () => {
+      await createConversation();
+    });
+  }
+
+  for (const button of container.querySelectorAll("[data-workspace-id]")) {
+    button.addEventListener("click", async () => {
+      await switchWorkspace(button.dataset.workspaceId);
+    });
+  }
+
+  for (const button of container.querySelectorAll("[data-conversation-id]")) {
+    button.addEventListener("click", async () => {
+      await switchConversation(button.dataset.conversationId);
+    });
+  }
 }
 
 function renderSkillHub() {
@@ -1072,6 +1434,13 @@ function formatPlanTarget(targetObjectId) {
 
 function formatRole(role) {
   return roleLabels[role] || role || "未知";
+}
+
+function formatConversationLabel(session) {
+  if (!session) {
+    return "未命名对话";
+  }
+  return session.label || session.id || "未命名对话";
 }
 
 function formatSkillName(skill) {

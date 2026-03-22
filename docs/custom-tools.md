@@ -66,6 +66,8 @@
   - `artifacts` 可选
   - `metadata` 可选
 
+这里的 `session_root` 是历史命名，当前实际上传入的是 workspace 根目录。
+
 ## 让 agent 自动选择
 
 `LLM planner` 不需要手工列白名单，它会读取 registry 中所有 `wired` tool。
@@ -126,6 +128,8 @@
   - `plt`
   - `session_root`
   - `artifacts_dir`
+
+其中 `session_root` 现在语义上等于当前 workspace 的根目录。
 - 代码里可以设置：
   - `result_summary`
   - `output_adata`

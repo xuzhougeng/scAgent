@@ -2,11 +2,12 @@
 
 Go control plane + Python analysis runtime + static frontend for interactive single-cell workflows.
 
-`scAgent` currently supports session-based object management, background job execution, planner preview, markdown-driven help docs, and dynamic Skill Hub plugin bundles.
+`scAgent` currently supports workspace-based object sharing, conversation-scoped job/message history, background job execution, planner preview, markdown-driven help docs, and dynamic Skill Hub plugin bundles.
 
 ## What Works Today
 
 - Upload a real `.h5ad` file and assess its readiness, annotations, embeddings, and analysis state.
+- Reuse one shared workspace across multiple conversations while keeping each conversation's jobs and messages isolated.
 - Execute a growing set of `wired` skills, including `assess_dataset`, the core preprocessing chain, `subset_cells`, `recluster`, `find_markers`, plotting, `export_h5ad`, and `run_python_analysis`.
 - Run long tasks as background jobs. The web client streams plan updates, execution checkpoints, step results, and artifacts over SSE.
 - Preview the planning context before execution through `/api/sessions/{id}/planner-preview`.
@@ -22,7 +23,7 @@ Only `wired` skills are executable. `planned` skills remain registry placeholder
 - `internal/models`: session, object, job, artifact, checkpoint, and plan structs.
 - `internal/orchestrator`: planning, completion evaluation, checkpoint replanning, runtime execution, and event publishing.
 - `internal/runtime`: Go client for the Python runtime.
-- `internal/session`: in-memory store and snapshot/event helpers.
+- `internal/session`: file-backed store plus snapshot/event helpers.
 - `internal/skill`: built-in registry plus Skill Hub plugin loading.
 - `runtime/server.py`: long-lived Python runtime service.
 - `skills/registry.json`: shared skill catalog and parameter schema.
@@ -184,5 +185,5 @@ This repo is no longer just a one-shot planner demo. It now focuses on:
 Still in progress:
 
 - many registry entries remain `planned`
-- persistence is still in-memory rather than SQLite-backed
+- persistence is SQLite-backed at `data/state/store.db`; migration and operational hardening are still minimal
 - richer evaluator policies and more biological workflows are still being added

@@ -1368,7 +1368,7 @@ class RuntimeState:
                 "summary": f"会话已从样例文件 {self.sample_path.name} 初始化。{describe_annotation_summary(metadata)}",
             }
 
-        materialized_path = objects_dir / "raw_demo.h5ad"
+        materialized_path = objects_dir / "pbmc3k_demo.h5ad"
         materialized_path.write_text(
             json.dumps(
                 {
@@ -1383,8 +1383,8 @@ class RuntimeState:
         )
         metadata = {
             "top_level_keys": ["X", "obs", "var", "obsm", "uns"],
-            "obs_fields": ["cell_type", "sample", "leiden"],
-            "obsm_keys": ["X_umap"],
+            "obs_fields": ["cell_type", "louvain"],
+            "obsm_keys": ["X_pca", "X_umap"],
             "uns_keys": ["neighbors", "pca"],
             "layer_keys": [],
             "var_fields": ["gene_symbol"],
@@ -1393,19 +1393,19 @@ class RuntimeState:
             "categorical_obs_fields": [
                 {
                     "field": "cell_type",
-                    "n_categories": 6,
-                    "sample_values": ["cortex", "endodermis", "epidermis", "phloem", "xylem"],
+                    "n_categories": 7,
+                    "sample_values": ["B cells", "CD4 T cells", "NK cells", "CD14+ Monocytes", "FCGR3A+ Monocytes"],
                     "role": "cell_type",
                 },
                 {
-                    "field": "sample",
-                    "n_categories": 2,
-                    "sample_values": ["rep1", "rep2"],
-                    "role": "covariate",
+                    "field": "louvain",
+                    "n_categories": 8,
+                    "sample_values": ["0", "1", "2", "3"],
+                    "role": "cluster",
                 },
             ],
             "cluster_annotation": {
-                "field": "leiden",
+                "field": "louvain",
                 "n_categories": 8,
                 "sample_values": ["0", "1", "2", "3"],
                 "role": "cluster",
@@ -1413,20 +1413,20 @@ class RuntimeState:
             },
             "cell_type_annotation": {
                 "field": "cell_type",
-                "n_categories": 6,
-                "sample_values": ["cortex", "endodermis", "epidermis", "phloem", "xylem"],
+                "n_categories": 7,
+                "sample_values": ["B cells", "CD4 T cells", "NK cells", "CD14+ Monocytes", "FCGR3A+ Monocytes"],
                 "role": "cell_type",
                 "confidence": "high",
             },
         }
         metadata["assessment"] = build_dataset_assessment(metadata)
         return {
-            "label": "root_atlas_demo",
-            "n_obs": 4821,
-            "n_vars": 28671,
+            "label": "pbmc3k_demo",
+            "n_obs": 2700,
+            "n_vars": 32738,
             "materialized_path": materialized_path,
             "metadata": metadata,
-            "summary": "未在磁盘上找到样例 .h5ad，已使用回退演示数据初始化会话。",
+            "summary": "未在磁盘上找到样例 .h5ad，已使用 PBMC3K 回退演示数据初始化会话。",
         }
 
 def log_runtime_event(event: str, **fields: Any) -> None:

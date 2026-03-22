@@ -21,6 +21,7 @@ type CompletionEvaluation struct {
 type EvaluationRequest struct {
 	Message         string               `json:"message"`
 	Session         *models.Session      `json:"session,omitempty"`
+	Workspace       *models.Workspace    `json:"workspace,omitempty"`
 	ActiveObject    *models.ObjectMeta   `json:"active_object,omitempty"`
 	Objects         []*models.ObjectMeta `json:"objects,omitempty"`
 	RecentMessages  []*models.Message    `json:"recent_messages,omitempty"`

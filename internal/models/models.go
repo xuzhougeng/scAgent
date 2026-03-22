@@ -58,8 +58,19 @@ const (
 	MessageSystem    MessageRole = "system"
 )
 
+type Workspace struct {
+	ID             string    `json:"id"`
+	Label          string    `json:"label"`
+	DatasetID      string    `json:"dataset_id"`
+	ActiveObjectID string    `json:"active_object_id"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	LastAccessedAt time.Time `json:"last_accessed_at"`
+}
+
 type Session struct {
 	ID             string        `json:"id"`
+	WorkspaceID    string        `json:"workspace_id,omitempty"`
 	Label          string        `json:"label"`
 	DatasetID      string        `json:"dataset_id"`
 	ActiveObjectID string        `json:"active_object_id"`
@@ -71,7 +82,8 @@ type Session struct {
 
 type ObjectMeta struct {
 	ID               string         `json:"id"`
-	SessionID        string         `json:"session_id"`
+	WorkspaceID      string         `json:"workspace_id,omitempty"`
+	SessionID        string         `json:"session_id,omitempty"`
 	DatasetID        string         `json:"dataset_id"`
 	ParentID         string         `json:"parent_id,omitempty"`
 	Kind             ObjectKind     `json:"kind"`
@@ -91,7 +103,8 @@ type ObjectMeta struct {
 
 type Artifact struct {
 	ID          string       `json:"id"`
-	SessionID   string       `json:"session_id"`
+	WorkspaceID string       `json:"workspace_id,omitempty"`
+	SessionID   string       `json:"session_id,omitempty"`
 	ObjectID    string       `json:"object_id,omitempty"`
 	JobID       string       `json:"job_id,omitempty"`
 	Kind        ArtifactKind `json:"kind"`
@@ -149,6 +162,7 @@ type JobCheckpoint struct {
 
 type Job struct {
 	ID          string          `json:"id"`
+	WorkspaceID string          `json:"workspace_id,omitempty"`
 	SessionID   string          `json:"session_id"`
 	MessageID   string          `json:"message_id"`
 	Status      JobStatus       `json:"status"`
@@ -164,15 +178,28 @@ type Job struct {
 
 type SessionSnapshot struct {
 	Session   *Session      `json:"session"`
+	Workspace *Workspace    `json:"workspace,omitempty"`
 	Objects   []*ObjectMeta `json:"objects"`
 	Jobs      []*Job        `json:"jobs"`
 	Artifacts []*Artifact   `json:"artifacts"`
 	Messages  []*Message    `json:"messages"`
 }
 
+type WorkspaceSnapshot struct {
+	Workspace     *Workspace    `json:"workspace"`
+	Conversations []*Session    `json:"conversations"`
+	Objects       []*ObjectMeta `json:"objects"`
+	Artifacts     []*Artifact   `json:"artifacts"`
+}
+
+type WorkspaceList struct {
+	Workspaces []*Workspace `json:"workspaces"`
+}
+
 type Event struct {
-	Type      string    `json:"type"`
-	SessionID string    `json:"session_id"`
-	Timestamp time.Time `json:"timestamp"`
-	Data      any       `json:"data"`
+	Type        string    `json:"type"`
+	SessionID   string    `json:"session_id"`
+	WorkspaceID string    `json:"workspace_id,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+	Data        any       `json:"data"`
 }

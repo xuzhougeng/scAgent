@@ -124,6 +124,149 @@ func TestMessageExecutionFlow(t *testing.T) {
 	}
 }
 
+func TestWorkspaceConversationSeesSharedObjectsAndArtifacts(t *testing.T) {
+	service := newTestService(t, orchestrator.NewFakePlanner(), &fakeRuntime{})
+	handler := NewHandler(service, docsPath())
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	createSessionRecorder := httptest.NewRecorder()
+	createSessionRequest := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewBufferString(`{"label":"shared workspace"}`))
+	createSessionRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(createSessionRecorder, createSessionRequest)
+
+	if createSessionRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", createSessionRecorder.Code, createSessionRecorder.Body.String())
+	}
+
+	var firstSnapshot models.SessionSnapshot
+	if err := json.Unmarshal(createSessionRecorder.Body.Bytes(), &firstSnapshot); err != nil {
+		t.Fatalf("decode first snapshot: %v", err)
+	}
+	if firstSnapshot.Workspace == nil {
+		t.Fatalf("expected workspace metadata in session snapshot")
+	}
+
+	createConversationRecorder := httptest.NewRecorder()
+	createConversationRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/api/workspaces/"+firstSnapshot.Workspace.ID+"/conversations",
+		bytes.NewBufferString(`{"label":"analysis thread 2"}`),
+	)
+	createConversationRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(createConversationRecorder, createConversationRequest)
+
+	if createConversationRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", createConversationRecorder.Code, createConversationRecorder.Body.String())
+	}
+
+	var secondSnapshot models.SessionSnapshot
+	if err := json.Unmarshal(createConversationRecorder.Body.Bytes(), &secondSnapshot); err != nil {
+		t.Fatalf("decode second snapshot: %v", err)
+	}
+	if secondSnapshot.Workspace == nil || secondSnapshot.Workspace.ID != firstSnapshot.Workspace.ID {
+		t.Fatalf("expected shared workspace, got %+v", secondSnapshot.Workspace)
+	}
+	if secondSnapshot.Session.ID == firstSnapshot.Session.ID {
+		t.Fatalf("expected a different conversation/session id")
+	}
+	if len(secondSnapshot.Objects) != 1 {
+		t.Fatalf("expected second conversation to see initial shared object, got %d", len(secondSnapshot.Objects))
+	}
+
+	messageRecorder := httptest.NewRecorder()
+	messageRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/api/messages",
+		bytes.NewBufferString(`{"session_id":"`+firstSnapshot.Session.ID+`","message":"把 cortex 细胞拿出来重新聚类，然后画一下 marker"}`),
+	)
+	messageRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(messageRecorder, messageRequest)
+
+	if messageRecorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", messageRecorder.Code, messageRecorder.Body.String())
+	}
+
+	var firstFinal models.SessionSnapshot
+	var succeeded bool
+	for range 50 {
+		time.Sleep(10 * time.Millisecond)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/sessions/"+firstSnapshot.Session.ID, nil)
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected 200 on snapshot read, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &firstFinal); err != nil {
+			t.Fatalf("decode first final snapshot: %v", err)
+		}
+		if len(firstFinal.Jobs) > 0 && firstFinal.Jobs[0].Status == models.JobSucceeded {
+			succeeded = true
+			break
+		}
+	}
+
+	if !succeeded {
+		t.Fatalf("job did not succeed: %+v", firstFinal.Jobs)
+	}
+
+	secondRecorder := httptest.NewRecorder()
+	secondRequest := httptest.NewRequest(http.MethodGet, "/api/sessions/"+secondSnapshot.Session.ID, nil)
+	mux.ServeHTTP(secondRecorder, secondRequest)
+	if secondRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 on second snapshot read, got %d: %s", secondRecorder.Code, secondRecorder.Body.String())
+	}
+
+	if err := json.Unmarshal(secondRecorder.Body.Bytes(), &secondSnapshot); err != nil {
+		t.Fatalf("decode updated second snapshot: %v", err)
+	}
+	if len(secondSnapshot.Objects) != 3 {
+		t.Fatalf("expected second conversation to see shared object lineage, got %d objects", len(secondSnapshot.Objects))
+	}
+	if len(secondSnapshot.Artifacts) != 1 {
+		t.Fatalf("expected second conversation to see shared artifacts, got %d", len(secondSnapshot.Artifacts))
+	}
+	if len(secondSnapshot.Jobs) != 0 {
+		t.Fatalf("expected second conversation to keep its own job history, got %d jobs", len(secondSnapshot.Jobs))
+	}
+
+	workspaceRecorder := httptest.NewRecorder()
+	workspaceRequest := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+firstSnapshot.Workspace.ID, nil)
+	mux.ServeHTTP(workspaceRecorder, workspaceRequest)
+	if workspaceRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 on workspace read, got %d: %s", workspaceRecorder.Code, workspaceRecorder.Body.String())
+	}
+
+	var workspaceSnapshot models.WorkspaceSnapshot
+	if err := json.Unmarshal(workspaceRecorder.Body.Bytes(), &workspaceSnapshot); err != nil {
+		t.Fatalf("decode workspace snapshot: %v", err)
+	}
+	if len(workspaceSnapshot.Conversations) != 2 {
+		t.Fatalf("expected 2 conversations in workspace snapshot, got %d", len(workspaceSnapshot.Conversations))
+	}
+	if len(workspaceSnapshot.Objects) != 3 {
+		t.Fatalf("expected workspace snapshot to expose shared objects, got %d", len(workspaceSnapshot.Objects))
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/workspaces", nil)
+	mux.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 on workspace list, got %d: %s", listRecorder.Code, listRecorder.Body.String())
+	}
+
+	var workspaceList models.WorkspaceList
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &workspaceList); err != nil {
+		t.Fatalf("decode workspace list: %v", err)
+	}
+	if len(workspaceList.Workspaces) != 1 {
+		t.Fatalf("expected 1 workspace in list, got %d", len(workspaceList.Workspaces))
+	}
+	if workspaceList.Workspaces[0].ID != firstSnapshot.Workspace.ID {
+		t.Fatalf("unexpected workspace in list: %+v", workspaceList.Workspaces[0])
+	}
+}
+
 func TestUploadH5ADFlow(t *testing.T) {
 	service := newTestService(t, orchestrator.NewFakePlanner(), &fakeRuntime{})
 	handler := NewHandler(service, docsPath())

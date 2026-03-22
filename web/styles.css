@@ -107,6 +107,122 @@ body {
   flex-shrink: 0;
 }
 
+.workspace-meta-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.workspace-meta-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.workspace-title {
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.workspace-subtitle,
+.workspace-section-label,
+.workspace-status {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.workspace-subtitle {
+  margin-top: 4px;
+}
+
+.workspace-status {
+  margin: 0 0 10px;
+}
+
+.workspace-section-label {
+  margin: 14px 0 8px;
+}
+
+.conversation-create-button {
+  flex-shrink: 0;
+  padding: 8px 12px;
+}
+
+.conversation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(61, 107, 75, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.56);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-chip.active {
+  border-color: rgba(197, 136, 49, 0.32);
+  background: rgba(197, 136, 49, 0.12);
+}
+
+.workspace-chip-label {
+  font-weight: 600;
+}
+
+.workspace-chip-id {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.conversation-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(61, 107, 75, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conversation-chip.active {
+  border-color: rgba(61, 107, 75, 0.38);
+  background: rgba(61, 107, 75, 0.12);
+}
+
+.conversation-chip-label {
+  font-weight: 600;
+}
+
+.conversation-chip-id {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
 .skill-hub {
   margin-top: 12px;
   flex-shrink: 0;

@@ -45,7 +45,10 @@ func NewServer(config Config) (http.Handler, error) {
 		return nil, err
 	}
 
-	store := session.NewStore()
+	store, err := session.NewPersistentStore(filepath.Join(config.DataDir, "state", "store.db"))
+	if err != nil {
+		return nil, err
+	}
 	runtimeClient := runtime.NewClient(config.RuntimeURL)
 	planner, err := orchestrator.NewPlanner(orchestrator.PlannerConfig{
 		Mode:            config.PlannerMode,

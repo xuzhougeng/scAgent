@@ -2,10 +2,15 @@
 
 ## Core Entities
 
+`Workspace`
+
+- Owns one shared dataset/workspace root.
+- Tracks `dataset_id`, `active_object_id`, timestamps, and shared object/artifact lineage.
+
 `Session`
 
-- Owns one interactive analysis context.
-- Tracks `dataset_id`, `active_object_id`, timestamps, and lifecycle status.
+- Represents one conversation thread inside a workspace.
+- Tracks `workspace_id`, its own conversation-local history, `active_object_id`, timestamps, and lifecycle status.
 
 `ObjectMeta`
 
@@ -51,7 +56,29 @@ Example:
 - Stored on disk and cataloged by Go.
 - Exposed to the web client through `/data/...` URLs.
 
+## Persistence
+
+Control-plane state is persisted in SQLite at `data/state/store.db`.
+
+Current persistence scope:
+
+- `Workspace`
+- `Session`
+- `ObjectMeta`
+- `Job`
+- `Artifact`
+- `Message`
+- ID counter state
+
+Current boundary:
+
+- This persists metadata and history, not Python runtime memory.
+- `backend_ref` still points to an in-memory runtime object.
+- If the Python runtime restarts, automatic object rehydration / reload is not complete yet.
+
 ## Go -> Python
+
+The runtime request field is still named `session_root` for compatibility, but it now points to the workspace root directory under `data/workspaces/{workspace_id}`.
 
 ### `POST /sessions/init`
 
@@ -59,8 +86,8 @@ Example:
 {
   "session_id": "sess_000001",
   "dataset_id": "ds_000002",
-  "label": "Arabidopsis atlas session",
-  "session_root": "/abs/path/data/sessions/sess_000001"
+  "label": "PBMC3K test session",
+  "session_root": "/abs/path/data/workspaces/ws_000001"
 }
 ```
 
@@ -71,12 +98,12 @@ Response:
   "object": {
     "backend_ref": "py:sess_000001:adata_1",
     "kind": "raw_dataset",
-    "label": "root_atlas_demo",
-    "n_obs": 4821,
-    "n_vars": 28671,
+    "label": "pbmc3k_demo",
+    "n_obs": 2700,
+    "n_vars": 32738,
     "state": "resident",
     "in_memory": true,
-    "materialized_path": "/abs/path/data/sessions/sess_000001/objects/raw_demo.h5ad"
+    "materialized_path": "/abs/path/data/workspaces/ws_000001/objects/pbmc3k_demo.h5ad"
   },
   "summary": "Session bootstrapped. Demo raw dataset is resident in the Python runtime."
 }
@@ -93,7 +120,7 @@ Response:
   "params": {
     "resolution": 0.6
   },
-  "session_root": "/abs/path/data/sessions/sess_000001"
+  "session_root": "/abs/path/data/workspaces/ws_000001"
 }
 ```
 
@@ -110,7 +137,7 @@ Response:
     "n_vars": 28671,
     "state": "resident",
     "in_memory": true,
-    "materialized_path": "/abs/path/data/sessions/sess_000001/objects/reclustered_subset_cortex.h5ad"
+    "materialized_path": "/abs/path/data/workspaces/ws_000001/objects/reclustered_subset_cortex.h5ad"
   },
   "artifacts": [],
   "metadata": {}
@@ -260,17 +287,49 @@ Enables or disables one bundle:
 
 ### `POST /api/sessions`
 
-Creates a new session and bootstraps one root object through the Python runtime.
+Compatibility alias for creating a new workspace plus its first conversation. Returns a `SessionSnapshot`.
+
+### `POST /api/workspaces`
+
+Creates a new workspace and its first conversation. Returns a `SessionSnapshot`.
+
+### `GET /api/workspaces`
+
+Lists known workspaces:
+
+- `workspaces`
+
+Each item is a lightweight `Workspace` summary used by the left sidebar workspace switcher.
+
+### `GET /api/workspaces/{id}`
+
+Returns the workspace snapshot:
+
+- `workspace`
+- `conversations`
+- `objects`
+- `artifacts`
+
+### `POST /api/workspaces/{id}/conversations`
+
+Creates another conversation under the same workspace and returns that conversation's `SessionSnapshot`.
 
 ### `GET /api/sessions/{id}`
 
 Returns the session snapshot:
 
 - `session`
+- `workspace`
 - `objects`
 - `jobs`
 - `artifacts`
 - `messages`
+
+Scoping rules:
+
+- `objects` and `artifacts` are shared at workspace scope
+- `jobs` and `messages` are only for the current conversation
+- `workspace` carries the shared active object and dataset lineage context
 
 ### `POST /api/messages`
 
@@ -304,6 +363,6 @@ SSE stream with:
 - `job_updated`
   emits the current job payload, including `plan`, `steps`, and `checkpoints`
 - `session_updated`
-  emits the full snapshot, including messages and newly created artifacts
+  emits the full session snapshot, including conversation-local messages plus workspace-visible objects and artifacts
 
 There is no separate `message_added` event today; new assistant messages are observed through `session_updated`.

@@ -169,4 +169,4 @@ Web UI
 - 只有 `wired` skills 会进入执行链
 - `planned` 只是 registry 占位，不会被正常规划执行
 - planner preview 只构造上下文，不执行 runtime
-- job 仍然是内存态，尚未做 SQLite 持久化
+- 状态现在会落到 `data/state/store.db`，底层持久化改成 SQLite

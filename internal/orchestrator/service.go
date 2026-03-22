@@ -30,6 +30,7 @@ type Service struct {
 type PlanningRequest struct {
 	Message         string               `json:"message"`
 	Session         *models.Session      `json:"session,omitempty"`
+	Workspace       *models.Workspace    `json:"workspace,omitempty"`
 	ActiveObject    *models.ObjectMeta   `json:"active_object,omitempty"`
 	Objects         []*models.ObjectMeta `json:"objects,omitempty"`
 	RecentMessages  []*models.Message    `json:"recent_messages,omitempty"`
@@ -201,25 +202,65 @@ func (s *Service) GetSnapshot(sessionID string) (*models.SessionSnapshot, error)
 	return s.store.Snapshot(sessionID)
 }
 
+func (s *Service) GetWorkspaceSnapshot(workspaceID string) (*models.WorkspaceSnapshot, error) {
+	return s.store.WorkspaceSnapshot(workspaceID)
+}
+
+func (s *Service) ListWorkspaces() *models.WorkspaceList {
+	return &models.WorkspaceList{
+		Workspaces: s.store.ListWorkspaces(),
+	}
+}
+
+func (s *Service) CreateConversation(_ context.Context, workspaceID, label string) (*models.SessionSnapshot, error) {
+	workspaceRecord, ok := s.store.GetWorkspace(workspaceID)
+	if !ok {
+		return nil, fmt.Errorf("未找到 workspace %q", workspaceID)
+	}
+	if label == "" {
+		label = workspaceRecord.Label + " 对话"
+	}
+
+	sessionRecord, err := s.store.CreateConversation(workspaceID, label)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	workspaceRecord.LastAccessedAt = now
+	workspaceRecord.UpdatedAt = now
+	s.store.SaveWorkspace(workspaceRecord)
+
+	return s.store.Snapshot(sessionRecord.ID)
+}
+
 func (s *Service) CreateSession(ctx context.Context, label string) (*models.SessionSnapshot, error) {
 	if label == "" {
 		label = "植物单细胞分析会话"
 	}
 
 	sessionRecord := s.store.CreateSession(label)
-	sessionRoot := s.sessionRoot(sessionRecord.ID)
-	if err := os.MkdirAll(filepath.Join(sessionRoot, "artifacts"), 0o755); err != nil {
+	if sessionRecord == nil {
+		return nil, fmt.Errorf("创建会话失败")
+	}
+	workspaceRecord, ok := s.store.GetWorkspace(sessionRecord.WorkspaceID)
+	if !ok {
+		return nil, fmt.Errorf("未找到 workspace %q", sessionRecord.WorkspaceID)
+	}
+
+	workspaceRoot := s.workspaceRoot(sessionRecord.WorkspaceID)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "artifacts"), 0o755); err != nil {
 		return nil, fmt.Errorf("create artifacts directory: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Join(sessionRoot, "objects"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "objects"), 0o755); err != nil {
 		return nil, fmt.Errorf("create objects directory: %w", err)
 	}
 
 	response, err := s.runtime.InitSession(ctx, runtime.InitSessionRequest{
 		SessionID:   sessionRecord.ID,
-		DatasetID:   sessionRecord.DatasetID,
+		DatasetID:   workspaceRecord.DatasetID,
 		Label:       label,
-		SessionRoot: sessionRoot,
+		SessionRoot: workspaceRoot,
 	})
 	if err != nil {
 		return nil, err
@@ -228,8 +269,9 @@ func (s *Service) CreateSession(ctx context.Context, label string) (*models.Sess
 	now := time.Now().UTC()
 	rootObject := &models.ObjectMeta{
 		ID:               s.store.NextID("obj"),
+		WorkspaceID:      workspaceRecord.ID,
 		SessionID:        sessionRecord.ID,
-		DatasetID:        sessionRecord.DatasetID,
+		DatasetID:        workspaceRecord.DatasetID,
 		Kind:             response.Object.Kind,
 		Label:            response.Object.Label,
 		BackendRef:       response.Object.BackendRef,
@@ -245,6 +287,12 @@ func (s *Service) CreateSession(ctx context.Context, label string) (*models.Sess
 	}
 	s.store.SaveObject(rootObject)
 
+	workspaceRecord.ActiveObjectID = rootObject.ID
+	workspaceRecord.UpdatedAt = now
+	workspaceRecord.LastAccessedAt = now
+	s.store.SaveWorkspace(workspaceRecord)
+
+	sessionRecord.DatasetID = workspaceRecord.DatasetID
 	sessionRecord.ActiveObjectID = rootObject.ID
 	sessionRecord.UpdatedAt = now
 	sessionRecord.LastAccessedAt = now
@@ -267,14 +315,18 @@ func (s *Service) UploadH5AD(ctx context.Context, sessionID, filename string, co
 	if !ok {
 		return nil, nil, fmt.Errorf("未找到会话 %q", sessionID)
 	}
+	workspaceRecord, ok := s.store.GetWorkspace(sessionRecord.WorkspaceID)
+	if !ok {
+		return nil, nil, fmt.Errorf("未找到 workspace %q", sessionRecord.WorkspaceID)
+	}
 
 	safeName, err := sanitizeUploadName(filename)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	sessionRoot := s.sessionRoot(sessionID)
-	objectPath := filepath.Join(sessionRoot, "objects", safeName)
+	workspaceRoot := s.workspaceRoot(sessionRecord.WorkspaceID)
+	objectPath := filepath.Join(workspaceRoot, "objects", safeName)
 	if err := os.MkdirAll(filepath.Dir(objectPath), 0o755); err != nil {
 		return nil, nil, fmt.Errorf("create object directory: %w", err)
 	}
@@ -304,6 +356,7 @@ func (s *Service) UploadH5AD(ctx context.Context, sessionID, filename string, co
 	datasetID := s.store.NextID("ds")
 	objectRecord := &models.ObjectMeta{
 		ID:               s.store.NextID("obj"),
+		WorkspaceID:      workspaceRecord.ID,
 		SessionID:        sessionID,
 		DatasetID:        datasetID,
 		Kind:             runtimeResponse.Object.Kind,
@@ -320,6 +373,12 @@ func (s *Service) UploadH5AD(ctx context.Context, sessionID, filename string, co
 		LastAccessedAt:   now,
 	}
 	s.store.SaveObject(objectRecord)
+
+	workspaceRecord.DatasetID = datasetID
+	workspaceRecord.ActiveObjectID = objectRecord.ID
+	workspaceRecord.UpdatedAt = now
+	workspaceRecord.LastAccessedAt = now
+	s.store.SaveWorkspace(workspaceRecord)
 
 	sessionRecord.DatasetID = datasetID
 	sessionRecord.ActiveObjectID = objectRecord.ID
@@ -360,11 +419,12 @@ func (s *Service) SubmitMessage(ctx context.Context, sessionID, content string) 
 	s.store.AddMessage(message)
 
 	job := &models.Job{
-		ID:        s.store.NextID("job"),
-		SessionID: sessionID,
-		MessageID: message.ID,
-		Status:    models.JobQueued,
-		CreatedAt: now,
+		ID:          s.store.NextID("job"),
+		WorkspaceID: sessionRecord.WorkspaceID,
+		SessionID:   sessionID,
+		MessageID:   message.ID,
+		Status:      models.JobQueued,
+		CreatedAt:   now,
 	}
 	s.store.SaveJob(job)
 
@@ -390,6 +450,11 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 	}
 	sessionRecord, ok := s.store.GetSession(sessionID)
 	if !ok {
+		return
+	}
+	workspaceRecord, ok := s.store.GetWorkspace(sessionRecord.WorkspaceID)
+	if !ok {
+		s.failJob(sessionID, jobID, fmt.Errorf("未找到 workspace %q", sessionRecord.WorkspaceID))
 		return
 	}
 
@@ -468,7 +533,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 			Skill:            step.Skill,
 			TargetBackendRef: backendRef(targetObject),
 			Params:           step.Params,
-			SessionRoot:      s.sessionRoot(sessionID),
+			SessionRoot:      s.workspaceRoot(sessionRecord.WorkspaceID),
 		})
 		if err != nil {
 			stepResult.Status = models.JobFailed
@@ -485,8 +550,9 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		if response.Object != nil {
 			newObject := &models.ObjectMeta{
 				ID:               s.store.NextID("obj"),
+				WorkspaceID:      sessionRecord.WorkspaceID,
 				SessionID:        sessionID,
-				DatasetID:        sessionRecord.DatasetID,
+				DatasetID:        workspaceRecord.DatasetID,
 				ParentID:         objectID(targetObject),
 				Kind:             response.Object.Kind,
 				Label:            response.Object.Label,
@@ -506,6 +572,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 			prevObjectID = newObject.ID
 			activeObjectID = newObject.ID
 			sessionRecord.ActiveObjectID = newObject.ID
+			workspaceRecord.ActiveObjectID = newObject.ID
 		}
 
 		artifactTargetID := activeObjectID
@@ -517,6 +584,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		for _, artifact := range response.Artifacts {
 			record := &models.Artifact{
 				ID:          s.store.NextID("artifact"),
+				WorkspaceID: sessionRecord.WorkspaceID,
 				SessionID:   sessionID,
 				ObjectID:    artifactTargetID,
 				JobID:       jobID,
@@ -543,6 +611,9 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		sessionRecord.UpdatedAt = finishedAt
 		sessionRecord.LastAccessedAt = finishedAt
 		s.store.SaveSession(sessionRecord)
+		workspaceRecord.UpdatedAt = finishedAt
+		workspaceRecord.LastAccessedAt = finishedAt
+		s.store.SaveWorkspace(workspaceRecord)
 
 		evaluation, evalErr := s.evaluateCompletion(ctx, sessionRecord, job, message)
 		jobCompleted := false
@@ -764,13 +835,24 @@ func (s *Service) failJob(sessionID, jobID string, err error) {
 }
 
 func (s *Service) resolveTargetObject(sessionRecord *models.Session, prevObjectID, token string) (*models.ObjectMeta, error) {
+	requireInWorkspace := func(objectID string) (*models.ObjectMeta, error) {
+		object, err := s.getRequiredObject(objectID)
+		if err != nil {
+			return nil, err
+		}
+		if object.WorkspaceID != "" && object.WorkspaceID != sessionRecord.WorkspaceID {
+			return nil, fmt.Errorf("对象 %q 不属于当前 workspace", objectID)
+		}
+		return object, nil
+	}
+
 	switch token {
 	case "", "$active":
-		return s.getRequiredObject(sessionRecord.ActiveObjectID)
+		return requireInWorkspace(sessionRecord.ActiveObjectID)
 	case "$prev":
-		return s.getRequiredObject(prevObjectID)
+		return requireInWorkspace(prevObjectID)
 	default:
-		return s.getRequiredObject(token)
+		return requireInWorkspace(token)
 	}
 }
 
@@ -788,10 +870,11 @@ func (s *Service) publishJob(sessionID, jobID string) {
 		return
 	}
 	s.store.Publish(sessionID, models.Event{
-		Type:      "job_updated",
-		SessionID: sessionID,
-		Timestamp: time.Now().UTC(),
-		Data:      job,
+		Type:        "job_updated",
+		SessionID:   sessionID,
+		WorkspaceID: job.WorkspaceID,
+		Timestamp:   time.Now().UTC(),
+		Data:        job,
 	})
 }
 
@@ -801,15 +884,16 @@ func (s *Service) publishSnapshot(sessionID string) {
 		return
 	}
 	s.store.Publish(sessionID, models.Event{
-		Type:      "session_updated",
-		SessionID: sessionID,
-		Timestamp: time.Now().UTC(),
-		Data:      snapshot,
+		Type:        "session_updated",
+		SessionID:   sessionID,
+		WorkspaceID: snapshot.Workspace.ID,
+		Timestamp:   time.Now().UTC(),
+		Data:        snapshot,
 	})
 }
 
-func (s *Service) sessionRoot(sessionID string) string {
-	return filepath.Join(s.dataRoot, "sessions", sessionID)
+func (s *Service) workspaceRoot(workspaceID string) string {
+	return filepath.Join(s.dataRoot, "workspaces", workspaceID)
 }
 
 func (s *Service) pathToURL(path string) string {
@@ -868,7 +952,7 @@ func (s *Service) buildPlanningRequest(sessionRecord *models.Session, message st
 
 	var activeObject *models.ObjectMeta
 	for _, object := range snapshot.Objects {
-		if object.ID == sessionRecord.ActiveObjectID {
+		if object.ID == snapshot.Session.ActiveObjectID {
 			activeObject = object
 			break
 		}
@@ -877,6 +961,7 @@ func (s *Service) buildPlanningRequest(sessionRecord *models.Session, message st
 	return PlanningRequest{
 		Message:         message,
 		Session:         snapshot.Session,
+		Workspace:       snapshot.Workspace,
 		ActiveObject:    activeObject,
 		Objects:         snapshot.Objects,
 		RecentMessages:  trimRecentMessages(snapshot.Messages, message, 6),
@@ -905,6 +990,7 @@ func (s *Service) buildEvaluationRequest(sessionRecord *models.Session, message 
 	return EvaluationRequest{
 		Message:         request.Message,
 		Session:         request.Session,
+		Workspace:       request.Workspace,
 		ActiveObject:    request.ActiveObject,
 		Objects:         request.Objects,
 		RecentMessages:  request.RecentMessages,

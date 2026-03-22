@@ -30,6 +30,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/skills", h.handleSkills)
 	mux.HandleFunc("/api/plugins", h.handlePlugins)
 	mux.HandleFunc("/api/plugins/", h.handlePluginRoutes)
+	mux.HandleFunc("/api/workspaces", h.handleWorkspaces)
+	mux.HandleFunc("/api/workspaces/", h.handleWorkspaceRoutes)
 	mux.HandleFunc("/api/sessions", h.handleSessions)
 	mux.HandleFunc("/api/sessions/", h.handleSessionRoutes)
 	mux.HandleFunc("/api/messages", h.handleMessages)
@@ -244,6 +246,56 @@ func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, snapshot)
 }
 
+func (h *Handler) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, h.service.ListWorkspaces())
+	case http.MethodPost:
+		var payload struct {
+			Label string `json:"label"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil && err.Error() != "EOF" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid workspace payload"})
+			return
+		}
+
+		snapshot, err := h.service.CreateSession(r.Context(), payload.Label)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, snapshot)
+	default:
+		writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
+	}
+}
+
+func (h *Handler) handleWorkspaceRoutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/workspaces/")
+	if strings.HasSuffix(path, "/conversations") {
+		workspaceID := strings.TrimSuffix(path, "/conversations")
+		workspaceID = strings.TrimSuffix(workspaceID, "/")
+		h.handleCreateConversation(w, r, workspaceID)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	workspaceID := strings.Trim(path, "/")
+	workspaceSnapshot, err := h.service.GetWorkspaceSnapshot(workspaceID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, workspaceSnapshot)
+	return
+
+}
+
 func (h *Handler) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 	if strings.HasSuffix(path, "/events") {
@@ -277,6 +329,29 @@ func (h *Handler) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (h *Handler) handleCreateConversation(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	var payload struct {
+		Label string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil && err.Error() != "EOF" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid conversation payload"})
+		return
+	}
+
+	snapshot, err := h.service.CreateConversation(r.Context(), workspaceID, payload.Label)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, snapshot)
 }
 
 func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request, sessionID string) {

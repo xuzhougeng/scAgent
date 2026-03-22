@@ -5,8 +5,9 @@
 `scAgent` 目前是一个面向单细胞分析的交互式控制台：
 
 - 前端是轻量、WebView 友好的静态页面
-- Go 负责 session、对象树、job、planner、evaluator 和事件推送
+- Go 负责 workspace、conversation、对象树、job、planner、evaluator 和事件推送
 - Python 负责 `.h5ad` 解析、分析执行和插件 skill 运行
+- 控制平面状态会持久化到 `data/state/store.db`
 
 ## 页面里会看到什么
 
@@ -14,8 +15,8 @@
 
 1. 系统状态
    显示当前模式、规划器、运行时健康、可执行技能和环境检查。
-2. 对象与会话概览
-   显示当前 session、对象数量、任务数量和 artifact 数量。
+2. Workspace 与对话概览
+   左侧会显示当前 workspace、同 workspace 下的对话列表，以及共享对象 / artifact 的概览。
 3. 聊天与任务卡
    用户消息会触发一个后台 job，任务卡会展示计划、执行检查点、步骤结果和文件产物。
 4. 帮助与插件入口
@@ -30,6 +31,15 @@
 5. 先看系统自动给出的数据评估
 6. 再继续做 UMAP、marker、subset、subcluster 或导出操作
 7. 在任务卡里观察执行检查点和结果文件
+
+## Workspace 和对话怎么理解
+
+- 一个 `workspace` 对应一份共享分析空间
+- 同一个 workspace 下可以开多个对话
+- 对象树和 artifact 在 workspace 内共享
+- job 和消息历史只属于当前对话
+
+这适合把“同一份数据的不同分析线程”拆到多个对话里处理，而不必重复上传数据。
 
 ## 上传后系统会自动告诉你什么
 
@@ -61,6 +71,19 @@
   生成的图、表和导出文件。
 
 这意味着即使中间某一步耗时很长，前端也能通过 SSE 持续看到 job 的最新状态，而不是让模型一直阻塞等待。
+
+## 状态持久化和当前边界
+
+当前服务会把控制平面状态写到 `data/state/store.db`，因此：
+
+- 浏览器刷新后可以恢复上次的 workspace / 对话
+- Go 服务重启后，workspace、对话、对象元数据、job、artifact、message 仍然存在
+
+但目前还有一个边界需要注意：
+
+- SQLite 持久化的是元数据，不是 Python 运行时内存
+- 如果 Python runtime 也重启，已有对象的 `backend_ref` 不会自动重建
+- `pin / evict / reload` 这类完整对象恢复策略还在后续 roadmap 里
 
 ## 典型案例
 
@@ -102,7 +125,7 @@
 1. 在当前对象上按 `leiden == 0` 做 subset
 2. 为子对象建立新的 object 节点
 3. 对子对象执行 recluster
-4. 在聊天结果卡、对象概览和 artifact 区里展示新的对象和图表
+4. 在聊天结果卡、workspace 共享对象区和 artifact 区里展示新的对象和图表
 
 ## Skill Hub 怎么用
 
