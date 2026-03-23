@@ -62,8 +62,8 @@ func TestLLMEvaluatorBuildRequestIncludesOnlyExplicitImageInputs(t *testing.T) {
 
 	_, err = evaluator.Evaluate(context.Background(), EvaluationRequest{
 		Message: "这个请求完成了吗",
-		Session: &models.Session{ID: "sess_1", ActiveObjectID: "obj_1"},
-		ActiveObject: &models.ObjectMeta{
+		Session: &models.Session{ID: "sess_1", FocusObjectID: "obj_1"},
+		FocusObject: &models.ObjectMeta{
 			ID:    "obj_1",
 			Label: "pbmc3k",
 			Kind:  models.ObjectFilteredDataset,

@@ -146,17 +146,17 @@ async function startApp() {
 
   function syncSnapshot(snapshot) {
     const previousWorkspaceId = appState.workspaceId;
-    const previousActiveObjectId = appState.activeObjectId;
+    const previousFocusObjectId = appState.focusObjectId;
     appState.snapshot = snapshot;
     appState.sessionId = snapshot?.session?.id || null;
     appState.workspaceId = snapshot?.workspace?.id || snapshot?.session?.workspace_id || null;
-    appState.activeObjectId = snapshot?.session?.active_object_id || null;
-    const previousDefaultResourceKey = previousActiveObjectId ? `object:${previousActiveObjectId}` : null;
+    appState.focusObjectId = snapshot?.session?.focus_object_id || null;
+    const previousDefaultResourceKey = previousFocusObjectId ? `object:${previousFocusObjectId}` : null;
     if (previousWorkspaceId && appState.workspaceId !== previousWorkspaceId) {
       appState.selectedResourceKey = null;
     }
     if (!appState.selectedResourceKey || appState.selectedResourceKey === previousDefaultResourceKey) {
-      appState.selectedResourceKey = appState.activeObjectId ? `object:${appState.activeObjectId}` : null;
+      appState.selectedResourceKey = appState.focusObjectId ? `object:${appState.focusObjectId}` : null;
     }
     if (
       appState.composerEditJobId &&
@@ -802,7 +802,7 @@ async function startApp() {
           body: formData,
         });
         syncSnapshot(response.snapshot);
-        appState.activeObjectId = response.object.id;
+        appState.focusObjectId = response.object.id;
         appState.selectedResourceKey = `object:${response.object.id}`;
         status.textContent = `${file.name} 已作为 ${response.object.label} 附加到当前 workspace。`;
         input.value = "";

@@ -42,7 +42,7 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 							"content": [
 								{
 									"type": "output_text",
-									"text": "{\"steps\":[{\"skill\":\"inspect_dataset\",\"target_object_id\":\"$active\",\"params\":{},\"memory_refs\":[\"focus.active_object_id\"]}]}"
+									"text": "{\"steps\":[{\"skill\":\"inspect_dataset\",\"target_object_id\":\"$focus\",\"params\":{},\"memory_refs\":[\"focus.focus_object_id\"]}]}"
 								}
 							]
 						}
@@ -66,7 +66,7 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 	plan, err := planner.Plan(context.Background(), PlanningRequest{
 		Message: "Inspect the dataset",
 		Session: &models.Session{ID: "sess_123"},
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			ID:    "obj_1",
 			Label: "pbmc3k",
 			Kind:  models.ObjectRawDataset,
@@ -109,8 +109,8 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 		},
 		WorkingMemory: &models.WorkingMemory{
 			Focus: &models.WorkingMemoryFocus{
-				ActiveObjectID:        "obj_1",
-				ActiveObjectLabel:     "pbmc3k",
+				FocusObjectID:         "obj_1",
+				FocusObjectLabel:      "pbmc3k",
 				LastArtifactID:        "art_1",
 				LastArtifactTitle:     "pbmc3k UMAP",
 				LastOutputObjectID:    "obj_1",
@@ -142,7 +142,7 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 	if len(plan.Steps) != 1 || plan.Steps[0].Skill != "inspect_dataset" {
 		t.Fatalf("unexpected plan: %+v", plan)
 	}
-	if len(plan.Steps[0].MemoryRefs) != 1 || plan.Steps[0].MemoryRefs[0] != "focus.active_object_id" {
+	if len(plan.Steps[0].MemoryRefs) != 1 || plan.Steps[0].MemoryRefs[0] != "focus.focus_object_id" {
 		t.Fatalf("planner response should preserve memory refs, got %+v", plan.Steps[0].MemoryRefs)
 	}
 
@@ -317,10 +317,10 @@ func TestLLMPlannerBuildRequestUsesArtifactSummariesInsteadOfImageBytes(t *testi
 	payload, err := json.Marshal(planner.buildRequest(PlanningRequest{
 		Message: "导出当前对象为 h5ad",
 		Session: &models.Session{
-			ID:             "sess_123",
-			ActiveObjectID: "obj_1",
+			ID:            "sess_123",
+			FocusObjectID: "obj_1",
 		},
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			ID:    "obj_1",
 			Label: "pbmc3k",
 			Kind:  models.ObjectFilteredDataset,

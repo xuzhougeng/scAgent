@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +21,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "reset" {
+		if err := runResetCommand(os.Args[2:], os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	runtimeURL := flag.String("runtime-url", "http://127.0.0.1:8081", "Python runtime base URL")
 	skillsPath := flag.String("skills-path", "skills/registry.json", "Path to skill registry JSON")
@@ -203,4 +213,41 @@ func weixinStatus(enabled bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+func runResetCommand(args []string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("reset", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+
+	dataDir := flags.String("data-dir", envOrDefault("SCAGENT_DATA_DIR", "data"), "Directory used for session artifacts")
+	resetAll := flags.Bool("all", false, "Remove persisted scAgent state and workspace data")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if !*resetAll {
+		return fmt.Errorf("reset currently requires --all")
+	}
+	return resetAllData(*dataDir, stdout)
+}
+
+func resetAllData(dataDir string, stdout io.Writer) error {
+	dataDir = strings.TrimSpace(dataDir)
+	if dataDir == "" {
+		return fmt.Errorf("data dir is required")
+	}
+
+	statePath := filepath.Join(dataDir, "state", "store.db")
+	workspacesPath := filepath.Join(dataDir, "workspaces")
+
+	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove state db: %w", err)
+	}
+	if err := os.RemoveAll(workspacesPath); err != nil {
+		return fmt.Errorf("remove workspaces: %w", err)
+	}
+
+	if stdout != nil {
+		fmt.Fprintf(stdout, "reset complete\nstate_db=%s\nworkspaces=%s\npreserved=%s\n", statePath, workspacesPath, filepath.Join(dataDir, "weixin-bridge"))
+	}
+	return nil
 }

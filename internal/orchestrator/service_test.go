@@ -45,7 +45,7 @@ func (p *unhealthyLLMPlanner) Plan(context.Context, PlanningRequest) (models.Pla
 	p.planCalls++
 	return models.Plan{
 		Steps: []models.PlanStep{
-			{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active"},
+			{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$focus"},
 		},
 	}, nil
 }
@@ -520,7 +520,7 @@ func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
 
 	sessionRecord := store.CreateSession("test")
 	now := time.Now().UTC()
-	sessionRecord.ActiveObjectID = "obj_active"
+	sessionRecord.FocusObjectID = "obj_active"
 	store.SaveSession(sessionRecord)
 
 	store.SaveObject(&models.ObjectMeta{
@@ -580,8 +580,8 @@ func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
 		t.Fatalf("build planning request: %v", err)
 	}
 
-	if request.ActiveObject == nil || request.ActiveObject.ID != "obj_active" {
-		t.Fatalf("expected active object in planning request, got %+v", request.ActiveObject)
+	if request.FocusObject == nil || request.FocusObject.ID != "obj_active" {
+		t.Fatalf("expected focus object in planning request, got %+v", request.FocusObject)
 	}
 	if len(request.RecentMessages) != 2 {
 		t.Fatalf("expected previous messages without current one, got %d", len(request.RecentMessages))
@@ -598,7 +598,7 @@ func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
 	if request.WorkingMemory == nil {
 		t.Fatalf("expected working memory in planning request")
 	}
-	if request.WorkingMemory.Focus == nil || request.WorkingMemory.Focus.ActiveObjectID != "obj_active" {
+	if request.WorkingMemory.Focus == nil || request.WorkingMemory.Focus.FocusObjectID != "obj_active" {
 		t.Fatalf("expected working memory focus on obj_active, got %+v", request.WorkingMemory.Focus)
 	}
 }
@@ -613,14 +613,14 @@ func TestSubmitMessageAnswersSimpleDatasetQuestionWithoutJob(t *testing.T) {
 
 	sessionRecord := store.CreateSession("test")
 	now := time.Now().UTC()
-	sessionRecord.ActiveObjectID = "obj_active"
+	sessionRecord.FocusObjectID = "obj_active"
 	store.SaveSession(sessionRecord)
 
 	workspaceRecord, ok := store.GetWorkspace(sessionRecord.WorkspaceID)
 	if !ok {
 		t.Fatalf("expected workspace to exist")
 	}
-	workspaceRecord.ActiveObjectID = "obj_active"
+	workspaceRecord.FocusObjectID = "obj_active"
 	store.SaveWorkspace(workspaceRecord)
 
 	store.SaveObject(&models.ObjectMeta{
@@ -733,7 +733,7 @@ func TestSubmitMessageRejectsConcurrentActiveJob(t *testing.T) {
 					{
 						ID:             "step_1",
 						Skill:          "inspect_dataset",
-						TargetObjectID: "$active",
+						TargetObjectID: "$focus",
 					},
 				},
 			},
@@ -743,14 +743,14 @@ func TestSubmitMessageRejectsConcurrentActiveJob(t *testing.T) {
 
 	sessionRecord := store.CreateSession("test")
 	now := time.Now().UTC()
-	sessionRecord.ActiveObjectID = "obj_active"
+	sessionRecord.FocusObjectID = "obj_active"
 	store.SaveSession(sessionRecord)
 
 	workspaceRecord, ok := store.GetWorkspace(sessionRecord.WorkspaceID)
 	if !ok {
 		t.Fatalf("expected workspace to exist")
 	}
-	workspaceRecord.ActiveObjectID = "obj_active"
+	workspaceRecord.FocusObjectID = "obj_active"
 	store.SaveWorkspace(workspaceRecord)
 
 	store.SaveObject(&models.ObjectMeta{
@@ -824,7 +824,7 @@ func TestCancelJobAddsCanceledAssistantMessage(t *testing.T) {
 					{
 						ID:             "step_1",
 						Skill:          "inspect_dataset",
-						TargetObjectID: "$active",
+						TargetObjectID: "$focus",
 					},
 				},
 			},
@@ -834,14 +834,14 @@ func TestCancelJobAddsCanceledAssistantMessage(t *testing.T) {
 
 	sessionRecord := store.CreateSession("test")
 	now := time.Now().UTC()
-	sessionRecord.ActiveObjectID = "obj_active"
+	sessionRecord.FocusObjectID = "obj_active"
 	store.SaveSession(sessionRecord)
 
 	workspaceRecord, ok := store.GetWorkspace(sessionRecord.WorkspaceID)
 	if !ok {
 		t.Fatalf("expected workspace to exist")
 	}
-	workspaceRecord.ActiveObjectID = "obj_active"
+	workspaceRecord.FocusObjectID = "obj_active"
 	store.SaveWorkspace(workspaceRecord)
 
 	store.SaveObject(&models.ObjectMeta{
@@ -913,7 +913,7 @@ func TestBuildExecutablePlanInheritsMissingLegendFromRecentPlotContext(t *testin
 					{
 						ID:             "step_1",
 						Skill:          "plot_umap",
-						TargetObjectID: "$active",
+						TargetObjectID: "$focus",
 						Params: map[string]any{
 							"color_by": "louvain",
 						},
@@ -966,7 +966,7 @@ func TestBuildExecutablePlanKeepsPlannerLegendChoiceWhenProvided(t *testing.T) {
 					{
 						ID:             "step_1",
 						Skill:          "plot_umap",
-						TargetObjectID: "$active",
+						TargetObjectID: "$focus",
 						Params: map[string]any{
 							"color_by":   "louvain",
 							"legend_loc": "right",
@@ -1015,7 +1015,7 @@ func TestRunJobReplansRemainingStepsFromCurrentState(t *testing.T) {
 	store := session.NewStore()
 	now := time.Now().UTC()
 	sessionRecord := store.CreateSession("test")
-	sessionRecord.ActiveObjectID = "obj_active"
+	sessionRecord.FocusObjectID = "obj_active"
 	store.SaveSession(sessionRecord)
 	store.SaveObject(&models.ObjectMeta{
 		ID:             "obj_active",
@@ -1035,25 +1035,25 @@ func TestRunJobReplansRemainingStepsFromCurrentState(t *testing.T) {
 		plans: []models.Plan{
 			{
 				Steps: []models.PlanStep{
-					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active", Params: map[string]any{"target_sum": 1e4}},
+					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$focus", Params: map[string]any{"target_sum": 1e4}},
 				},
 			},
 			{
 				Steps: []models.PlanStep{
-					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active", Params: map[string]any{"target_sum": 1e4}},
+					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$focus", Params: map[string]any{"target_sum": 1e4}},
 					{ID: "step_2", Skill: "log1p_transform", TargetObjectID: "$prev"},
 				},
 			},
 			{
 				Steps: []models.PlanStep{
-					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active", Params: map[string]any{"target_sum": 1e4}},
+					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$focus", Params: map[string]any{"target_sum": 1e4}},
 					{ID: "step_2", Skill: "log1p_transform", TargetObjectID: "$prev"},
 					{ID: "step_3", Skill: "run_pca", TargetObjectID: "$prev"},
 				},
 			},
 			{
 				Steps: []models.PlanStep{
-					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active", Params: map[string]any{"target_sum": 1e4}},
+					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$focus", Params: map[string]any{"target_sum": 1e4}},
 					{ID: "step_2", Skill: "log1p_transform", TargetObjectID: "$prev"},
 					{ID: "step_3", Skill: "run_pca", TargetObjectID: "$prev"},
 				},
@@ -1113,7 +1113,7 @@ func TestRunJobStopsWhenEvaluatorMarksRequestComplete(t *testing.T) {
 	store := session.NewStore()
 	now := time.Now().UTC()
 	sessionRecord := store.CreateSession("test")
-	sessionRecord.ActiveObjectID = "obj_active"
+	sessionRecord.FocusObjectID = "obj_active"
 	store.SaveSession(sessionRecord)
 	store.SaveObject(&models.ObjectMeta{
 		ID:             "obj_active",
@@ -1133,12 +1133,12 @@ func TestRunJobStopsWhenEvaluatorMarksRequestComplete(t *testing.T) {
 		plans: []models.Plan{
 			{
 				Steps: []models.PlanStep{
-					{ID: "step_1", Skill: "assess_dataset", TargetObjectID: "$active"},
+					{ID: "step_1", Skill: "assess_dataset", TargetObjectID: "$focus"},
 				},
 			},
 			{
 				Steps: []models.PlanStep{
-					{ID: "step_1", Skill: "assess_dataset", TargetObjectID: "$active"},
+					{ID: "step_1", Skill: "assess_dataset", TargetObjectID: "$focus"},
 					{ID: "step_2", Skill: "normalize_total", TargetObjectID: "$prev"},
 				},
 			},
@@ -1186,7 +1186,7 @@ func TestRunJobRespondsFromStructuredEvidenceAfterInvestigation(t *testing.T) {
 	store := session.NewStore()
 	now := time.Now().UTC()
 	sessionRecord := store.CreateSession("test")
-	sessionRecord.ActiveObjectID = "obj_active"
+	sessionRecord.FocusObjectID = "obj_active"
 	store.SaveSession(sessionRecord)
 	store.SaveObject(&models.ObjectMeta{
 		ID:             "obj_active",
@@ -1211,7 +1211,7 @@ func TestRunJobRespondsFromStructuredEvidenceAfterInvestigation(t *testing.T) {
 					{
 						ID:             "step_1",
 						Skill:          "run_python_analysis",
-						TargetObjectID: "$active",
+						TargetObjectID: "$focus",
 						Params: map[string]any{
 							"code":            "result_value = int(adata.n_obs * adata.n_vars)",
 							"output_label":    "cell_gene_product",
@@ -1290,7 +1290,7 @@ func TestRunJobKeepsOriginalRemainingStepsWhenCheckpointReplanFails(t *testing.T
 	store := session.NewStore()
 	now := time.Now().UTC()
 	sessionRecord := store.CreateSession("test")
-	sessionRecord.ActiveObjectID = "obj_active"
+	sessionRecord.FocusObjectID = "obj_active"
 	store.SaveSession(sessionRecord)
 	store.SaveObject(&models.ObjectMeta{
 		ID:             "obj_active",
@@ -1310,7 +1310,7 @@ func TestRunJobKeepsOriginalRemainingStepsWhenCheckpointReplanFails(t *testing.T
 		plans: []models.Plan{
 			{
 				Steps: []models.PlanStep{
-					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active"},
+					{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$focus"},
 					{ID: "step_2", Skill: "log1p_transform", TargetObjectID: "$prev"},
 				},
 			},
@@ -1373,10 +1373,10 @@ func TestRunJobRehydratesSharedActiveObjectBeforeExecution(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected workspace to exist")
 	}
-	workspaceRecord.ActiveObjectID = sharedObject.ID
+	workspaceRecord.FocusObjectID = sharedObject.ID
 	store.SaveWorkspace(workspaceRecord)
 
-	seedSession.ActiveObjectID = sharedObject.ID
+	seedSession.FocusObjectID = sharedObject.ID
 	store.SaveSession(seedSession)
 
 	followupSession, err := store.CreateConversation(seedSession.WorkspaceID, "followup")
@@ -1390,7 +1390,7 @@ func TestRunJobRehydratesSharedActiveObjectBeforeExecution(t *testing.T) {
 		plans: []models.Plan{
 			{
 				Steps: []models.PlanStep{
-					{ID: "step_1", Skill: "inspect_dataset", TargetObjectID: "$active"},
+					{ID: "step_1", Skill: "inspect_dataset", TargetObjectID: "$focus"},
 				},
 			},
 		},
@@ -1433,7 +1433,7 @@ func TestRunJobFailsCleanlyWhenPlannerIsUnavailable(t *testing.T) {
 	store := session.NewStore()
 	now := time.Now().UTC()
 	sessionRecord := store.CreateSession("test")
-	sessionRecord.ActiveObjectID = "obj_active"
+	sessionRecord.FocusObjectID = "obj_active"
 	store.SaveSession(sessionRecord)
 	store.SaveObject(&models.ObjectMeta{
 		ID:             "obj_active",

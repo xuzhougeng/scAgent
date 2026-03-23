@@ -31,7 +31,7 @@ func TestLLMAnswererReturnsDirectAnswerFromSemanticDecision(t *testing.T) {
 							"content": [
 								{
 									"type": "output_text",
-									"text": "{\"decision\":\"direct_answer\",\"answer\":\"当前对象 pbmc3k 有 2638 个细胞。\",\"confidence\":\"high\",\"evidence\":[\"active_object.n_obs\"]}"
+									"text": "{\"decision\":\"direct_answer\",\"answer\":\"当前对象 pbmc3k 有 2638 个细胞。\",\"confidence\":\"high\",\"evidence\":[\"focus_object.n_obs\"]}"
 								}
 							]
 						}
@@ -53,7 +53,7 @@ func TestLLMAnswererReturnsDirectAnswerFromSemanticDecision(t *testing.T) {
 
 	answer, ok, err := answerer.BuildDirectAnswer(context.Background(), PlanningRequest{
 		Message: "Cell ENENN 有多少个呢",
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			ID:    "obj_1",
 			Label: "pbmc3k",
 			Kind:  models.ObjectRawDataset,
@@ -175,7 +175,7 @@ func TestLLMAnswererBuildRequestIncludesOnlyExplicitImageInputs(t *testing.T) {
 
 	_, _, err = answerer.BuildDirectAnswer(context.Background(), PlanningRequest{
 		Message: "解释这张图",
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			ID:    "obj_1",
 			Label: "pbmc3k",
 			Kind:  models.ObjectFilteredDataset,

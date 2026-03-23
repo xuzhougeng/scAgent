@@ -61,7 +61,7 @@
 
 目标：让对象切换、对象生命周期和结果持久化成为稳定后端能力。
 
-- [ ] `set_active_object` 做成真实后端能力
+- [ ] `set_focus_object` 做成真实后端能力
 - [ ] pin / evict / reload 策略
 - [x] SQLite 持久化 session / object / job / artifact
 
@@ -94,7 +94,7 @@
 
 如果没有对象控制和持久化，前面能力越多，状态管理越容易变乱。这部分是进入“可长期使用”阶段前必须补上的基础设施。
 
-- [ ] 实现 `set_active_object`
+- [ ] 实现 `set_focus_object`
 - [ ] 明确对象缓存与回收策略
 - [x] 引入 SQLite 持久化 session / object / job / artifact
 

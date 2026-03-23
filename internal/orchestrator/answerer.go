@@ -49,7 +49,9 @@ type ResponseComposeRequest struct {
 	Message         string                `json:"message"`
 	Session         *models.Session       `json:"session,omitempty"`
 	Workspace       *models.Workspace     `json:"workspace,omitempty"`
-	ActiveObject    *models.ObjectMeta    `json:"active_object,omitempty"`
+	FocusObject     *models.ObjectMeta    `json:"focus_object,omitempty"`
+	GlobalObject    *models.ObjectMeta    `json:"global_object,omitempty"`
+	RootObject      *models.ObjectMeta    `json:"root_object,omitempty"`
 	Objects         []*models.ObjectMeta  `json:"objects,omitempty"`
 	InputArtifacts  []*models.Artifact    `json:"input_artifacts,omitempty"`
 	RecentMessages  []*models.Message     `json:"recent_messages,omitempty"`
@@ -401,6 +403,9 @@ func (a *LLMAnswerer) instructions(requestPayload PlanningRequest) string {
 		"Decide whether the user's message can be answered immediately from the current session context without running any new analysis step.",
 		"Use full natural-language understanding. Do not rely on literal keyword matching or fixed templates.",
 		"Only choose decision=direct_answer when the answer is already grounded in the provided context and you are highly confident.",
+		"The resolved object roles are authoritative. When the user says 当前对象/这个对象/current object, treat focus_object as the primary source of truth.",
+		"Do not let stale working_memory, recent plots, or older artifacts override focus_object for current-object questions.",
+		"If focus_object already contains the exact scalar or field list needed to answer, such as n_obs, n_vars, label, obs_fields, or available analyses, answer directly with confidence=high.",
 		"If the request requires new computation, data inspection not already reflected in context, or the intent is ambiguous, choose decision=needs_execution.",
 		"The current user turn may include attached images; use them when deciding whether a direct visual answer is possible.",
 		"When decision=direct_answer, answer concisely in the user's language and do not mention internal fields, planning, or hidden state.",
@@ -416,7 +421,7 @@ func (a *LLMAnswerer) responseInstructions(requestPayload ResponseComposeRequest
 	lines := []string{
 		"You are the scAgent responder.",
 		"Your task is to produce the final user-facing answer after the investigation phase has collected evidence.",
-		"Base the answer on current_job facts, metadata, artifacts, the active object, and recent context.",
+		"Base the answer on current_job facts, metadata, artifacts, the resolved object roles (focus/global/root), and recent context.",
 		"If the current request includes attached images, use them as additional evidence when they are relevant to the answer.",
 		"Prefer concrete collected evidence such as structured facts, scalar results, tables, generated objects, and artifacts over generic step summaries.",
 		"If the investigation is still incomplete, say clearly what is still missing instead of pretending the answer is known.",
@@ -496,7 +501,9 @@ func formatResponseComposeContext(request ResponseComposeRequest) []string {
 		Message:         request.Message,
 		Session:         request.Session,
 		Workspace:       request.Workspace,
-		ActiveObject:    request.ActiveObject,
+		FocusObject:     request.FocusObject,
+		GlobalObject:    request.GlobalObject,
+		RootObject:      request.RootObject,
 		Objects:         request.Objects,
 		RecentMessages:  request.RecentMessages,
 		RecentJobs:      request.RecentJobs,

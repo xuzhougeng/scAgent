@@ -411,7 +411,7 @@ export function renderPlannerPreview() {
       title: "规划预览",
       body: `
         <div class="kv"><span>模式</span><span>${escapeHTML(formatPlannerMode(preview.planner_mode))}</span></div>
-        <div class="kv"><span>当前对象</span><span>${escapeHTML(preview.planning_request?.active_object?.label || "无")}</span></div>
+        <div class="kv"><span>当前对象</span><span>${escapeHTML(preview.planning_request?.focus_object?.label || "无")}</span></div>
         <div class="kv"><span>说明</span><span>${escapeHTML(preview.note || "无")}</span></div>
       `,
     }),
@@ -1709,7 +1709,7 @@ function appendObjectInspectorCards(blocks, object, { title } = {}) {
       title: title || object.label,
       body: `
         <div class="kv"><span>对象名称</span><span>${escapeHTML(object.label)}</span></div>
-        <div class="kv"><span>当前上下文</span><span>${escapeHTML(object.id === appState.activeObjectId ? "是" : "否")}</span></div>
+        <div class="kv"><span>当前上下文</span><span>${escapeHTML(object.id === appState.focusObjectId ? "是" : "否")}</span></div>
         <div class="kv"><span>对象 ID</span><span>${escapeHTML(object.id)}</span></div>
         <div class="kv"><span>类型</span><span>${escapeHTML(formatObjectKind(object.kind))}</span></div>
         <div class="kv"><span>父对象</span><span>${escapeHTML(object.parent_id || "无")}</span></div>
@@ -1799,7 +1799,7 @@ function renderWorkingMemoryMarkup(memory) {
     ${
       focus
         ? `
-          <div class="kv"><span>当前对象</span><span>${escapeHTML(focus.active_object_label || focus.active_object_id || "无")}</span></div>
+          <div class="kv"><span>当前对象</span><span>${escapeHTML(focus.focus_object_label || focus.focus_object_id || "无")}</span></div>
           <div class="kv"><span>最近输出对象</span><span>${escapeHTML(focus.last_output_object_label || focus.last_output_object_id || "无")}</span></div>
           <div class="kv"><span>最近结果</span><span>${escapeHTML(focus.last_artifact_title || focus.last_artifact_id || "无")}</span></div>
         `
@@ -2105,7 +2105,7 @@ function buildObjectFileEntry(object) {
     metaPrimary: `${formatObjectKind(object.kind)} · ${object.n_obs} 个细胞`,
     metaSecondary: `${formatObjectState(object.state)}${parent ? ` · 来自 ${parent.label}` : ""}`,
     createdAt: object.last_accessed_at || object.created_at || "",
-    isActiveContext: object.id === appState.activeObjectId,
+    isActiveContext: object.id === appState.focusObjectId,
     locationKey: normalizeResourceLocation(location),
     object,
   };
@@ -2171,8 +2171,8 @@ function selectedResourceKey() {
   if (appState.selectedResourceKey) {
     return appState.selectedResourceKey;
   }
-  if (appState.activeObjectId) {
-    return `object:${appState.activeObjectId}`;
+  if (appState.focusObjectId) {
+    return `object:${appState.focusObjectId}`;
   }
   return null;
 }
@@ -2215,5 +2215,5 @@ function normalizeResourceLocation(value) {
 }
 
 function activeObject() {
-  return findWorkspaceObject(appState.activeObjectId);
+  return findWorkspaceObject(appState.focusObjectId);
 }

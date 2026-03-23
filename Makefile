@@ -15,6 +15,4 @@ weixin-logout:
 	go run ./cmd/scagent -weixin-logout
 
 restore:
-	@echo "Resetting $(DATA_DIR)/state/store.db and $(DATA_DIR)/workspaces"
-	rm -f "$(DATA_DIR)/state/store.db"
-	rm -rf "$(DATA_DIR)/workspaces"
+	go run ./cmd/scagent reset --all --data-dir "$(DATA_DIR)"

@@ -22,7 +22,9 @@ type EvaluationRequest struct {
 	Message         string                `json:"message"`
 	Session         *models.Session       `json:"session,omitempty"`
 	Workspace       *models.Workspace     `json:"workspace,omitempty"`
-	ActiveObject    *models.ObjectMeta    `json:"active_object,omitempty"`
+	FocusObject     *models.ObjectMeta    `json:"focus_object,omitempty"`
+	GlobalObject    *models.ObjectMeta    `json:"global_object,omitempty"`
+	RootObject      *models.ObjectMeta    `json:"root_object,omitempty"`
 	Objects         []*models.ObjectMeta  `json:"objects,omitempty"`
 	InputArtifacts  []*models.Artifact    `json:"input_artifacts,omitempty"`
 	RecentMessages  []*models.Message     `json:"recent_messages,omitempty"`
@@ -106,7 +108,7 @@ func (e *FakeEvaluator) Evaluate(_ context.Context, request EvaluationRequest) (
 	case asksForAssessment(lower, request.Message):
 		return completionFromSkill(request.CurrentJob, "评估结果已返回，当前请求已完成。", "assess_dataset", "inspect_dataset"), nil
 	case asksForPreprocessing(lower, request.Message):
-		if objectIsAnalysisReady(request.ActiveObject) {
+		if objectIsAnalysisReady(request.FocusObject) {
 			return &CompletionEvaluation{
 				Completed: true,
 				Reason:    "当前对象已达到 analysis_ready，预处理目标已完成。",
@@ -365,7 +367,7 @@ func (e *LLMEvaluator) instructions(requestPayload EvaluationRequest) string {
 		"Decide whether the user's request has already been satisfied by the current state of the session.",
 		"Return only valid JSON matching the supplied schema.",
 		"Be conservative: completed=true only when the request objective is already satisfied and no further execution is needed.",
-		"Treat current_job, working_memory, the active object metadata, recent jobs, and artifacts as the source of truth.",
+		"Treat current_job, working_memory, resolved object roles (focus/global/root), recent jobs, and artifacts as the source of truth.",
 		"If the current request includes attached images, consider them part of the evidence when judging completion.",
 		"If the request is a long workflow and intermediate preprocessing has not yet reached the necessary state, return completed=false.",
 		"If the request asks for a concrete output such as a plot, marker table, subset object, export file, or assessment summary and that output already exists in the current job results, return completed=true.",
@@ -397,7 +399,9 @@ func formatEvaluationContext(request EvaluationRequest) []string {
 		Message:         request.Message,
 		Session:         request.Session,
 		Workspace:       request.Workspace,
-		ActiveObject:    request.ActiveObject,
+		FocusObject:     request.FocusObject,
+		GlobalObject:    request.GlobalObject,
+		RootObject:      request.RootObject,
 		Objects:         request.Objects,
 		InputArtifacts:  request.InputArtifacts,
 		RecentMessages:  request.RecentMessages,

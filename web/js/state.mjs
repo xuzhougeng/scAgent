@@ -1,7 +1,7 @@
 export const appState = {
   sessionId: null,
   workspaceId: null,
-  activeObjectId: null,
+  focusObjectId: null,
   selectedResourceKey: null,
   snapshot: null,
   workspaceSnapshot: null,

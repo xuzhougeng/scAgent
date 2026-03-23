@@ -132,7 +132,7 @@ func (s *Store) CreateConversation(workspaceID, label string) (*models.Session, 
 		WorkspaceID:    workspaceID,
 		Label:          label,
 		DatasetID:      workspace.DatasetID,
-		ActiveObjectID: workspace.ActiveObjectID,
+		FocusObjectID:  workspace.FocusObjectID,
 		Status:         models.SessionActive,
 		CreatedAt:      now,
 		UpdatedAt:      now,
@@ -287,8 +287,8 @@ func (s *Store) Snapshot(sessionID string) (*models.SessionSnapshot, error) {
 	sessionCopy := cloneSession(session)
 	workspaceCopy := cloneWorkspace(workspace)
 	sessionCopy.DatasetID = workspaceCopy.DatasetID
-	if sessionCopy.ActiveObjectID == "" {
-		sessionCopy.ActiveObjectID = workspaceCopy.ActiveObjectID
+	if sessionCopy.FocusObjectID == "" {
+		sessionCopy.FocusObjectID = workspaceCopy.FocusObjectID
 	}
 
 	objects := make([]*models.ObjectMeta, 0)

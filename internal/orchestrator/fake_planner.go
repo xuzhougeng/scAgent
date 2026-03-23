@@ -44,8 +44,8 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 	wantsLegend := strings.Contains(lower, "legend") || strings.Contains(request.Message, "图例")
 	wantsPlot := strings.Contains(lower, "plot") || strings.Contains(request.Message, "画") || strings.Contains(request.Message, "绘") || wantsLegend
 	wantsSubcluster := strings.Contains(lower, "subcluster") || strings.Contains(request.Message, "亚群")
-	activeHasUMAP := objectHasEmbedding(request.ActiveObject, "X_umap")
-	activeIsSubset := request.ActiveObject != nil && (request.ActiveObject.Kind == models.ObjectSubset || request.ActiveObject.Kind == models.ObjectReclustered)
+	focusHasUMAP := objectHasEmbedding(request.FocusObject, "X_umap")
+	focusIsSubset := request.FocusObject != nil && (request.FocusObject.Kind == models.ObjectSubset || request.FocusObject.Kind == models.ObjectReclustered)
 	recentPlotSkill := latestRecentPlotSkill(request)
 	wantsPlotFollowUp := isPlotFollowUpRequest(request, explicitPlotParams)
 	cellTypeValue := inferCellTypeValue(request, request.Message)
@@ -62,7 +62,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		)
 	}
 
-	if wantsSubcluster && activeIsSubset {
+	if wantsSubcluster && focusIsSubset {
 		steps = append(steps, models.PlanStep{
 			ID:             stepID(len(steps) + 1),
 			Skill:          "reanalyze_subset",
@@ -128,7 +128,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 	}
 
 	if strings.Contains(lower, "umap") || strings.Contains(request.Message, "UMAP") || strings.Contains(request.Message, "降维") || wantsLegend || (wantsPlotFollowUp && recentPlotSkill == "plot_umap") {
-		if !hasSkill(steps, "run_umap") && !hasSkill(steps, "prepare_umap") && !hasSkill(steps, "subcluster_from_global") && !hasSkill(steps, "reanalyze_subset") && ((!wantsPlot && !wantsPlotFollowUp) || !activeHasUMAP) {
+		if !hasSkill(steps, "run_umap") && !hasSkill(steps, "prepare_umap") && !hasSkill(steps, "subcluster_from_global") && !hasSkill(steps, "reanalyze_subset") && ((!wantsPlot && !wantsPlotFollowUp) || !focusHasUMAP) {
 			steps = append(steps, models.PlanStep{
 				ID:             stepID(len(steps) + 1),
 				Skill:          "run_umap",
@@ -174,7 +174,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		steps = append(steps, models.PlanStep{
 			ID:             "step_1",
 			Skill:          "assess_dataset",
-			TargetObjectID: "$active",
+			TargetObjectID: "$focus",
 		})
 	}
 
@@ -182,7 +182,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 		steps = append(steps, models.PlanStep{
 			ID:             "step_1",
 			Skill:          "inspect_dataset",
-			TargetObjectID: "$active",
+			TargetObjectID: "$focus",
 		})
 	}
 
@@ -204,7 +204,7 @@ func stepID(index int) string {
 
 func targetFromPrevious(steps []models.PlanStep) string {
 	if len(steps) == 0 {
-		return "$active"
+		return "$focus"
 	}
 	return "$prev"
 }
@@ -284,7 +284,7 @@ func latestRecentPlotSkill(request PlanningRequest) string {
 }
 
 func inferCellTypeValue(request PlanningRequest, message string) string {
-	for _, candidate := range candidateCellTypeValues(request.ActiveObject) {
+	for _, candidate := range candidateCellTypeValues(request.FocusObject) {
 		if strings.Contains(strings.ToLower(message), strings.ToLower(candidate)) {
 			return candidate
 		}

@@ -59,7 +59,7 @@ Go Orchestrator
   | 7. 立即返回 snapshot，前端开始订阅 SSE
   | 8. 后台 goroutine 将 job 置为 running
   | 9. buildPlanningRequest(
-  |      active_object
+  |      focus_object/global_object/root_object
   |      + recent_messages
   |      + recent_jobs
   |      + recent_artifacts

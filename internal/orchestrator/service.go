@@ -37,7 +37,9 @@ type PlanningRequest struct {
 	Message         string                `json:"message"`
 	Session         *models.Session       `json:"session,omitempty"`
 	Workspace       *models.Workspace     `json:"workspace,omitempty"`
-	ActiveObject    *models.ObjectMeta    `json:"active_object,omitempty"`
+	FocusObject     *models.ObjectMeta    `json:"focus_object,omitempty"`
+	GlobalObject    *models.ObjectMeta    `json:"global_object,omitempty"`
+	RootObject      *models.ObjectMeta    `json:"root_object,omitempty"`
 	Objects         []*models.ObjectMeta  `json:"objects,omitempty"`
 	InputArtifacts  []*models.Artifact    `json:"input_artifacts,omitempty"`
 	RecentMessages  []*models.Message     `json:"recent_messages,omitempty"`
@@ -447,8 +449,8 @@ func (s *Service) CreateSession(ctx context.Context, label string, withSample bo
 		}
 		s.store.SaveObject(rootObject)
 
-		workspaceRecord.ActiveObjectID = rootObject.ID
-		sessionRecord.ActiveObjectID = rootObject.ID
+		workspaceRecord.FocusObjectID = rootObject.ID
+		sessionRecord.FocusObjectID = rootObject.ID
 		sessionRecord.DatasetID = workspaceRecord.DatasetID
 
 		s.store.AddMessage(&models.Message{
@@ -545,13 +547,13 @@ func (s *Service) UploadH5AD(ctx context.Context, sessionID, filename string, co
 	s.store.SaveObject(objectRecord)
 
 	workspaceRecord.DatasetID = datasetID
-	workspaceRecord.ActiveObjectID = objectRecord.ID
+	workspaceRecord.FocusObjectID = objectRecord.ID
 	workspaceRecord.UpdatedAt = now
 	workspaceRecord.LastAccessedAt = now
 	s.store.SaveWorkspace(workspaceRecord)
 
 	sessionRecord.DatasetID = datasetID
-	sessionRecord.ActiveObjectID = objectRecord.ID
+	sessionRecord.FocusObjectID = objectRecord.ID
 	sessionRecord.UpdatedAt = now
 	sessionRecord.LastAccessedAt = now
 	s.store.SaveSession(sessionRecord)
@@ -610,7 +612,7 @@ func (s *Service) RegisterExternalArtifact(ctx context.Context, sessionID string
 		ID:          s.store.NextID("artifact"),
 		WorkspaceID: workspaceRecord.ID,
 		SessionID:   sessionRecord.ID,
-		ObjectID:    sessionRecord.ActiveObjectID,
+		ObjectID:    sessionRecord.FocusObjectID,
 		Kind:        kind,
 		Title:       strings.TrimSpace(title),
 		Path:        artifactPath,
@@ -897,7 +899,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 		return
 	}
 
-	prevObjectID := sessionRecord.ActiveObjectID
+	prevObjectID := sessionRecord.FocusObjectID
 	stepSummaries := make([]string, 0, len(plan.Steps))
 	pendingPlan := clonePlan(plan)
 	completionReason := ""
@@ -981,7 +983,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 			return
 		}
 
-		activeObjectID := sessionRecord.ActiveObjectID
+		focusObjectID := sessionRecord.FocusObjectID
 		if response.Object != nil {
 			newObject := &models.ObjectMeta{
 				ID:               s.store.NextID("obj"),
@@ -1005,12 +1007,12 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 			s.store.SaveObject(newObject)
 			stepResult.OutputObjectID = newObject.ID
 			prevObjectID = newObject.ID
-			activeObjectID = newObject.ID
-			sessionRecord.ActiveObjectID = newObject.ID
-			workspaceRecord.ActiveObjectID = newObject.ID
+			focusObjectID = newObject.ID
+			sessionRecord.FocusObjectID = newObject.ID
+			workspaceRecord.FocusObjectID = newObject.ID
 		}
 
-		artifactTargetID := activeObjectID
+		artifactTargetID := focusObjectID
 		if stepResult.OutputObjectID != "" {
 			artifactTargetID = stepResult.OutputObjectID
 		} else if targetObject != nil {
@@ -1364,14 +1366,43 @@ func (s *Service) resolveTargetObject(sessionRecord *models.Session, prevObjectI
 		return object, nil
 	}
 
+	roles, err := s.resolveSessionObjectRoles(sessionRecord)
+	if err != nil {
+		return nil, err
+	}
+
 	switch token {
-	case "", "$active":
-		return requireInWorkspace(sessionRecord.ActiveObjectID)
+	case "", "$focus":
+		if roles.FocusObject == nil {
+			return nil, fmt.Errorf("未找到当前 focus 对象")
+		}
+		return requireInWorkspace(roles.FocusObject.ID)
+	case "$global":
+		if roles.GlobalObject == nil {
+			return nil, fmt.Errorf("未找到当前 lineage 的全量对象")
+		}
+		return requireInWorkspace(roles.GlobalObject.ID)
+	case "$root":
+		if roles.RootObject == nil {
+			return nil, fmt.Errorf("未找到当前 lineage root 对象")
+		}
+		return requireInWorkspace(roles.RootObject.ID)
 	case "$prev":
 		return requireInWorkspace(prevObjectID)
 	default:
 		return requireInWorkspace(token)
 	}
+}
+
+func (s *Service) resolveSessionObjectRoles(sessionRecord *models.Session) (ResolvedObjectRoles, error) {
+	if sessionRecord == nil {
+		return ResolvedObjectRoles{}, nil
+	}
+	snapshot, err := s.store.Snapshot(sessionRecord.ID)
+	if err != nil {
+		return ResolvedObjectRoles{}, err
+	}
+	return resolveObjectRoles(snapshot.Session, snapshot.Objects), nil
 }
 
 func (s *Service) getRequiredObject(objectID string) (*models.ObjectMeta, error) {
@@ -1737,19 +1768,15 @@ func (s *Service) buildPlanningRequestWithInputs(sessionRecord *models.Session, 
 		return PlanningRequest{}, err
 	}
 
-	var activeObject *models.ObjectMeta
-	for _, object := range snapshot.Objects {
-		if object.ID == snapshot.Session.ActiveObjectID {
-			activeObject = object
-			break
-		}
-	}
+	resolvedObjects := resolveObjectRoles(snapshot.Session, snapshot.Objects)
 
 	return PlanningRequest{
 		Message:         message,
 		Session:         snapshot.Session,
 		Workspace:       snapshot.Workspace,
-		ActiveObject:    activeObject,
+		FocusObject:     resolvedObjects.FocusObject,
+		GlobalObject:    resolvedObjects.GlobalObject,
+		RootObject:      resolvedObjects.RootObject,
 		Objects:         snapshot.Objects,
 		InputArtifacts:  inputArtifacts,
 		RecentMessages:  trimRecentMessages(snapshot.Messages, message, 6),
@@ -1780,7 +1807,9 @@ func (s *Service) buildEvaluationRequest(sessionRecord *models.Session, message 
 		Message:         request.Message,
 		Session:         request.Session,
 		Workspace:       request.Workspace,
-		ActiveObject:    request.ActiveObject,
+		FocusObject:     request.FocusObject,
+		GlobalObject:    request.GlobalObject,
+		RootObject:      request.RootObject,
 		Objects:         request.Objects,
 		InputArtifacts:  request.InputArtifacts,
 		RecentMessages:  request.RecentMessages,
@@ -1800,7 +1829,9 @@ func (s *Service) buildResponseComposeRequest(sessionRecord *models.Session, mes
 		Message:         request.Message,
 		Session:         request.Session,
 		Workspace:       request.Workspace,
-		ActiveObject:    request.ActiveObject,
+		FocusObject:     request.FocusObject,
+		GlobalObject:    request.GlobalObject,
+		RootObject:      request.RootObject,
 		Objects:         request.Objects,
 		InputArtifacts:  request.InputArtifacts,
 		RecentMessages:  request.RecentMessages,

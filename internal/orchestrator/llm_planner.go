@@ -285,8 +285,10 @@ func (p *LLMPlanner) instructions(requestPayload PlanningRequest) string {
 	lines := []string{
 		"You are the scAgent planner.",
 		"Return a minimal JSON execution plan using only listed skills.",
-		"Use \"$active\" for the current object and \"$prev\" for chaining derived outputs.",
+		"Use \"$focus\" for the focused object, \"$global\" for the best whole-dataset object in the same lineage, \"$root\" for the lineage root object, and \"$prev\" for chaining derived outputs.",
 		"Prefer the fewest valid steps; compose multiple steps only when the request is clearly a workflow.",
+		"Do not assume the focused object is correct for full-dataset requests. When the user asks for the whole dataset, all cells, or the current dataset rather than the current subset/object, prefer \"$global\".",
+		"When the user explicitly refers to this object/current object/当前这个对象, prefer \"$focus\".",
 		"Use recent_messages, recent_jobs, recent_artifacts, and working_memory for follow-up intent such as edit-this-plot requests.",
 		"Artifact context is summary-only; do not assume raw file contents or image bytes unless explicitly present in the user turn.",
 		"Preserve prior plot params/metadata for follow-up edits unless the user explicitly changes them.",
@@ -557,16 +559,14 @@ func formatPlannerContext(request PlanningRequest) []string {
 }
 
 func formatPlanningContext(request PlanningRequest) []string {
-	lines := make([]string, 0, 20)
+	lines := make([]string, 0, 24)
 	if request.Session != nil {
 		lines = append(lines, fmt.Sprintf("- session_id=%s", request.Session.ID))
 	}
 
-	if request.ActiveObject != nil {
-		lines = append(lines, "- active_object="+formatObjectContext(request.ActiveObject))
-	} else {
-		lines = append(lines, "- active_object=none")
-	}
+	lines = append(lines, formatFullResolvedObjectContext("focus_object", request.FocusObject)...)
+	lines = append(lines, formatFullResolvedObjectContext("global_object", request.GlobalObject)...)
+	lines = append(lines, formatFullResolvedObjectContext("root_object", request.RootObject)...)
 
 	if len(request.Objects) == 0 {
 		lines = append(lines, "- objects=none")
@@ -614,6 +614,13 @@ func formatPlanningContext(request PlanningRequest) []string {
 	}
 	lines = append(lines, formatWorkingMemoryContext(request.WorkingMemory)...)
 	return lines
+}
+
+func formatFullResolvedObjectContext(label string, object *models.ObjectMeta) []string {
+	if object == nil {
+		return []string{"- " + label + "=none"}
+	}
+	return []string{"- " + label + "=" + formatObjectContext(object)}
 }
 
 func formatPlannerArtifactGroup(label string, artifacts []*models.Artifact, limit int) []string {
@@ -776,14 +783,16 @@ func formatWorkingMemoryContext(memory *models.WorkingMemory) []string {
 	return lines
 }
 
-func countRemainingObjects(objects []*models.ObjectMeta, activeObject *models.ObjectMeta) int {
+func countRemainingObjects(objects []*models.ObjectMeta, excludedIDs map[string]struct{}) int {
 	count := 0
 	for _, object := range objects {
 		if object == nil {
 			continue
 		}
-		if activeObject != nil && object.ID == activeObject.ID {
-			continue
+		if excludedIDs != nil {
+			if _, ok := excludedIDs[object.ID]; ok {
+				continue
+			}
 		}
 		count++
 	}
@@ -1105,11 +1114,11 @@ func formatWorkingMemoryFocus(focus *models.WorkingMemoryFocus) string {
 	}
 
 	parts := make([]string, 0, 6)
-	if focus.ActiveObjectID != "" {
-		parts = append(parts, "active_object_id="+focus.ActiveObjectID)
+	if focus.FocusObjectID != "" {
+		parts = append(parts, "focus_object_id="+focus.FocusObjectID)
 	}
-	if focus.ActiveObjectLabel != "" {
-		parts = append(parts, "active_object_label="+focus.ActiveObjectLabel)
+	if focus.FocusObjectLabel != "" {
+		parts = append(parts, "focus_object_label="+focus.FocusObjectLabel)
 	}
 	if focus.LastOutputObjectID != "" {
 		parts = append(parts, "last_output_object_id="+focus.LastOutputObjectID)

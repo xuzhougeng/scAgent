@@ -83,7 +83,7 @@ type Workspace struct {
 	ID             string    `json:"id"`
 	Label          string    `json:"label"`
 	DatasetID      string    `json:"dataset_id"`
-	ActiveObjectID string    `json:"active_object_id"`
+	FocusObjectID  string    `json:"focus_object_id"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 	LastAccessedAt time.Time `json:"last_accessed_at"`
@@ -94,7 +94,7 @@ type Session struct {
 	WorkspaceID    string        `json:"workspace_id,omitempty"`
 	Label          string        `json:"label"`
 	DatasetID      string        `json:"dataset_id"`
-	ActiveObjectID string        `json:"active_object_id"`
+	FocusObjectID  string        `json:"focus_object_id"`
 	Status         SessionStatus `json:"status"`
 	CreatedAt      time.Time     `json:"created_at"`
 	UpdatedAt      time.Time     `json:"updated_at"`
@@ -221,8 +221,8 @@ type WorkingMemory struct {
 }
 
 type WorkingMemoryFocus struct {
-	ActiveObjectID        string `json:"active_object_id,omitempty"`
-	ActiveObjectLabel     string `json:"active_object_label,omitempty"`
+	FocusObjectID         string `json:"focus_object_id,omitempty"`
+	FocusObjectLabel      string `json:"focus_object_label,omitempty"`
 	LastOutputObjectID    string `json:"last_output_object_id,omitempty"`
 	LastOutputObjectLabel string `json:"last_output_object_label,omitempty"`
 	LastArtifactID        string `json:"last_artifact_id,omitempty"`

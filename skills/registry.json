@@ -11,7 +11,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to inspect. Defaults to the active object."
+          "description": "Object to inspect. Defaults to the focused object."
         },
         "include_fields": {
           "type": "array",
@@ -36,7 +36,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to assess. Defaults to the active object."
+          "description": "Object to assess. Defaults to the focused object."
         }
       },
       "output": {
@@ -46,21 +46,21 @@
       }
     },
     {
-      "name": "set_active_object",
-      "label": "Set active object",
+      "name": "set_focus_object",
+      "label": "Set focus object",
       "category": "session",
       "support_level": "planned",
-      "description": "Switch the active analysis object for subsequent operations.",
+      "description": "Switch the focused analysis object for subsequent operations.",
       "target_kinds": ["raw_dataset", "filtered_dataset", "subset", "reclustered_subset", "de_result", "marker_result"],
       "input": {
         "target_object_id": {
           "type": "string",
           "required": true,
-          "description": "Object to make active."
+          "description": "Object to make the focused object."
         }
       },
       "output": {
-        "active_object_id": "string",
+        "focus_object_id": "string",
         "summary": "string"
       }
     },
@@ -75,7 +75,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to summarize. Defaults to the active object."
+          "description": "Object to summarize. Defaults to the focused object."
         },
         "mt_prefix": {
           "type": "string",
@@ -99,7 +99,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to visualize. Defaults to the active object."
+          "description": "Object to visualize. Defaults to the focused object."
         },
         "metrics": {
           "type": "array",
@@ -123,7 +123,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to filter. Defaults to the active object."
+          "description": "Object to filter. Defaults to the focused object."
         },
         "min_genes": {
           "type": "number",
@@ -157,7 +157,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to filter. Defaults to the active object."
+          "description": "Object to filter. Defaults to the focused object."
         },
         "min_cells": {
           "type": "number",
@@ -186,7 +186,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to normalize. Defaults to the active object."
+          "description": "Object to normalize. Defaults to the focused object."
         },
         "target_sum": {
           "type": "number",
@@ -210,7 +210,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to transform. Defaults to the active object."
+          "description": "Object to transform. Defaults to the focused object."
         }
       },
       "output": {
@@ -229,7 +229,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to process. Defaults to the active object."
+          "description": "Object to process. Defaults to the focused object."
         },
         "n_top_genes": {
           "type": "number",
@@ -258,7 +258,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to scale. Defaults to the active object."
+          "description": "Object to scale. Defaults to the focused object."
         },
         "max_value": {
           "type": "number",
@@ -282,7 +282,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to analyze. Defaults to the active object."
+          "description": "Object to analyze. Defaults to the focused object."
         },
         "n_comps": {
           "type": "number",
@@ -306,7 +306,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to analyze. Defaults to the active object."
+          "description": "Object to analyze. Defaults to the focused object."
         },
         "n_neighbors": {
           "type": "number",
@@ -335,7 +335,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to embed. Defaults to the active object."
+          "description": "Object to embed. Defaults to the focused object."
         },
         "min_dist": {
           "type": "number",
@@ -359,7 +359,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to prepare. Defaults to the active object."
+          "description": "Object to prepare. Defaults to the focused object."
         },
         "include_doublet_filter": {
           "type": "boolean",
@@ -383,7 +383,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to plot. Defaults to the active object."
+          "description": "Object to plot. Defaults to the focused object."
         },
         "color_by": {
           "type": "string",
@@ -438,7 +438,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to plot. Defaults to the active object."
+          "description": "Object to plot. Defaults to the focused object."
         },
         "genes": {
           "type": "array",
@@ -467,7 +467,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to subset. Defaults to the active object."
+          "description": "Object to subset. Defaults to the focused object."
         },
         "obs_field": {
           "type": "string",
@@ -502,7 +502,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Parent object used as the global reference. Defaults to the active object."
+          "description": "Parent object used as the global reference. Defaults to the focused object."
         },
         "obs_field": {
           "type": "string",
@@ -557,7 +557,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to score. Defaults to the active object."
+          "description": "Object to score. Defaults to the focused object."
         },
         "genes": {
           "type": "array",
@@ -586,7 +586,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to recluster. Defaults to the active object."
+          "description": "Object to recluster. Defaults to the focused object."
         },
         "resolution": {
           "type": "number",
@@ -610,7 +610,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Subset object to reanalyze. Defaults to the active object."
+          "description": "Subset object to reanalyze. Defaults to the focused object."
         },
         "n_top_genes": {
           "type": "number",
@@ -649,7 +649,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to subcluster. Defaults to the active object."
+          "description": "Object to subcluster. Defaults to the focused object."
         },
         "groupby": {
           "type": "string",
@@ -683,7 +683,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to edit. Defaults to the active object."
+          "description": "Object to edit. Defaults to the focused object."
         },
         "groupby": {
           "type": "string",
@@ -712,7 +712,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to annotate. Defaults to the active object."
+          "description": "Object to annotate. Defaults to the focused object."
         },
         "groupby": {
           "type": "string",
@@ -741,7 +741,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to analyze. Defaults to the active object."
+          "description": "Object to analyze. Defaults to the focused object."
         },
         "groupby": {
           "type": "string",
@@ -765,7 +765,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to analyze. Defaults to the active object."
+          "description": "Object to analyze. Defaults to the focused object."
         },
         "groupby": {
           "type": "string",
@@ -799,7 +799,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to visualize. Defaults to the active object."
+          "description": "Object to visualize. Defaults to the focused object."
         },
         "genes": {
           "type": "array",
@@ -828,7 +828,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to visualize. Defaults to the active object."
+          "description": "Object to visualize. Defaults to the focused object."
         },
         "genes": {
           "type": "array",
@@ -857,7 +857,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to visualize. Defaults to the active object."
+          "description": "Object to visualize. Defaults to the focused object."
         },
         "genes": {
           "type": "array",
@@ -886,7 +886,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to visualize. Defaults to the active object."
+          "description": "Object to visualize. Defaults to the focused object."
         },
         "groupby": {
           "type": "string",
@@ -915,7 +915,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to integrate. Defaults to the active object."
+          "description": "Object to integrate. Defaults to the focused object."
         },
         "batch_key": {
           "type": "string",
@@ -944,7 +944,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to analyze. Defaults to the active object."
+          "description": "Object to analyze. Defaults to the focused object."
         },
         "code": {
           "type": "string",
@@ -980,7 +980,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object to export. Defaults to the active object."
+          "description": "Object to export. Defaults to the focused object."
         }
       },
       "output": {
@@ -1018,7 +1018,7 @@
         "target_object_id": {
           "type": "string",
           "required": false,
-          "description": "Object whose analysis lineage to describe. Defaults to the active object."
+          "description": "Object whose analysis lineage to describe. Defaults to the focused object."
         },
         "filename": {
           "type": "string",

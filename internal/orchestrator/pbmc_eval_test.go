@@ -31,7 +31,7 @@ type pbmcEvalSuite struct {
 }
 
 type pbmcEvalAssumptions struct {
-	ActiveObject       pbmcEvalObjectSignals `json:"active_object"`
+	FocusObject        pbmcEvalObjectSignals `json:"focus_object"`
 	ObjectSignals      pbmcEvalObjectSignals `json:"object_signals"`
 	CellTypeExamples   []string              `json:"cell_type_examples"`
 	RecentPlotDefaults pbmcEvalRecentPlot    `json:"recent_plot_defaults"`
@@ -67,7 +67,7 @@ type pbmcEvalCase struct {
 }
 
 type pbmcEvalContextOverrides struct {
-	ActiveObject                 *pbmcEvalObjectSignals      `json:"active_object"`
+	FocusObject                  *pbmcEvalObjectSignals      `json:"focus_object"`
 	IncludeDefaultRecentPlot     *bool                       `json:"include_default_recent_plot"`
 	IncludeDefaultRecentMessages *bool                       `json:"include_default_recent_messages"`
 	RecentPlot                   *pbmcEvalRecentPlotOverride `json:"recent_plot"`
@@ -463,15 +463,19 @@ func loadPBMCEvalDotEnv(t *testing.T) {
 func buildPBMCPlanningRequest(t *testing.T, suite pbmcEvalSuite, tc pbmcEvalCase) PlanningRequest {
 	t.Helper()
 
-	activeObject := buildPBMCActiveObject(suite, tc.ContextOverrides)
+	focusObject := buildPBMCFocusObject(suite, tc.ContextOverrides)
 	recentPlotJob, recentArtifact, workingMemory := buildPBMCRecentPlotContext(suite, tc.ContextOverrides)
-	objects := buildPBMCObjects(suite, activeObject)
+	objects := buildPBMCObjects(suite, focusObject)
 	recentMessages := buildPBMCRecentMessages(tc.ContextOverrides)
+	session := &models.Session{ID: "sess_pbmc_eval", WorkspaceID: "ws_pbmc_eval", DatasetID: "ds_pbmc", FocusObjectID: focusObject.ID, Label: "pbmc eval", Status: models.SessionActive}
+	resolvedObjects := resolveObjectRoles(session, objects)
 	request := PlanningRequest{
 		Message:        tc.UserMessage,
-		Session:        &models.Session{ID: "sess_pbmc_eval", WorkspaceID: "ws_pbmc_eval", DatasetID: "ds_pbmc", ActiveObjectID: activeObject.ID, Label: "pbmc eval", Status: models.SessionActive},
-		Workspace:      &models.Workspace{ID: "ws_pbmc_eval", DatasetID: "ds_pbmc", ActiveObjectID: activeObject.ID, Label: "pbmc eval workspace"},
-		ActiveObject:   activeObject,
+		Session:        session,
+		Workspace:      &models.Workspace{ID: "ws_pbmc_eval", DatasetID: "ds_pbmc", FocusObjectID: focusObject.ID, Label: "pbmc eval workspace"},
+		FocusObject:    resolvedObjects.FocusObject,
+		GlobalObject:   resolvedObjects.GlobalObject,
+		RootObject:     resolvedObjects.RootObject,
 		Objects:        objects,
 		RecentMessages: recentMessages,
 		WorkingMemory:  workingMemory,
@@ -502,7 +506,9 @@ func buildPBMCEvaluationRequest(t *testing.T, suite pbmcEvalSuite, tc pbmcEvalCa
 		Message:         planning.Message,
 		Session:         planning.Session,
 		Workspace:       planning.Workspace,
-		ActiveObject:    planning.ActiveObject,
+		FocusObject:     planning.FocusObject,
+		GlobalObject:    planning.GlobalObject,
+		RootObject:      planning.RootObject,
 		Objects:         planning.Objects,
 		InputArtifacts:  planning.InputArtifacts,
 		RecentMessages:  planning.RecentMessages,
@@ -516,10 +522,10 @@ func buildPBMCEvaluationRequest(t *testing.T, suite pbmcEvalSuite, tc pbmcEvalCa
 	return request
 }
 
-func buildPBMCActiveObject(suite pbmcEvalSuite, overrides *pbmcEvalContextOverrides) *models.ObjectMeta {
-	signals := suite.Assumptions.ActiveObject
-	if overrides != nil && overrides.ActiveObject != nil {
-		signals = *overrides.ActiveObject
+func buildPBMCFocusObject(suite pbmcEvalSuite, overrides *pbmcEvalContextOverrides) *models.ObjectMeta {
+	signals := suite.Assumptions.FocusObject
+	if overrides != nil && overrides.FocusObject != nil {
+		signals = *overrides.FocusObject
 	}
 	objectID := "obj_" + sanitizePBMCEvalID(signals.Label)
 	if objectID == "obj_" {
@@ -546,10 +552,16 @@ func buildPBMCActiveObject(suite pbmcEvalSuite, overrides *pbmcEvalContextOverri
 	}
 }
 
-func buildPBMCObjects(suite pbmcEvalSuite, activeObject *models.ObjectMeta) []*models.ObjectMeta {
-	objects := []*models.ObjectMeta{activeObject}
-	defaultObject := buildPBMCActiveObject(suite, nil)
-	if activeObject != nil && activeObject.ID != defaultObject.ID {
+func buildPBMCObjects(suite pbmcEvalSuite, focusObject *models.ObjectMeta) []*models.ObjectMeta {
+	defaultObject := buildPBMCFocusObject(suite, nil)
+	if focusObject != nil &&
+		focusObject.ID != defaultObject.ID &&
+		focusObject.ParentID == "" &&
+		(focusObject.Kind == models.ObjectSubset || focusObject.Kind == models.ObjectReclustered) {
+		focusObject.ParentID = defaultObject.ID
+	}
+	objects := []*models.ObjectMeta{focusObject}
+	if focusObject != nil && focusObject.ID != defaultObject.ID {
 		objects = append(objects, defaultObject)
 	}
 	return objects
@@ -609,7 +621,7 @@ func buildPBMCRecentPlotContext(suite pbmcEvalSuite, overrides *pbmcEvalContextO
 
 	plot := suite.Assumptions.RecentPlotDefaults
 	objectID := "obj_pbmc3k"
-	objectLabel := suite.Assumptions.ActiveObject.Label
+	objectLabel := suite.Assumptions.FocusObject.Label
 	artifactTitle := "PBMC cell type UMAP"
 	artifactSummary := "PBMC cell type UMAP colored by cell_type."
 	if overrides != nil && overrides.RecentPlot != nil {
@@ -700,8 +712,8 @@ func buildPBMCWorkingMemory(context *pbmcEvalRecentPlotContext) *models.WorkingM
 	}
 	return &models.WorkingMemory{
 		Focus: &models.WorkingMemoryFocus{
-			ActiveObjectID:        context.ObjectID,
-			ActiveObjectLabel:     context.ObjectLabel,
+			FocusObjectID:         context.ObjectID,
+			FocusObjectLabel:      context.ObjectLabel,
 			LastArtifactID:        "artifact_prev_plot",
 			LastArtifactTitle:     context.ArtifactTitle,
 			LastOutputObjectID:    context.ObjectID,

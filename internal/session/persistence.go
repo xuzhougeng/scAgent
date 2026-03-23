@@ -14,6 +14,8 @@ import (
 	"scagent/internal/models"
 )
 
+const persistenceSchemaVersion = "2"
+
 type statePersistence interface {
 	Load() (*persistedState, error)
 	Save(*persistedState) error
@@ -54,6 +56,22 @@ func (p *sqlitePersistence) Load() (*persistedState, error) {
 	counter, err := querySingleString(db, `SELECT value FROM metadata WHERE key = 'counter'`)
 	if err != nil {
 		return nil, err
+	}
+	version, err := querySingleString(db, `SELECT value FROM metadata WHERE key = 'schema_version'`)
+	if err != nil {
+		return nil, err
+	}
+	if version != persistenceSchemaVersion {
+		hasData, err := persistedStateHasData(db)
+		if err != nil {
+			return nil, err
+		}
+		if hasData {
+			if err := resetPersistedState(db); err != nil {
+				return nil, err
+			}
+		}
+		return state, nil
 	}
 	if counter != "" {
 		if _, err := fmt.Sscanf(counter, "%d", &state.Counter); err != nil {
@@ -99,7 +117,14 @@ func (p *sqlitePersistence) Save(state *persistedState) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`DELETE FROM metadata WHERE key <> 'counter'`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM metadata WHERE key NOT IN ('counter', 'schema_version')`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO metadata(key, value)
+		VALUES('schema_version', ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+	`, persistenceSchemaVersion); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`
@@ -352,6 +377,44 @@ func marshalPayloadRow(id string, payload any, values ...any) (payloadRow, error
 	}
 	rowValues = append(rowValues, string(encoded))
 	return payloadRow{id: id, values: rowValues}, nil
+}
+
+func persistedStateHasData(db *sql.DB) (bool, error) {
+	for _, table := range []string{"workspaces", "sessions", "objects", "jobs", "artifacts", "messages"} {
+		value, err := querySingleString(db, fmt.Sprintf(`SELECT COUNT(1) FROM %s`, table))
+		if err != nil {
+			return false, err
+		}
+		if strings.TrimSpace(value) != "" && strings.TrimSpace(value) != "0" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func resetPersistedState(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, statement := range []string{
+		`DELETE FROM workspaces`,
+		`DELETE FROM sessions`,
+		`DELETE FROM objects`,
+		`DELETE FROM jobs`,
+		`DELETE FROM artifacts`,
+		`DELETE FROM messages`,
+		`DELETE FROM metadata`,
+		`INSERT INTO metadata(key, value) VALUES('schema_version', '` + persistenceSchemaVersion + `')`,
+		`INSERT INTO metadata(key, value) VALUES('counter', '0')`,
+	} {
+		if _, err := tx.Exec(statement); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func syncPayloadTable(tx *sql.Tx, table string, columns []string, rows []payloadRow) error {

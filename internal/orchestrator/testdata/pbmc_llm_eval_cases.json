@@ -3,7 +3,7 @@
   "version": 1,
   "dataset": "pbmc3k",
   "assumptions": {
-    "active_object": {
+    "focus_object": {
       "label": "pbmc3k",
       "kind": "filtered_dataset",
       "n_obs": 2638,
@@ -34,7 +34,7 @@
   },
   "cases": [
     {
-      "id": "planner_export_active_h5ad",
+      "id": "planner_export_focus_h5ad",
       "component": "planner",
       "title": "导出当前对象为 h5ad",
       "user_message": "导出当前对象为 h5ad",
@@ -47,7 +47,7 @@
         "steps": [
           {
             "skill": "export_h5ad",
-            "target_object_id": "$active"
+            "target_object_id": "$focus"
           }
         ]
       }
@@ -66,7 +66,7 @@
         "steps": [
           {
             "skill": "plot_umap",
-            "target_object_id": "$active",
+            "target_object_id": "$focus",
             "params_should_preserve": {
               "color_by": "cell_type",
               "point_size": 8
@@ -92,7 +92,7 @@
         "steps": [
           {
             "skill": "plot_gene_umap",
-            "target_object_id": "$active",
+            "target_object_id": "$focus",
             "params": {
               "genes": ["MS4A1", "CD3D"]
             }
@@ -114,7 +114,7 @@
         "steps": [
           {
             "skill": "subset_cells",
-            "target_object_id": "$active",
+            "target_object_id": "$focus",
             "params": {
               "obs_field": "cell_type",
               "op": "eq",
@@ -141,18 +141,18 @@
         "steps": [
           {
             "skill": "write_method",
-            "target_object_id": "$active"
+            "target_object_id": "$focus"
           }
         ]
       }
     },
     {
-      "id": "planner_active_object_switch_export_current",
+      "id": "planner_focus_object_switch_export_current",
       "component": "planner",
-      "title": "对象切换后仍导出当前 active object",
+      "title": "对象切换后仍导出当前 focus object",
       "user_message": "导出当前这个对象为 h5ad",
       "context_overrides": {
-        "active_object": {
+        "focus_object": {
           "label": "pbmc3k_b_cells",
           "kind": "subset",
           "n_obs": 412,
@@ -168,7 +168,7 @@
         "steps": [
           {
             "skill": "export_h5ad",
-            "target_object_id": "$active"
+            "target_object_id": "$focus"
           }
         ]
       }
@@ -176,10 +176,10 @@
     {
       "id": "planner_conflicting_recent_plot_export_current",
       "component": "planner",
-      "title": "stale recent plot 不能盖过当前 active object",
+      "title": "stale recent plot 不能盖过当前 focus object",
       "user_message": "导出当前这个对象为 h5ad",
       "context_overrides": {
-        "active_object": {
+        "focus_object": {
           "label": "pbmc3k_b_cells",
           "kind": "subset",
           "n_obs": 412,
@@ -205,7 +205,7 @@
         "steps": [
           {
             "skill": "export_h5ad",
-            "target_object_id": "$active"
+            "target_object_id": "$focus"
           }
         ]
       }
@@ -216,7 +216,7 @@
       "title": "画当前对象时不能被旧 recent plot 带偏 target",
       "user_message": "画一下当前这个对象的 UMAP",
       "context_overrides": {
-        "active_object": {
+        "focus_object": {
           "label": "pbmc3k_b_cells",
           "kind": "subset",
           "n_obs": 412,
@@ -241,7 +241,33 @@
         "steps": [
           {
             "skill": "plot_umap",
-            "target_object_id": "$active"
+            "target_object_id": "$focus"
+          }
+        ]
+      }
+    },
+    {
+      "id": "planner_global_dataset_umap_uses_global_object",
+      "component": "planner",
+      "title": "当前数据集 UMAP 应使用全量 lineage 对象",
+      "user_message": "画当前数据集的 UMAP",
+      "context_overrides": {
+        "focus_object": {
+          "label": "pbmc3k_b_cells",
+          "kind": "subset",
+          "n_obs": 412,
+          "n_vars": 1838
+        }
+      },
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "plot_umap",
+            "target_object_id": "$global"
           }
         ]
       }
@@ -260,7 +286,7 @@
         "steps": [
           {
             "skill": "plot_umap",
-            "target_object_id": "$active",
+            "target_object_id": "$focus",
             "params_should_preserve": {
               "color_by": "cell_type"
             },
@@ -296,7 +322,7 @@
         "steps": [
           {
             "skill": "plot_umap",
-            "target_object_id": "$active",
+            "target_object_id": "$focus",
             "params_should_preserve": {
               "color_by": "sample",
               "legend_loc": "right",
@@ -323,7 +349,7 @@
         "steps": [
           {
             "skill": "subset_cells",
-            "target_object_id": "$active",
+            "target_object_id": "$focus",
             "params": {
               "obs_field": "cell_type",
               "op": "eq",
@@ -370,12 +396,12 @@
       }
     },
     {
-      "id": "answerer_active_object_switched_cell_count",
+      "id": "answerer_focus_object_switched_cell_count",
       "component": "answerer",
       "title": "对象切换后直答当前细胞数",
       "user_message": "这个对象现在多少细胞？",
       "context_overrides": {
-        "active_object": {
+        "focus_object": {
           "label": "pbmc3k_b_cells",
           "kind": "subset",
           "n_obs": 412,
@@ -400,7 +426,7 @@
       "title": "stale working memory 不应覆盖当前对象细胞数",
       "user_message": "当前这个对象多少细胞？",
       "context_overrides": {
-        "active_object": {
+        "focus_object": {
           "label": "pbmc3k_b_cells",
           "kind": "subset",
           "n_obs": 412,
@@ -490,11 +516,11 @@
           {
             "skill": "export_h5ad",
             "status": "succeeded",
-            "summary": "Exported the active object to pbmc3k.h5ad and generated a file artifact.",
+            "summary": "Exported the focused object to pbmc3k.h5ad and generated a file artifact.",
             "artifact_kind": "file",
             "metadata": {
               "artifact_title": "pbmc3k.h5ad",
-              "artifact_summary": "Exported h5ad file artifact for the active object."
+              "artifact_summary": "Exported h5ad file artifact for the focused object."
             }
           }
         ]
@@ -505,12 +531,12 @@
       }
     },
     {
-      "id": "evaluator_active_object_switch_export_completed",
+      "id": "evaluator_focus_object_switch_export_completed",
       "component": "evaluator",
       "title": "对象切换后 export 完成判定不应被旧 recent plot 干扰",
       "user_message": "导出当前这个对象为 h5ad",
       "context_overrides": {
-        "active_object": {
+        "focus_object": {
           "label": "pbmc3k_b_cells",
           "kind": "subset",
           "n_obs": 412,

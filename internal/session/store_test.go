@@ -40,12 +40,12 @@ func TestPersistentStoreRestoresWorkspaceConversationState(t *testing.T) {
 	}
 	store.SaveObject(object)
 
-	workspace.ActiveObjectID = object.ID
+	workspace.FocusObjectID = object.ID
 	workspace.UpdatedAt = now
 	workspace.LastAccessedAt = now
 	store.SaveWorkspace(workspace)
 
-	conversation.ActiveObjectID = object.ID
+	conversation.FocusObjectID = object.ID
 	conversation.UpdatedAt = now
 	conversation.LastAccessedAt = now
 	store.SaveSession(conversation)
@@ -128,8 +128,8 @@ func TestPersistentStoreRestoresWorkspaceConversationState(t *testing.T) {
 	if snapshot.Session.WorkspaceID != workspace.ID {
 		t.Fatalf("expected conversation to keep workspace id, got %+v", snapshot.Session)
 	}
-	if snapshot.Session.ActiveObjectID != object.ID {
-		t.Fatalf("expected active object %q, got %q", object.ID, snapshot.Session.ActiveObjectID)
+	if snapshot.Session.FocusObjectID != object.ID {
+		t.Fatalf("expected focus object %q, got %q", object.ID, snapshot.Session.FocusObjectID)
 	}
 	if len(snapshot.Objects) != 1 || snapshot.Objects[0].ID != object.ID {
 		t.Fatalf("expected restored object %q, got %+v", object.ID, snapshot.Objects)
@@ -149,8 +149,8 @@ func TestPersistentStoreRestoresWorkspaceConversationState(t *testing.T) {
 	if snapshot.WorkingMemory == nil {
 		t.Fatalf("expected working memory in snapshot")
 	}
-	if snapshot.WorkingMemory.Focus == nil || snapshot.WorkingMemory.Focus.ActiveObjectID != object.ID {
-		t.Fatalf("expected working memory focus on active object %q, got %+v", object.ID, snapshot.WorkingMemory.Focus)
+	if snapshot.WorkingMemory.Focus == nil || snapshot.WorkingMemory.Focus.FocusObjectID != object.ID {
+		t.Fatalf("expected working memory focus on focus object %q, got %+v", object.ID, snapshot.WorkingMemory.Focus)
 	}
 	if len(snapshot.WorkingMemory.RecentArtifacts) != 1 || snapshot.WorkingMemory.RecentArtifacts[0].ID != artifact.ID {
 		t.Fatalf("expected working memory to reference recent artifact %q, got %+v", artifact.ID, snapshot.WorkingMemory.RecentArtifacts)

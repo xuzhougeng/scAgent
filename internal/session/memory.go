@@ -55,10 +55,10 @@ func buildWorkingMemoryFocus(session *models.Session, objectByID map[string]*mod
 	}
 
 	focus := &models.WorkingMemoryFocus{}
-	if session.ActiveObjectID != "" {
-		focus.ActiveObjectID = session.ActiveObjectID
-		if object, ok := objectByID[session.ActiveObjectID]; ok {
-			focus.ActiveObjectLabel = object.Label
+	if session.FocusObjectID != "" {
+		focus.FocusObjectID = session.FocusObjectID
+		if object, ok := objectByID[session.FocusObjectID]; ok {
+			focus.FocusObjectLabel = object.Label
 		}
 	}
 

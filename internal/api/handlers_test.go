@@ -43,7 +43,7 @@ func (p singleStepPlanner) Mode() string {
 type unhealthyPlanner struct{}
 
 func (p unhealthyPlanner) Plan(context.Context, orchestrator.PlanningRequest) (models.Plan, error) {
-	return models.Plan{Steps: []models.PlanStep{{Skill: "inspect_dataset", TargetObjectID: "$active", Params: map[string]any{}, MemoryRefs: []string{}}}}, nil
+	return models.Plan{Steps: []models.PlanStep{{Skill: "inspect_dataset", TargetObjectID: "$focus", Params: map[string]any{}, MemoryRefs: []string{}}}}, nil
 }
 
 func (p unhealthyPlanner) Mode() string {
@@ -167,8 +167,8 @@ func TestMessageExecutionFlow(t *testing.T) {
 	if len(finalSnapshot.Artifacts) != 1 {
 		t.Fatalf("expected 1 artifact, got %d", len(finalSnapshot.Artifacts))
 	}
-	if finalSnapshot.Session.ActiveObjectID == sessionSnapshot.Session.ActiveObjectID {
-		t.Fatalf("expected active object to advance after execution")
+	if finalSnapshot.Session.FocusObjectID == sessionSnapshot.Session.FocusObjectID {
+		t.Fatalf("expected focus object to advance after execution")
 	}
 	if finalSnapshot.Messages[len(finalSnapshot.Messages)-1].Role != models.MessageAssistant {
 		t.Fatalf("expected final message to be assistant")
@@ -186,7 +186,7 @@ func TestCancelJobEndpoint(t *testing.T) {
 				{
 					ID:             "step_1",
 					Skill:          "inspect_dataset",
-					TargetObjectID: "$active",
+					TargetObjectID: "$focus",
 				},
 			},
 		},
@@ -611,12 +611,12 @@ func TestUploadH5ADFlow(t *testing.T) {
 	if response.Object.MaterializedURL == "" {
 		t.Fatalf("expected materialized URL for uploaded object")
 	}
-	if response.Snapshot.Session.ActiveObjectID != response.Object.ID {
-		t.Fatalf("expected uploaded object to become active")
+	if response.Snapshot.Session.FocusObjectID != response.Object.ID {
+		t.Fatalf("expected uploaded object to become focus object")
 	}
 }
 
-func TestPlannerPreviewIncludesActiveObjectContext(t *testing.T) {
+func TestPlannerPreviewIncludesFocusObjectContext(t *testing.T) {
 	service := newTestService(t, orchestrator.NewFakePlanner(), &fakeRuntime{})
 	handler := NewHandler(service, docsPath())
 	mux := http.NewServeMux()
@@ -649,13 +649,13 @@ func TestPlannerPreviewIncludesActiveObjectContext(t *testing.T) {
 		PlannerMode     string   `json:"planner_mode"`
 		PlannerContext  []string `json:"planner_context"`
 		PlanningRequest struct {
-			Message      string `json:"message"`
-			ActiveObject struct {
+			Message     string `json:"message"`
+			FocusObject struct {
 				Label    string         `json:"label"`
 				NObs     int            `json:"n_obs"`
 				NVars    int            `json:"n_vars"`
 				Metadata map[string]any `json:"metadata"`
-			} `json:"active_object"`
+			} `json:"focus_object"`
 		} `json:"planning_request"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &preview); err != nil {
@@ -665,11 +665,11 @@ func TestPlannerPreviewIncludesActiveObjectContext(t *testing.T) {
 	if preview.PlannerMode != "fake" {
 		t.Fatalf("expected fake planner mode, got %q", preview.PlannerMode)
 	}
-	if preview.PlanningRequest.ActiveObject.Label != "pbmc3k" {
-		t.Fatalf("unexpected active object label: %q", preview.PlanningRequest.ActiveObject.Label)
+	if preview.PlanningRequest.FocusObject.Label != "pbmc3k" {
+		t.Fatalf("unexpected focus object label: %q", preview.PlanningRequest.FocusObject.Label)
 	}
-	if preview.PlanningRequest.ActiveObject.NObs != 2638 || preview.PlanningRequest.ActiveObject.NVars != 1838 {
-		t.Fatalf("unexpected active object shape: %+v", preview.PlanningRequest.ActiveObject)
+	if preview.PlanningRequest.FocusObject.NObs != 2638 || preview.PlanningRequest.FocusObject.NVars != 1838 {
+		t.Fatalf("unexpected focus object shape: %+v", preview.PlanningRequest.FocusObject)
 	}
 	if len(preview.PlannerContext) == 0 {
 		t.Fatalf("expected compact planner context in preview")

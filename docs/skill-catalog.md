@@ -9,9 +9,9 @@ This catalog organizes common single-cell analysis skills by workflow stage.
 
 ## Session
 
-- `inspect_dataset` (`wired`): summarize the active object and available annotations
+- `inspect_dataset` (`wired`): summarize the focused object and available annotations
 - `assess_dataset` (`wired`): evaluate whether the uploaded h5ad is raw-like, partially processed, or analysis-ready
-- `set_active_object` (`planned`): switch the active object
+- `set_focus_object` (`planned`): switch the focused object
 
 ## Quality Control
 
@@ -41,7 +41,7 @@ This catalog organizes common single-cell analysis skills by workflow stage.
 
 ## Clustering
 
-- `recluster` (`wired`): recluster the active object
+- `recluster` (`wired`): recluster the focused object
 - `subcluster_group` (`wired`): isolate one cluster or cell group and recluster only that subgroup
 - `rename_clusters` (`wired`): rename cluster labels
 

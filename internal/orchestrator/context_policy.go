@@ -76,8 +76,8 @@ func formatPlanningContextWithPolicy(request PlanningRequest, policy PlanningCon
 	lines := make([]string, 0, 16)
 	if request.Session != nil {
 		parts := []string{"session_id=" + request.Session.ID}
-		if request.Session.ActiveObjectID != "" {
-			parts = append(parts, "active_object_id="+request.Session.ActiveObjectID)
+		if request.Session.FocusObjectID != "" {
+			parts = append(parts, "focus_object_id="+request.Session.FocusObjectID)
 		}
 		lines = append(lines, "- session="+joinContextParts(parts))
 	}
@@ -90,13 +90,11 @@ func formatPlanningContextWithPolicy(request PlanningRequest, policy PlanningCon
 		lines = append(lines, "- workspace="+joinContextParts(parts))
 	}
 
-	if request.ActiveObject != nil {
-		lines = append(lines, "- active_object="+formatPlannerObjectContext(request.ActiveObject, true))
-	} else {
-		lines = append(lines, "- active_object=none")
-	}
-
-	lines = append(lines, formatCompactObjectsContext(request.Objects, request.ActiveObject, policy.MaxObjects)...)
+	focusObject := request.FocusObject
+	lines = append(lines, formatResolvedObjectContext("focus_object", focusObject, true)...)
+	lines = append(lines, formatResolvedObjectContext("global_object", request.GlobalObject, true, namedObjectRef{name: "focus_object", object: focusObject})...)
+	lines = append(lines, formatResolvedObjectContext("root_object", request.RootObject, true, namedObjectRef{name: "focus_object", object: focusObject}, namedObjectRef{name: "global_object", object: request.GlobalObject})...)
+	lines = append(lines, formatCompactObjectsContext(request.Objects, policy.MaxObjects, focusObject, request.GlobalObject, request.RootObject)...)
 	lines = append(lines, formatPlannerArtifactGroup("input_artifacts", request.InputArtifacts, policy.MaxInputArtifacts)...)
 	lines = append(lines, formatPlannerRecentMessages(request.RecentMessages, policy.MaxRecentMessages)...)
 	lines = append(lines, formatPlannerRecentJobs(request.RecentJobs, policy.MaxRecentJobs)...)
@@ -110,9 +108,33 @@ func formatPlanningContextWithPolicy(request PlanningRequest, policy PlanningCon
 	return lines
 }
 
-func formatCompactObjectsContext(objects []*models.ObjectMeta, activeObject *models.ObjectMeta, limit int) []string {
+type namedObjectRef struct {
+	name   string
+	object *models.ObjectMeta
+}
+
+func formatResolvedObjectContext(label string, object *models.ObjectMeta, includeSignals bool, aliases ...namedObjectRef) []string {
+	if object == nil {
+		return []string{"- " + label + "=none"}
+	}
+	for _, alias := range aliases {
+		if alias.object != nil && alias.object.ID != "" && alias.object.ID == object.ID {
+			return []string{"- " + label + "=same_as_" + alias.name}
+		}
+	}
+	return []string{"- " + label + "=" + formatPlannerObjectContext(object, includeSignals)}
+}
+
+func formatCompactObjectsContext(objects []*models.ObjectMeta, limit int, excluded ...*models.ObjectMeta) []string {
 	if len(objects) == 0 || limit <= 0 {
 		return []string{"- available_objects=none"}
+	}
+
+	excludedIDs := make(map[string]struct{}, len(excluded))
+	for _, object := range excluded {
+		if object != nil && object.ID != "" {
+			excludedIDs[object.ID] = struct{}{}
+		}
 	}
 
 	lines := []string{"- available_objects:"}
@@ -121,7 +143,7 @@ func formatCompactObjectsContext(objects []*models.ObjectMeta, activeObject *mod
 		if object == nil {
 			continue
 		}
-		if activeObject != nil && object.ID == activeObject.ID {
+		if _, ok := excludedIDs[object.ID]; ok {
 			continue
 		}
 		if count >= limit {
@@ -130,7 +152,7 @@ func formatCompactObjectsContext(objects []*models.ObjectMeta, activeObject *mod
 		lines = append(lines, "  "+formatPlannerObjectContext(object, false))
 		count++
 	}
-	if remaining := countRemainingObjects(objects, activeObject); remaining > count {
+	if remaining := countRemainingObjects(objects, excludedIDs); remaining > count {
 		lines = append(lines, fmt.Sprintf("  ... %d more object(s)", remaining-count))
 	}
 	return lines

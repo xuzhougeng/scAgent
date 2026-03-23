@@ -5,12 +5,12 @@
 `Workspace`
 
 - Owns one shared dataset/workspace root.
-- Tracks `dataset_id`, `active_object_id`, timestamps, and shared object/artifact lineage.
+- Tracks `dataset_id`, `focus_object_id`, timestamps, and shared object/artifact lineage.
 
 `Session`
 
 - Represents one conversation thread inside a workspace.
-- Tracks `workspace_id`, its own conversation-local history, `active_object_id`, timestamps, and lifecycle status.
+- Tracks `workspace_id`, its own conversation-local history, `focus_object_id`, timestamps, and lifecycle status.
 
 `ObjectMeta`
 
@@ -236,7 +236,7 @@ Response shape:
   "planning_request": {
     "message": "根据这个 h5ad 的细胞类型字段做 subset",
     "session": {},
-    "active_object": {},
+    "focus_object": {},
     "objects": []
   },
   "developer_instructions": "",
@@ -329,7 +329,7 @@ Scoping rules:
 
 - `objects` and `artifacts` are shared at workspace scope
 - `jobs` and `messages` are only for the current conversation
-- `workspace` carries the shared active object and dataset lineage context
+- `workspace` carries the shared focused object and dataset lineage context
 
 ### `POST /api/messages`
 

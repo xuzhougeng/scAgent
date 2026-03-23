@@ -99,7 +99,7 @@ func TestFakePlannerTreatsLegendRequestsAsVisualization(t *testing.T) {
 
 	plan, err := planner.Plan(context.Background(), PlanningRequest{
 		Message: "需要把legend加到data上",
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			Metadata: map[string]any{
 				"obsm_keys": []string{"X_umap"},
 			},
@@ -138,7 +138,7 @@ func TestFakePlannerUsesRecentPlotContextForFollowUp(t *testing.T) {
 
 	plan, err := planner.Plan(context.Background(), PlanningRequest{
 		Message: "把这个图改一下",
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			Metadata: map[string]any{
 				"obsm_keys": []string{"X_umap"},
 			},
@@ -169,7 +169,7 @@ func TestFakePlannerInheritsRecentPlotLegendLocForFollowUp(t *testing.T) {
 
 	plan, err := planner.Plan(context.Background(), PlanningRequest{
 		Message: "把这个图改一下",
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			Metadata: map[string]any{
 				"obsm_keys": []string{"X_umap"},
 			},
@@ -203,7 +203,7 @@ func TestFakePlannerSubsetsNamedCellTypeThenPlotsUMAP(t *testing.T) {
 
 	plan, err := planner.Plan(context.Background(), PlanningRequest{
 		Message: "提取B cells, 单独画UMAP",
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			Metadata: map[string]any{
 				"obsm_keys": []string{"X_umap"},
 				"cell_type_annotation": map[string]any{
@@ -234,7 +234,7 @@ func TestFakePlannerUsesGlobalSubclusterSkillForCellTypeSubclusterRequests(t *te
 
 	plan, err := planner.Plan(context.Background(), PlanningRequest{
 		Message: "保持全局不动，只对B cells做亚群分析",
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			Kind: models.ObjectFilteredDataset,
 			Metadata: map[string]any{
 				"cell_type_annotation": map[string]any{
@@ -262,7 +262,7 @@ func TestFakePlannerUsesSubsetReanalysisSkillForExtractedSubgroups(t *testing.T)
 
 	plan, err := planner.Plan(context.Background(), PlanningRequest{
 		Message: "对这个提取出来的亚群重新做亚群分析",
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			Kind: models.ObjectSubset,
 		},
 	})
@@ -282,7 +282,7 @@ func TestFakePlannerCarriesExplicitPlotParams(t *testing.T) {
 
 	plan, err := planner.Plan(context.Background(), PlanningRequest{
 		Message: "把这个图改一下，legend_loc='on data' point_size=12 title='UMAP with labels'",
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			Metadata: map[string]any{
 				"obsm_keys": []string{"X_umap"},
 			},
@@ -321,7 +321,7 @@ func TestFakePlannerUsesPlotGeneUMAPForGeneRequests(t *testing.T) {
 
 	plan, err := planner.Plan(context.Background(), PlanningRequest{
 		Message: "绘制LDHB的UMAP",
-		ActiveObject: &models.ObjectMeta{
+		FocusObject: &models.ObjectMeta{
 			Metadata: map[string]any{
 				"obsm_keys": []string{"X_umap"},
 			},

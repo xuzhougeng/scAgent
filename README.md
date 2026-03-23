@@ -83,7 +83,7 @@ Available Makefile targets:
 
 ```bash
 make dev             # run via start.sh
-make restore         # reset store.db and workspace files
+make restore         # reset store.db and workspace files, preserve WeChat login state
 make weixin          # run with WeChat bridge enabled
 make weixin-login    # WeChat login flow
 make weixin-logout   # WeChat logout flow
