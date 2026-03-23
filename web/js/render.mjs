@@ -980,11 +980,26 @@ function buildCheckpointMarkup(job) {
                     ? `<p class="muted">${escapeHTML(checkpoint.summary)}</p>`
                     : ""
                 }
+                ${buildCheckpointDebugMarkup(checkpoint)}
               </div>
             `,
           )
           .join("")}
       </div>
+    </div>
+  `;
+}
+
+function buildCheckpointDebugMarkup(checkpoint) {
+  const rawError = String(checkpoint?.metadata?.raw_error || "").trim();
+  if (!rawError) {
+    return "";
+  }
+
+  return `
+    <div class="message-debug-block">
+      <div class="message-debug-label">底层错误</div>
+      <pre>${escapeHTML(rawError)}</pre>
     </div>
   `;
 }

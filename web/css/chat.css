@@ -364,6 +364,31 @@
   margin: 8px 0 0;
 }
 
+.message-debug-block {
+  margin-top: 10px;
+}
+
+.message-debug-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.message-debug-block pre {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 12px;
+  background: #18211c;
+  color: #eff8f0;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .message-plan-details {
   margin-top: 12px;
   border: 1px solid rgba(61, 107, 75, 0.12);
