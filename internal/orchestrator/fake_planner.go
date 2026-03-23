@@ -193,7 +193,8 @@ func (p *FakePlanner) DebugPreview(_ context.Context, request PlanningRequest) (
 	return &PlannerDebugPreview{
 		PlannerMode:     p.Mode(),
 		PlanningRequest: request,
-		Note:            "规则规划器基于固定关键词生成步骤，不会构造 LLM 提示词。",
+		PlannerContext:  formatPlannerContext(request),
+		Note:            "规则规划器基于固定关键词生成步骤，不会构造 LLM 提示词。planning_request 是内部快照；planner_context 是压缩后的规划上下文。",
 	}, nil
 }
 

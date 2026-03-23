@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -158,13 +159,16 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 		t.Fatalf("planner request missing object context: %s", string(capturedBody))
 	}
 	if !bytes.Contains(capturedBody, []byte(`obs_fields`)) {
-		t.Fatalf("planner request missing metadata context: %s", string(capturedBody))
+		t.Fatalf("planner request missing compact object signals: %s", string(capturedBody))
 	}
 	if !bytes.Contains(capturedBody, []byte(`legend_loc`)) || !bytes.Contains(capturedBody, []byte(`on data`)) {
 		t.Fatalf("planner request missing recent step params/metadata context: %s", string(capturedBody))
 	}
 	if !bytes.Contains(capturedBody, []byte(`working_memory`)) || !bytes.Contains(capturedBody, []byte(`confirmed_preferences`)) {
 		t.Fatalf("planner request missing working memory context: %s", string(capturedBody))
+	}
+	if bytes.Contains(capturedBody, []byte(`input_image`)) {
+		t.Fatalf("planner request should not inline image inputs: %s", string(capturedBody))
 	}
 
 	var requestPayload map[string]any
@@ -192,158 +196,168 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 	if !ok {
 		t.Fatalf("planner schema missing steps")
 	}
+	if minItems, ok := stepsPayload["minItems"].(float64); !ok || minItems != 1 {
+		t.Fatalf("planner schema should require at least one step: %+v", stepsPayload)
+	}
 	itemsPayload, ok := stepsPayload["items"].(map[string]any)
 	if !ok {
 		t.Fatalf("planner schema missing items")
 	}
-	stepVariants, ok := itemsPayload["anyOf"].([]any)
-	if !ok || len(stepVariants) == 0 {
-		t.Fatalf("planner schema missing skill variants")
+	requiredFields, ok := itemsPayload["required"].([]any)
+	if !ok {
+		t.Fatalf("planner step schema missing required fields: %+v", itemsPayload)
+	}
+	if len(requiredFields) != 4 {
+		t.Fatalf("plan step schema required must enumerate every property: %+v", itemsPayload)
+	}
+	requiredFieldNames := make(map[string]struct{}, len(requiredFields))
+	for _, requiredField := range requiredFields {
+		name, ok := requiredField.(string)
+		if !ok {
+			t.Fatalf("plan step schema required contains non-string value: %+v", requiredFields)
+		}
+		requiredFieldNames[name] = struct{}{}
+	}
+	for _, field := range []string{"skill", "target_object_id", "params", "memory_refs"} {
+		if _, ok := requiredFieldNames[field]; !ok {
+			t.Fatalf("plan step schema required missing %q: %+v", field, requiredFields)
+		}
 	}
 
-	foundStrictParams := false
-	foundPlotUMAPParams := false
-	foundPlotGeneUMAPSkill := false
-	foundCustomCodeSkill := false
-	for _, variant := range stepVariants {
-		stepPayload, ok := variant.(map[string]any)
-		if !ok {
-			continue
-		}
-		stepProperties, ok := stepPayload["properties"].(map[string]any)
-		if !ok {
-			continue
-		}
-		requiredFields, ok := stepPayload["required"].([]any)
-		if !ok {
-			t.Fatalf("plan step schema missing required fields: %+v", stepPayload)
-		}
-		if len(requiredFields) != 4 {
-			t.Fatalf("plan step schema required must enumerate every property: %+v", stepPayload)
-		}
-		requiredFieldNames := make(map[string]struct{}, len(requiredFields))
-		for _, requiredField := range requiredFields {
-			name, ok := requiredField.(string)
-			if !ok {
-				t.Fatalf("plan step schema required contains non-string value: %+v", requiredFields)
-			}
-			requiredFieldNames[name] = struct{}{}
-		}
-		for _, field := range []string{"skill", "target_object_id", "params", "memory_refs"} {
-			if _, ok := requiredFieldNames[field]; !ok {
-				t.Fatalf("plan step schema required missing %q: %+v", field, requiredFields)
-			}
-		}
-		skillPayload, ok := stepProperties["skill"].(map[string]any)
-		if !ok {
-			continue
-		}
-		enumValues, ok := skillPayload["enum"].([]any)
-		if !ok || len(enumValues) != 1 {
-			continue
-		}
-		if enumValues[0] == "run_python_analysis" {
-			foundCustomCodeSkill = true
-		}
-		if enumValues[0] == "plot_gene_umap" {
-			foundPlotGeneUMAPSkill = true
-		}
-		if enumValues[0] == "plot_umap" {
-			paramsPayload, ok := stepProperties["params"].(map[string]any)
-			if !ok {
-				t.Fatalf("plot_umap params schema missing")
-			}
-			paramsProperties, ok := paramsPayload["properties"].(map[string]any)
-			if !ok {
-				t.Fatalf("plot_umap params schema missing properties: %+v", paramsPayload)
-			}
-			legendLocPayload, ok := paramsProperties["legend_loc"].(map[string]any)
-			if !ok {
-				t.Fatalf("plot_umap legend_loc schema missing: %+v", paramsPayload)
-			}
-			legendLocAnyOf, ok := legendLocPayload["anyOf"].([]any)
-			if !ok || len(legendLocAnyOf) != 2 {
-				t.Fatalf("plot_umap legend_loc should allow null: %+v", legendLocPayload)
-			}
-			stringSchema, ok := legendLocAnyOf[0].(map[string]any)
-			if !ok {
-				t.Fatalf("plot_umap legend_loc first anyOf entry invalid: %+v", legendLocPayload)
-			}
-			enumPayload, ok := stringSchema["enum"].([]any)
-			if !ok || len(enumPayload) == 0 {
-				t.Fatalf("plot_umap legend_loc enum missing: %+v", legendLocPayload)
-			}
-			foundOnData := false
-			for _, candidate := range enumPayload {
-				if candidate == "on data" {
-					foundOnData = true
-					break
-				}
-			}
-			if !foundOnData {
-				t.Fatalf("plot_umap legend_loc enum missing 'on data': %+v", legendLocPayload)
-			}
-			foundPlotUMAPParams = true
-		}
-		memoryRefsPayload, ok := stepProperties["memory_refs"].(map[string]any)
-		if !ok {
-			t.Fatalf("plan step schema missing memory_refs: %+v", stepProperties)
-		}
-		memoryRefsAnyOf, ok := memoryRefsPayload["anyOf"].([]any)
-		if !ok || len(memoryRefsAnyOf) != 2 {
-			t.Fatalf("memory_refs should allow null: %+v", memoryRefsPayload)
-		}
-		if enumValues[0] != "inspect_dataset" {
-			continue
-		}
-		paramsPayload, ok := stepProperties["params"].(map[string]any)
-		if !ok {
-			t.Fatalf("inspect_dataset params schema missing")
-		}
-		if paramsPayload["additionalProperties"] != false {
-			t.Fatalf("inspect_dataset params schema must be strict: %+v", paramsPayload)
-		}
-		requiredFields, ok = paramsPayload["required"].([]any)
-		if !ok {
-			t.Fatalf("inspect_dataset params schema missing required array: %+v", paramsPayload)
-		}
-		if len(requiredFields) != 1 || requiredFields[0] != "include_fields" {
-			t.Fatalf("inspect_dataset params required must enumerate all properties: %+v", paramsPayload)
-		}
-		paramsProperties, ok := paramsPayload["properties"].(map[string]any)
-		if !ok {
-			t.Fatalf("inspect_dataset params schema missing properties: %+v", paramsPayload)
-		}
-		includeFieldsPayload, ok := paramsProperties["include_fields"].(map[string]any)
-		if !ok {
-			t.Fatalf("inspect_dataset include_fields schema missing: %+v", paramsPayload)
-		}
-		includeFieldsAnyOf, ok := includeFieldsPayload["anyOf"].([]any)
-		if !ok || len(includeFieldsAnyOf) != 2 {
-			t.Fatalf("inspect_dataset include_fields should allow null: %+v", includeFieldsPayload)
-		}
-		targetObjectPayload, ok := stepProperties["target_object_id"].(map[string]any)
-		if !ok {
-			t.Fatalf("inspect_dataset target_object_id schema missing")
-		}
-		targetObjectAnyOf, ok := targetObjectPayload["anyOf"].([]any)
-		if !ok || len(targetObjectAnyOf) != 2 {
-			t.Fatalf("inspect_dataset target_object_id should allow null: %+v", targetObjectPayload)
-		}
-		foundStrictParams = true
+	stepProperties, ok := itemsPayload["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("planner step schema missing properties: %+v", itemsPayload)
 	}
 
-	if !foundStrictParams {
-		t.Fatalf("did not find strict inspect_dataset params schema in planner request")
+	skillPayload, ok := stepProperties["skill"].(map[string]any)
+	if !ok {
+		t.Fatalf("planner step schema missing skill property")
 	}
-	if !foundPlotUMAPParams {
-		t.Fatalf("did not find plot_umap params schema in planner request")
+	enumValues, ok := skillPayload["enum"].([]any)
+	if !ok || len(enumValues) == 0 {
+		t.Fatalf("planner skill enum missing: %+v", skillPayload)
 	}
-	if !foundPlotGeneUMAPSkill {
-		t.Fatalf("did not find plot_gene_umap skill in planner request schema")
+	for _, requiredSkill := range []any{"inspect_dataset", "plot_umap", "plot_gene_umap", "run_python_analysis"} {
+		found := false
+		for _, candidate := range enumValues {
+			if candidate == requiredSkill {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("planner skill enum missing %v: %+v", requiredSkill, enumValues)
+		}
 	}
-	if !foundCustomCodeSkill {
-		t.Fatalf("did not find run_python_analysis skill in planner request schema")
+
+	paramsPayload, ok := stepProperties["params"].(map[string]any)
+	if !ok {
+		t.Fatalf("planner step schema missing params property")
+	}
+	if paramsPayload["type"] != "object" {
+		t.Fatalf("planner params schema should be generic object: %+v", paramsPayload)
+	}
+	if paramsPayload["additionalProperties"] != false {
+		t.Fatalf("planner params schema should be strict superset object: %+v", paramsPayload)
+	}
+	paramsProperties, ok := paramsPayload["properties"].(map[string]any)
+	if !ok || len(paramsProperties) == 0 {
+		t.Fatalf("planner params schema should include superset properties: %+v", paramsPayload)
+	}
+	for _, field := range []string{"groupby", "genes", "legend_loc", "include_fields", "code"} {
+		if _, ok := paramsProperties[field]; !ok {
+			t.Fatalf("planner params schema missing field %q: %+v", field, paramsProperties)
+		}
+	}
+
+	memoryRefsPayload, ok := stepProperties["memory_refs"].(map[string]any)
+	if !ok {
+		t.Fatalf("plan step schema missing memory_refs: %+v", stepProperties)
+	}
+	memoryRefsAnyOf, ok := memoryRefsPayload["anyOf"].([]any)
+	if !ok || len(memoryRefsAnyOf) != 2 {
+		t.Fatalf("memory_refs should allow null: %+v", memoryRefsPayload)
+	}
+
+	targetObjectPayload, ok := stepProperties["target_object_id"].(map[string]any)
+	if !ok {
+		t.Fatalf("plan step schema missing target_object_id")
+	}
+	targetObjectAnyOf, ok := targetObjectPayload["anyOf"].([]any)
+	if !ok || len(targetObjectAnyOf) != 2 {
+		t.Fatalf("target_object_id should allow null: %+v", targetObjectPayload)
+	}
+}
+
+func TestLLMPlannerBuildRequestUsesArtifactSummariesInsteadOfImageBytes(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	planner, err := NewLLMPlanner(LLMPlannerConfig{
+		APIKey:          "test-key",
+		BaseURL:         "https://example.test/v1",
+		Model:           "gpt-5.4",
+		ReasoningEffort: "low",
+		Skills:          registry,
+	}, &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		t.Fatalf("http client should not be used in buildRequest test")
+		return nil, nil
+	})})
+	if err != nil {
+		t.Fatalf("create LLM planner: %v", err)
+	}
+
+	imagePath := filepath.Join(t.TempDir(), "recent-plot.png")
+	if err := os.WriteFile(imagePath, tinyPNG(), 0o644); err != nil {
+		t.Fatalf("write temp image: %v", err)
+	}
+
+	payload, err := json.Marshal(planner.buildRequest(PlanningRequest{
+		Message: "导出当前对象为 h5ad",
+		Session: &models.Session{
+			ID:             "sess_123",
+			ActiveObjectID: "obj_1",
+		},
+		ActiveObject: &models.ObjectMeta{
+			ID:    "obj_1",
+			Label: "pbmc3k",
+			Kind:  models.ObjectFilteredDataset,
+			NObs:  2638,
+			NVars: 1838,
+			Metadata: map[string]any{
+				"assessment": map[string]any{
+					"available_analyses": []any{"inspect_dataset", "plot_umap", "export_h5ad"},
+					"has_umap":           true,
+				},
+			},
+		},
+		RecentArtifacts: []*models.Artifact{
+			{
+				ID:          "artifact_plot_1",
+				Kind:        models.ArtifactPlot,
+				ObjectID:    "obj_1",
+				JobID:       "job_1",
+				Title:       "pbmc3k 的 UMAP 图",
+				Summary:     "按 cell_type 着色的真实 UMAP 图。",
+				Path:        imagePath,
+				ContentType: "image/png",
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("marshal planner request: %v", err)
+	}
+
+	if bytes.Contains(payload, []byte(`data:image/png;base64,`)) {
+		t.Fatalf("planner request should not contain inlined image bytes: %s", string(payload))
+	}
+	if bytes.Contains(payload, []byte(`"input_image"`)) {
+		t.Fatalf("planner request should not contain image input items: %s", string(payload))
+	}
+	if !bytes.Contains(payload, []byte(`pbmc3k 的 UMAP 图`)) {
+		t.Fatalf("planner request should retain artifact summaries: %s", string(payload))
 	}
 }
 

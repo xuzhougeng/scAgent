@@ -646,7 +646,8 @@ func TestPlannerPreviewIncludesActiveObjectContext(t *testing.T) {
 	}
 
 	var preview struct {
-		PlannerMode     string `json:"planner_mode"`
+		PlannerMode     string   `json:"planner_mode"`
+		PlannerContext  []string `json:"planner_context"`
 		PlanningRequest struct {
 			Message      string `json:"message"`
 			ActiveObject struct {
@@ -669,6 +670,9 @@ func TestPlannerPreviewIncludesActiveObjectContext(t *testing.T) {
 	}
 	if preview.PlanningRequest.ActiveObject.NObs != 2638 || preview.PlanningRequest.ActiveObject.NVars != 1838 {
 		t.Fatalf("unexpected active object shape: %+v", preview.PlanningRequest.ActiveObject)
+	}
+	if len(preview.PlannerContext) == 0 {
+		t.Fatalf("expected compact planner context in preview")
 	}
 }
 

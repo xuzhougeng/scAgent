@@ -12,7 +12,25 @@ import (
 
 const maxVisualInputArtifacts = 2
 
+type UserInputContentPolicy struct {
+	IncludeInputVisualArtifacts  bool
+	IncludeRecentVisualArtifacts bool
+}
+
 func buildUserInputContent(message string, inputArtifacts []*models.Artifact, recentArtifacts []*models.Artifact) any {
+	return buildUserInputContentWithPolicy(message, inputArtifacts, recentArtifacts, UserInputContentPolicy{
+		IncludeInputVisualArtifacts:  true,
+		IncludeRecentVisualArtifacts: true,
+	})
+}
+
+func buildUserInputContentWithPolicy(message string, inputArtifacts []*models.Artifact, recentArtifacts []*models.Artifact, policy UserInputContentPolicy) any {
+	if !policy.IncludeInputVisualArtifacts {
+		inputArtifacts = nil
+	}
+	if !policy.IncludeRecentVisualArtifacts {
+		recentArtifacts = nil
+	}
 	visualArtifacts := collectVisualInputArtifacts(inputArtifacts, recentArtifacts, maxVisualInputArtifacts)
 	if len(visualArtifacts) == 0 {
 		return message

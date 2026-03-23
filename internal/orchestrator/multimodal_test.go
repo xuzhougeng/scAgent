@@ -67,6 +67,45 @@ func TestBuildUserInputContentIgnoresCSVArtifacts(t *testing.T) {
 	}
 }
 
+func TestBuildUserInputContentWithPolicyExcludesRecentVisualArtifacts(t *testing.T) {
+	inputImagePath := filepath.Join(t.TempDir(), "input.png")
+	if err := os.WriteFile(inputImagePath, tinyPNG(), 0o644); err != nil {
+		t.Fatalf("write temp input image: %v", err)
+	}
+	recentImagePath := filepath.Join(t.TempDir(), "recent.png")
+	if err := os.WriteFile(recentImagePath, tinyPNG(), 0o644); err != nil {
+		t.Fatalf("write temp recent image: %v", err)
+	}
+
+	content := buildUserInputContentWithPolicy(
+		"请回答这个问题",
+		[]*models.Artifact{{
+			ID:          "artifact_input",
+			Path:        inputImagePath,
+			ContentType: "image/png",
+			Title:       "用户上传图片",
+		}},
+		[]*models.Artifact{{
+			ID:          "artifact_recent",
+			Path:        recentImagePath,
+			ContentType: "image/png",
+			Title:       "最近生成图片",
+		}},
+		UserInputContentPolicy{
+			IncludeInputVisualArtifacts:  true,
+			IncludeRecentVisualArtifacts: false,
+		},
+	)
+
+	items, ok := content.([]map[string]any)
+	if !ok {
+		t.Fatalf("expected multimodal content array, got %T", content)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected only text and one explicit image item, got %d", len(items))
+	}
+}
+
 func tinyPNG() []byte {
 	return []byte{
 		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,

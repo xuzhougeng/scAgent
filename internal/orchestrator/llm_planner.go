@@ -220,9 +220,10 @@ func (p *LLMPlanner) DebugPreview(_ context.Context, requestPayload PlanningRequ
 	return &PlannerDebugPreview{
 		PlannerMode:           p.Mode(),
 		PlanningRequest:       requestPayload,
+		PlannerContext:        formatPlannerContext(requestPayload),
 		DeveloperInstructions: p.instructions(requestPayload),
 		RequestBody:           p.buildRequest(requestPayload),
-		Note:                  "Authorization headers are omitted from this preview.",
+		Note:                  "Authorization headers are omitted from this preview. planning_request is the internal snapshot; planner_context and request_body reflect the compact context actually sent to the planner.",
 	}, nil
 }
 
@@ -265,12 +266,8 @@ func (p *LLMPlanner) buildRequest(requestPayload PlanningRequest) map[string]any
 				"content": p.instructions(requestPayload),
 			},
 			{
-				"role": "user",
-				"content": buildUserInputContent(
-					requestPayload.Message,
-					requestPayload.InputArtifacts,
-					requestPayload.RecentArtifacts,
-				),
+				"role":    "user",
+				"content": buildPlannerUserInputContent(requestPayload.Message),
 			},
 		},
 		"text": map[string]any{
@@ -287,31 +284,16 @@ func (p *LLMPlanner) buildRequest(requestPayload PlanningRequest) map[string]any
 func (p *LLMPlanner) instructions(requestPayload PlanningRequest) string {
 	lines := []string{
 		"You are the scAgent planner.",
-		"Convert the user request into a JSON execution plan.",
-		"Return only valid JSON matching the supplied schema.",
-		"Use only listed skills.",
-		"Use \"$active\" for the current object and \"$prev\" for chaining.",
-		"Do not invent parameters outside the skill schemas.",
-		"Prefer the fewest valid steps needed to satisfy the request.",
-		"Compose multiple skills when the user asks for a workflow, not just a single action.",
-		"If the user asks for routine preprocessing, prefer a chain such as normalize_total -> log1p_transform -> select_hvg -> run_pca -> compute_neighbors -> run_umap when those skills are available and appropriate.",
-		"If the user asks to reanalyze an already extracted subgroup or subset, prefer reanalyze_subset over composing low-level preprocessing steps by hand.",
-		"If the user asks to keep the global object unchanged but perform subgroup analysis on one cell type such as B cells, prefer subcluster_from_global when the request can be expressed with obs_field/op/value.",
-		"If the request is about plot presentation details such as legends, colors, or labels, prefer the closest visualization skill such as plot_umap instead of returning an empty plan.",
-		"If the user asks for a UMAP colored by one or more genes, or mentions gene symbols such as LDHB or GATA3 in a UMAP request, prefer plot_gene_umap over plot_umap.",
-		"If the user provides explicit plotting kwargs such as legend_loc='on data' or point_size=12, copy them into params when the selected skill supports them.",
-		"If the user asks to isolate a cell type or annotation group and then visualize it, prefer subset_cells followed by plot_umap instead of run_python_analysis whenever the request can be expressed with obs_field/op/value.",
-		"Treat recent_messages, recent_jobs, and recent_artifacts as conversation context for follow-up requests such as '把这个图改一下' or '把图例加上'.",
-		"The current user turn may include attached images; use them as part of the user's request when relevant.",
-		"Use working_memory as the compact source of ongoing session context when recent history is truncated.",
-		"For follow-up edits to an existing plot or artifact, preserve the most recent matching step params and metadata unless the user explicitly asks to change them.",
-		"When a step relies on working_memory, record the specific memory keys or items it used in memory_refs.",
-		"If a running or recent job already completed part of the same request, continue from the current object state and avoid repeating already completed steps unless repeating them is clearly necessary.",
-		"Use run_python_analysis only as a last resort when no existing wired skill can satisfy the request; keep the generated code short, deterministic, and focused on adata/scanpy operations.",
-		"When using run_python_analysis, adata is the current object and counts_adata is a count-safe copy for preprocessing-style code.",
-		"When using run_python_analysis for scalar or textual answers, prefer assigning result_value, result_text, or result_summary explicitly instead of only printing to stdout.",
-		"If the user asks to write, generate, or export a Methods section (方法描述 / Methods / 实验方法) describing the analysis pipeline, use write_method instead of run_python_analysis.",
-		"Never return an empty steps array.",
+		"Return a minimal JSON execution plan using only listed skills.",
+		"Use \"$active\" for the current object and \"$prev\" for chaining derived outputs.",
+		"Prefer the fewest valid steps; compose multiple steps only when the request is clearly a workflow.",
+		"Use recent_messages, recent_jobs, recent_artifacts, and working_memory for follow-up intent such as edit-this-plot requests.",
+		"Artifact context is summary-only; do not assume raw file contents or image bytes unless explicitly present in the user turn.",
+		"Preserve prior plot params/metadata for follow-up edits unless the user explicitly changes them.",
+		"Record memory_refs when a step depends on working_memory or other prior context.",
+		"Prefer wired skills over run_python_analysis. Use run_python_analysis only as a last resort for unsupported operations.",
+		"Prefer plot_gene_umap for gene-colored UMAP requests, subset_cells+plot_umap for isolate-then-plot requests, reanalyze_subset for already extracted subsets, and write_method for Methods/方法描述 requests.",
+		"After generation, ensure the plan is executable: required params must be present and steps must not be empty.",
 		"Available skills:",
 	}
 
@@ -320,7 +302,7 @@ func (p *LLMPlanner) instructions(requestPayload PlanningRequest) string {
 	}
 
 	lines = append(lines, "Current session context:")
-	lines = append(lines, formatPlanningContext(requestPayload)...)
+	lines = append(lines, formatPlannerContext(requestPayload)...)
 
 	return strings.Join(lines, "\n")
 }
@@ -337,22 +319,30 @@ func formatSkillInstruction(definition skill.Definition) string {
 	sort.Strings(inputNames)
 	sort.Strings(required)
 
+	inputs := strings.Join(inputNames, ",")
+	requiredInputs := strings.Join(required, ",")
+	if inputs == "" {
+		inputs = "-"
+	}
+	if requiredInputs == "" {
+		requiredInputs = "-"
+	}
+
 	return fmt.Sprintf(
-		"- %s: %s | category=%s | support=%s | inputs=%s | required=%s",
+		"- %s(%s) req=[%s]: %s",
 		definition.Name,
+		inputs,
+		requiredInputs,
 		definition.Description,
-		definition.Category,
-		definition.SupportLevel,
-		strings.Join(inputNames, ","),
-		strings.Join(required, ","),
 	)
 }
 
 func planSchema(definitions []skill.Definition) map[string]any {
-	stepSchemas := make([]any, 0, len(definitions))
+	skillNames := make([]string, 0, len(definitions))
 	for _, definition := range definitions {
-		stepSchemas = append(stepSchemas, planStepSchema(definition))
+		skillNames = append(skillNames, definition.Name)
 	}
+	sort.Strings(skillNames)
 
 	return map[string]any{
 		"type":                 "object",
@@ -360,16 +350,15 @@ func planSchema(definitions []skill.Definition) map[string]any {
 		"required":             []string{"steps"},
 		"properties": map[string]any{
 			"steps": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"anyOf": stepSchemas,
-				},
+				"type":     "array",
+				"minItems": 1,
+				"items":    genericPlanStepSchema(skillNames, definitions),
 			},
 		},
 	}
 }
 
-func planStepSchema(definition skill.Definition) map[string]any {
+func genericPlanStepSchema(skillNames []string, definitions []skill.Definition) map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
@@ -377,10 +366,10 @@ func planStepSchema(definition skill.Definition) map[string]any {
 		"properties": map[string]any{
 			"skill": map[string]any{
 				"type": "string",
-				"enum": []string{definition.Name},
+				"enum": skillNames,
 			},
 			"target_object_id": nullableSchema(map[string]any{"type": "string"}),
-			"params":           paramsSchema(definition),
+			"params":           genericParamsSchema(definitions),
 			"memory_refs": nullableSchema(map[string]any{
 				"type": "array",
 				"items": map[string]any{
@@ -391,38 +380,74 @@ func planStepSchema(definition skill.Definition) map[string]any {
 	}
 }
 
-func paramsSchema(definition skill.Definition) map[string]any {
-	properties := make(map[string]any, len(definition.Input))
-	inputNames := make([]string, 0, len(definition.Input))
+func genericParamsSchema(definitions []skill.Definition) map[string]any {
+	propertyVariants := make(map[string][]map[string]any)
+	for _, definition := range definitions {
+		for name, field := range definition.Input {
+			if name == "target_object_id" {
+				continue
+			}
+			schema := fieldSchema(field)
+			if !schemaAllowsNull(schema) {
+				schema = nullableSchema(schema)
+			}
+			propertyVariants[name] = appendUniqueSchema(propertyVariants[name], schema)
+		}
+	}
 
-	for name := range definition.Input {
+	inputNames := make([]string, 0, len(propertyVariants))
+	for name := range propertyVariants {
 		inputNames = append(inputNames, name)
 	}
 	sort.Strings(inputNames)
 
+	properties := make(map[string]any, len(inputNames))
 	for _, name := range inputNames {
-		field := definition.Input[name]
-		if name == "target_object_id" {
+		variants := propertyVariants[name]
+		if len(variants) == 1 {
+			properties[name] = variants[0]
 			continue
 		}
-
-		properties[name] = fieldSchema(field)
-	}
-
-	required := make([]string, 0, len(properties))
-	for _, name := range inputNames {
-		if name == "target_object_id" {
-			continue
+		anyOf := make([]any, 0, len(variants))
+		for _, variant := range variants {
+			anyOf = append(anyOf, variant)
 		}
-		required = append(required, name)
+		properties[name] = map[string]any{"anyOf": anyOf}
 	}
 
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties":           properties,
-		"required":             required,
+		"required":             inputNames,
 	}
+}
+
+func appendUniqueSchema(existing []map[string]any, candidate map[string]any) []map[string]any {
+	signature := mustMarshalJSON(candidate)
+	for _, schema := range existing {
+		if mustMarshalJSON(schema) == signature {
+			return existing
+		}
+	}
+	return append(existing, candidate)
+}
+
+func schemaAllowsNull(schema map[string]any) bool {
+	anyOf, ok := schema["anyOf"].([]any)
+	if !ok {
+		return false
+	}
+	for _, candidate := range anyOf {
+		entry, ok := candidate.(map[string]any)
+		if !ok {
+			continue
+		}
+		if entry["type"] == "null" {
+			return true
+		}
+	}
+	return false
 }
 
 func fieldSchema(field skill.FieldSchema) map[string]any {
@@ -490,6 +515,11 @@ func nullableSchema(schema map[string]any) map[string]any {
 }
 
 type openAIResponsesResponse struct {
+	Usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+		TotalTokens  int `json:"total_tokens"`
+	} `json:"usage"`
 	Output []struct {
 		Type    string `json:"type"`
 		Content []struct {
@@ -516,6 +546,14 @@ func compactJSON(value string) string {
 		return value[:300] + "..."
 	}
 	return value
+}
+
+func buildPlannerUserInputContent(message string) any {
+	return strings.TrimSpace(message)
+}
+
+func formatPlannerContext(request PlanningRequest) []string {
+	return formatPlanningContextWithPolicy(request, plannerPlanningContextPolicy())
 }
 
 func formatPlanningContext(request PlanningRequest) []string {
@@ -578,6 +616,124 @@ func formatPlanningContext(request PlanningRequest) []string {
 	return lines
 }
 
+func formatPlannerArtifactGroup(label string, artifacts []*models.Artifact, limit int) []string {
+	if len(artifacts) == 0 || limit <= 0 {
+		return []string{"- " + label + "=none"}
+	}
+
+	lines := []string{"- " + label + ":"}
+	count := 0
+	for _, artifact := range artifacts {
+		if artifact == nil {
+			continue
+		}
+		if count >= limit {
+			break
+		}
+		lines = append(lines, "  "+formatPlannerArtifactContext(artifact))
+		count++
+	}
+	if remaining := countRemainingArtifacts(artifacts); remaining > count {
+		lines = append(lines, fmt.Sprintf("  ... %d more artifact(s)", remaining-count))
+	}
+	return lines
+}
+
+func formatPlannerRecentMessages(messages []*models.Message, limit int) []string {
+	filtered := make([]*models.Message, 0, len(messages))
+	for _, message := range messages {
+		if message != nil {
+			filtered = append(filtered, message)
+		}
+	}
+	if len(filtered) == 0 || limit <= 0 {
+		return []string{"- recent_messages=none"}
+	}
+
+	start := len(filtered) - limit
+	if start < 0 {
+		start = 0
+	}
+	lines := []string{"- recent_messages:"}
+	for _, message := range filtered[start:] {
+		lines = append(lines, "  "+formatMessageContext(message))
+	}
+	return lines
+}
+
+func formatPlannerRecentJobs(jobs []*models.Job, limit int) []string {
+	filtered := make([]*models.Job, 0, len(jobs))
+	for _, job := range jobs {
+		if job != nil {
+			filtered = append(filtered, job)
+		}
+	}
+	if len(filtered) == 0 || limit <= 0 {
+		return []string{"- recent_jobs=none"}
+	}
+
+	start := len(filtered) - limit
+	if start < 0 {
+		start = 0
+	}
+	lines := []string{"- recent_jobs:"}
+	for _, job := range filtered[start:] {
+		lines = append(lines, "  "+formatPlannerJobContext(job))
+	}
+	return lines
+}
+
+func formatPlannerWorkingMemoryContext(memory *models.WorkingMemory, artifactLimit, preferenceLimit, stateChangeLimit int) []string {
+	if memory == nil {
+		return []string{"- working_memory=none"}
+	}
+
+	lines := []string{"- working_memory:"}
+	if memory.Focus != nil {
+		lines = append(lines, "  focus="+formatWorkingMemoryFocus(memory.Focus))
+	} else {
+		lines = append(lines, "  focus=none")
+	}
+
+	if len(memory.RecentArtifacts) == 0 {
+		lines = append(lines, "  recent_artifacts=none")
+	} else {
+		lines = append(lines, "  recent_artifacts:")
+		for _, artifact := range takeLastWorkingMemoryArtifacts(memory.RecentArtifacts, artifactLimit) {
+			lines = append(lines, "    "+formatWorkingMemoryArtifact(artifact))
+		}
+		if artifactLimit > 0 && len(memory.RecentArtifacts) > artifactLimit {
+			lines = append(lines, fmt.Sprintf("    ... %d more artifact ref(s)", len(memory.RecentArtifacts)-artifactLimit))
+		}
+	}
+
+	if len(memory.ConfirmedPreferences) == 0 {
+		lines = append(lines, "  confirmed_preferences=none")
+	} else {
+		lines = append(lines, "  confirmed_preferences:")
+		for _, preference := range takeLastWorkingMemoryPreferences(memory.ConfirmedPreferences, preferenceLimit) {
+			lines = append(lines, "    "+formatWorkingMemoryPreference(preference))
+		}
+		if preferenceLimit > 0 && len(memory.ConfirmedPreferences) > preferenceLimit {
+			lines = append(lines, fmt.Sprintf("    ... %d more preference(s)", len(memory.ConfirmedPreferences)-preferenceLimit))
+		}
+	}
+
+	if len(memory.SemanticStateChanges) == 0 {
+		lines = append(lines, "  semantic_state_changes=none")
+	} else {
+		lines = append(lines, "  semantic_state_changes:")
+		for _, change := range takeLastWorkingMemoryStateChanges(memory.SemanticStateChanges, stateChangeLimit) {
+			lines = append(lines, "    "+formatWorkingMemoryStateChange(change))
+		}
+		if stateChangeLimit > 0 && len(memory.SemanticStateChanges) > stateChangeLimit {
+			lines = append(lines, fmt.Sprintf("    ... %d more state change(s)", len(memory.SemanticStateChanges)-stateChangeLimit))
+		}
+	}
+
+	return lines
+}
+
 func formatWorkingMemoryContext(memory *models.WorkingMemory) []string {
 	if memory == nil {
 		return []string{"- working_memory=none"}
@@ -620,6 +776,162 @@ func formatWorkingMemoryContext(memory *models.WorkingMemory) []string {
 	return lines
 }
 
+func countRemainingObjects(objects []*models.ObjectMeta, activeObject *models.ObjectMeta) int {
+	count := 0
+	for _, object := range objects {
+		if object == nil {
+			continue
+		}
+		if activeObject != nil && object.ID == activeObject.ID {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func countRemainingArtifacts(artifacts []*models.Artifact) int {
+	count := 0
+	for _, artifact := range artifacts {
+		if artifact != nil {
+			count++
+		}
+	}
+	return count
+}
+
+func formatPlannerObjectContext(object *models.ObjectMeta, includeSignals bool) string {
+	if object == nil {
+		return "object=nil"
+	}
+
+	parts := []string{
+		fmt.Sprintf("id=%s", object.ID),
+		fmt.Sprintf("label=%s", object.Label),
+		fmt.Sprintf("kind=%s", object.Kind),
+		fmt.Sprintf("n_obs=%d", object.NObs),
+		fmt.Sprintf("n_vars=%d", object.NVars),
+	}
+	if object.ParentID != "" {
+		parts = append(parts, "parent_id="+object.ParentID)
+	}
+	if includeSignals {
+		if summary := summarizePlannerObjectMetadata(object.Metadata); summary != "" {
+			parts = append(parts, "signals="+summary)
+		}
+	}
+	return strings.Join(parts, " | ")
+}
+
+func summarizePlannerObjectMetadata(metadata map[string]any) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, 8)
+	if assessment := mapValue(metadata["assessment"]); len(assessment) > 0 {
+		if analyses := stringSliceValue(assessment["available_analyses"]); len(analyses) > 0 {
+			parts = append(parts, "available_analyses="+joinListSummary(analyses, 8))
+		}
+		assessmentParts := make([]string, 0, 5)
+		if state := stringValue(assessment["preprocessing_state"]); state != "" {
+			assessmentParts = append(assessmentParts, "preprocessing_state="+state)
+		}
+		for _, key := range []string{"has_clusters", "has_neighbors", "has_pca", "has_umap"} {
+			if value, ok := boolValue(assessment[key]); ok && value {
+				assessmentParts = append(assessmentParts, key)
+			}
+		}
+		if len(assessmentParts) > 0 {
+			parts = append(parts, strings.Join(assessmentParts, ", "))
+		}
+	}
+	if field := stringValue(mapValue(metadata["cell_type_annotation"])["field"]); field != "" {
+		parts = append(parts, "cell_type_field="+field)
+	}
+	if field := stringValue(mapValue(metadata["cluster_annotation"])["field"]); field != "" {
+		parts = append(parts, "cluster_field="+field)
+	}
+	if obsFields := stringSliceValue(metadata["obs_fields"]); len(obsFields) > 0 {
+		parts = append(parts, "obs_fields="+joinListSummary(obsFields, 6))
+	}
+	if obsmKeys := stringSliceValue(metadata["obsm_keys"]); len(obsmKeys) > 0 {
+		parts = append(parts, "obsm_keys="+joinListSummary(obsmKeys, 4))
+	}
+	if unsKeys := stringSliceValue(metadata["uns_keys"]); len(unsKeys) > 0 {
+		parts = append(parts, "uns_keys="+joinListSummary(unsKeys, 4))
+	}
+	if layerKeys := stringSliceValue(metadata["layer_keys"]); len(layerKeys) > 0 {
+		parts = append(parts, "layer_keys="+joinListSummary(layerKeys, 4))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func mapValue(value any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	if mapped, ok := value.(map[string]any); ok {
+		return mapped
+	}
+	return nil
+}
+
+func stringValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
+func boolValue(value any) (bool, bool) {
+	if value == nil {
+		return false, false
+	}
+	flag, ok := value.(bool)
+	return flag, ok
+}
+
+func stringSliceValue(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				text = strings.TrimSpace(text)
+				if text != "" {
+					out = append(out, text)
+				}
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func joinListSummary(items []string, limit int) string {
+	if len(items) == 0 {
+		return ""
+	}
+	if limit <= 0 || len(items) <= limit {
+		return strings.Join(items, ", ")
+	}
+	return fmt.Sprintf("%s (+%d more)", strings.Join(items[:limit], ", "), len(items)-limit)
+}
+
 func formatObjectContext(object *models.ObjectMeta) string {
 	parts := []string{
 		fmt.Sprintf("id=%s", object.ID),
@@ -650,6 +962,53 @@ func formatMessageContext(message *models.Message) string {
 		return "message=nil"
 	}
 	return fmt.Sprintf("role=%s | content=%s", message.Role, truncateText(message.Content, 200))
+}
+
+func formatPlannerJobContext(job *models.Job) string {
+	if job == nil {
+		return "job=nil"
+	}
+
+	parts := []string{
+		"id=" + job.ID,
+		"status=" + string(job.Status),
+	}
+	if job.CurrentPhase != "" {
+		parts = append(parts, "current_phase="+string(job.CurrentPhase))
+	}
+	if job.Summary != "" {
+		parts = append(parts, "summary="+truncateText(job.Summary, 160))
+	}
+
+	if len(job.Steps) > 0 {
+		stepParts := make([]string, 0, 2)
+		start := len(job.Steps) - 2
+		if start < 0 {
+			start = 0
+		}
+		for _, step := range job.Steps[start:] {
+			stepDetails := []string{"skill=" + step.Skill}
+			if step.Status != "" {
+				stepDetails = append(stepDetails, "status="+string(step.Status))
+			}
+			if len(step.Params) > 0 {
+				stepDetails = append(stepDetails, "params="+compactJSON(mustMarshalJSON(step.Params)))
+			}
+			if len(step.Metadata) > 0 {
+				stepDetails = append(stepDetails, "metadata="+compactJSON(mustMarshalJSON(step.Metadata)))
+			}
+			if step.OutputObjectID != "" {
+				stepDetails = append(stepDetails, "output="+step.OutputObjectID)
+			}
+			stepParts = append(stepParts, "{"+strings.Join(stepDetails, " | ")+"}")
+		}
+		if len(job.Steps) > 2 {
+			stepParts = append(stepParts, fmt.Sprintf("+%d more step(s)", len(job.Steps)-2))
+		}
+		parts = append(parts, "steps="+strings.Join(stepParts, "; "))
+	}
+
+	return strings.Join(parts, " | ")
 }
 
 func formatJobContext(job *models.Job) string {
@@ -699,6 +1058,33 @@ func formatJobContext(job *models.Job) string {
 		strings.Join(phaseParts, "; "),
 		strings.Join(stepParts, "; "),
 	)
+}
+
+func formatPlannerArtifactContext(artifact *models.Artifact) string {
+	if artifact == nil {
+		return "artifact=nil"
+	}
+
+	parts := []string{
+		"id=" + artifact.ID,
+		"kind=" + string(artifact.Kind),
+	}
+	if artifact.ObjectID != "" {
+		parts = append(parts, "object_id="+artifact.ObjectID)
+	}
+	if artifact.JobID != "" {
+		parts = append(parts, "job_id="+artifact.JobID)
+	}
+	if artifact.Title != "" {
+		parts = append(parts, "title="+truncateText(artifact.Title, 120))
+	}
+	if artifact.Summary != "" {
+		parts = append(parts, "summary="+truncateText(artifact.Summary, 160))
+	}
+	if artifact.ContentType != "" {
+		parts = append(parts, "content_type="+artifact.ContentType)
+	}
+	return strings.Join(parts, " | ")
 }
 
 func formatArtifactContext(artifact *models.Artifact) string {
@@ -793,6 +1179,45 @@ func formatWorkingMemoryStateChange(change models.WorkingMemoryStateChange) stri
 		parts = append(parts, "summary="+truncateText(change.Summary, 160))
 	}
 	return strings.Join(parts, " | ")
+}
+
+func takeLastWorkingMemoryArtifacts(values []models.WorkingMemoryArtifactRef, limit int) []models.WorkingMemoryArtifactRef {
+	if len(values) == 0 || limit <= 0 {
+		return nil
+	}
+	start := len(values) - limit
+	if start < 0 {
+		start = 0
+	}
+	out := make([]models.WorkingMemoryArtifactRef, len(values[start:]))
+	copy(out, values[start:])
+	return out
+}
+
+func takeLastWorkingMemoryPreferences(values []models.WorkingMemoryPreference, limit int) []models.WorkingMemoryPreference {
+	if len(values) == 0 || limit <= 0 {
+		return nil
+	}
+	start := len(values) - limit
+	if start < 0 {
+		start = 0
+	}
+	out := make([]models.WorkingMemoryPreference, len(values[start:]))
+	copy(out, values[start:])
+	return out
+}
+
+func takeLastWorkingMemoryStateChanges(values []models.WorkingMemoryStateChange, limit int) []models.WorkingMemoryStateChange {
+	if len(values) == 0 || limit <= 0 {
+		return nil
+	}
+	start := len(values) - limit
+	if start < 0 {
+		start = 0
+	}
+	out := make([]models.WorkingMemoryStateChange, len(values[start:]))
+	copy(out, values[start:])
+	return out
 }
 
 func truncateText(text string, limit int) string {

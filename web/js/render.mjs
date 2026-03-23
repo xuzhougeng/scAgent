@@ -425,9 +425,19 @@ export function renderPlannerPreview() {
     }),
   );
 
+  if (preview.planner_context?.length) {
+    blocks.push(
+      renderSidebarCard({
+        title: "Planner Context",
+        body: `<pre>${escapeHTML(preview.planner_context.join("\n"))}</pre>`,
+      }),
+    );
+  }
+
   blocks.push(
     renderSidebarCard({
-      title: "规划请求",
+      title: "内部规划快照",
+      open: false,
       body: `<pre>${escapeHTML(JSON.stringify(preview.planning_request, null, 2))}</pre>`,
     }),
   );
@@ -472,6 +482,7 @@ function buildPlannerPreviewClipboardPayload(preview) {
   return {
     planner_mode: preview?.planner_mode || "",
     note: preview?.note || "",
+    planner_context: preview?.planner_context || [],
     planning_request: preview?.planning_request || null,
     developer_instructions: preview?.developer_instructions || "",
     request_body: preview?.request_body || null,

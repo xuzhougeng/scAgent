@@ -338,10 +338,14 @@ func (a *LLMAnswerer) buildRequest(requestPayload PlanningRequest) map[string]an
 			},
 			{
 				"role": "user",
-				"content": buildUserInputContent(
+				"content": buildUserInputContentWithPolicy(
 					requestPayload.Message,
 					requestPayload.InputArtifacts,
 					requestPayload.RecentArtifacts,
+					UserInputContentPolicy{
+						IncludeInputVisualArtifacts:  true,
+						IncludeRecentVisualArtifacts: false,
+					},
 				),
 			},
 		},
@@ -369,10 +373,14 @@ func (a *LLMAnswerer) buildResponseRequest(requestPayload ResponseComposeRequest
 			},
 			{
 				"role": "user",
-				"content": buildUserInputContent(
+				"content": buildUserInputContentWithPolicy(
 					requestPayload.Message,
 					requestPayload.InputArtifacts,
 					requestPayload.RecentArtifacts,
+					UserInputContentPolicy{
+						IncludeInputVisualArtifacts:  true,
+						IncludeRecentVisualArtifacts: false,
+					},
 				),
 			},
 		},
@@ -400,7 +408,7 @@ func (a *LLMAnswerer) instructions(requestPayload PlanningRequest) string {
 		"Return only valid JSON matching the supplied schema.",
 		"Current session context:",
 	}
-	lines = append(lines, formatPlanningContext(requestPayload)...)
+	lines = append(lines, formatPlanningContextWithPolicy(requestPayload, answererPlanningContextPolicy())...)
 	return strings.Join(lines, "\n")
 }
 

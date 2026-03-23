@@ -1,0 +1,639 @@
+{
+  "suite": "pbmc_llm_eval_cases",
+  "version": 1,
+  "dataset": "pbmc3k",
+  "assumptions": {
+    "active_object": {
+      "label": "pbmc3k",
+      "kind": "filtered_dataset",
+      "n_obs": 2638,
+      "n_vars": 1838
+    },
+    "object_signals": {
+      "obs_fields": ["cell_type", "sample", "leiden"],
+      "obsm_keys": ["X_umap"],
+      "available_analyses": [
+        "inspect_dataset",
+        "plot_umap",
+        "plot_gene_umap",
+        "find_markers",
+        "subset_cells",
+        "plot_celltype_composition",
+        "export_h5ad",
+        "write_method"
+      ]
+    },
+    "cell_type_examples": ["B cells", "T cells", "NK cells", "Monocytes", "Dendritic cells"],
+    "recent_plot_defaults": {
+      "skill": "plot_umap",
+      "color_by": "cell_type",
+      "legend_loc": "on data",
+      "point_size": 8,
+      "title": "PBMC cell types"
+    }
+  },
+  "cases": [
+    {
+      "id": "planner_export_active_h5ad",
+      "component": "planner",
+      "title": "导出当前对象为 h5ad",
+      "user_message": "导出当前对象为 h5ad",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "inline_explicit_visual_bytes": false
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "export_h5ad",
+            "target_object_id": "$active"
+          }
+        ]
+      }
+    },
+    {
+      "id": "planner_followup_edit_umap",
+      "component": "planner",
+      "title": "基于最近 UMAP 做跟随式修改",
+      "user_message": "把这个图图例放右边，标题改成 PBMC major cell types",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "should_use_recent_plot_metadata": true
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "plot_umap",
+            "target_object_id": "$active",
+            "params_should_preserve": {
+              "color_by": "cell_type",
+              "point_size": 8
+            },
+            "params_should_override": {
+              "legend_loc": "right",
+              "title": "PBMC major cell types"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "planner_gene_umap_two_genes",
+      "component": "planner",
+      "title": "双基因 UMAP",
+      "user_message": "画一下 MS4A1 和 CD3D 的 UMAP",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "plot_gene_umap",
+            "target_object_id": "$active",
+            "params": {
+              "genes": ["MS4A1", "CD3D"]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "planner_subset_then_plot_b_cells",
+      "component": "planner",
+      "title": "先提取 B cells 再画图",
+      "user_message": "把 B cells 提出来再画 UMAP",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "should_use_obs_field": "cell_type"
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "subset_cells",
+            "target_object_id": "$active",
+            "params": {
+              "obs_field": "cell_type",
+              "op": "eq",
+              "value": "B cells"
+            }
+          },
+          {
+            "skill": "plot_umap",
+            "target_object_id": "$prev"
+          }
+        ]
+      }
+    },
+    {
+      "id": "planner_write_methods",
+      "component": "planner",
+      "title": "导出 Methods",
+      "user_message": "把这个 PBMC 分析流程写成 Methods",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "write_method",
+            "target_object_id": "$active"
+          }
+        ]
+      }
+    },
+    {
+      "id": "planner_active_object_switch_export_current",
+      "component": "planner",
+      "title": "对象切换后仍导出当前 active object",
+      "user_message": "导出当前这个对象为 h5ad",
+      "context_overrides": {
+        "active_object": {
+          "label": "pbmc3k_b_cells",
+          "kind": "subset",
+          "n_obs": 412,
+          "n_vars": 1838
+        }
+      },
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "inline_explicit_visual_bytes": false
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "export_h5ad",
+            "target_object_id": "$active"
+          }
+        ]
+      }
+    },
+    {
+      "id": "planner_conflicting_recent_plot_export_current",
+      "component": "planner",
+      "title": "stale recent plot 不能盖过当前 active object",
+      "user_message": "导出当前这个对象为 h5ad",
+      "context_overrides": {
+        "active_object": {
+          "label": "pbmc3k_b_cells",
+          "kind": "subset",
+          "n_obs": 412,
+          "n_vars": 1838
+        },
+        "recent_plot": {
+          "object_id": "obj_pbmc3k",
+          "object_label": "pbmc3k",
+          "artifact_title": "PBMC old UMAP",
+          "artifact_summary": "An older PBMC UMAP from the parent object.",
+          "color_by": "sample",
+          "legend_loc": "right",
+          "point_size": 6,
+          "title": "PBMC by sample"
+        }
+      },
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "inline_explicit_visual_bytes": false
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "export_h5ad",
+            "target_object_id": "$active"
+          }
+        ]
+      }
+    },
+    {
+      "id": "planner_current_object_plot_despite_stale_recent_plot",
+      "component": "planner",
+      "title": "画当前对象时不能被旧 recent plot 带偏 target",
+      "user_message": "画一下当前这个对象的 UMAP",
+      "context_overrides": {
+        "active_object": {
+          "label": "pbmc3k_b_cells",
+          "kind": "subset",
+          "n_obs": 412,
+          "n_vars": 1838
+        },
+        "recent_plot": {
+          "object_id": "obj_pbmc3k",
+          "object_label": "pbmc3k",
+          "artifact_title": "PBMC old UMAP",
+          "artifact_summary": "An older PBMC UMAP from the parent object.",
+          "color_by": "sample",
+          "legend_loc": "right",
+          "point_size": 6,
+          "title": "PBMC by sample"
+        }
+      },
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "plot_umap",
+            "target_object_id": "$active"
+          }
+        ]
+      }
+    },
+    {
+      "id": "planner_colloquial_followup_edit_umap",
+      "component": "planner",
+      "title": "口语化跟随式改图",
+      "user_message": "把刚那个图点改成 4，图例放右边",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "should_use_recent_plot_metadata": true
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "plot_umap",
+            "target_object_id": "$active",
+            "params_should_preserve": {
+              "color_by": "cell_type"
+            },
+            "params_should_override": {
+              "legend_loc": "right",
+              "point_size": 4
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "planner_followup_preserves_nondefault_recent_plot_metadata",
+      "component": "planner",
+      "title": "跟随式改图应保留非默认 recent plot 参数",
+      "user_message": "把刚那个图标题改成 PBMC samples overview",
+      "context_overrides": {
+        "recent_plot": {
+          "color_by": "sample",
+          "legend_loc": "right",
+          "point_size": 6,
+          "title": "PBMC by sample",
+          "artifact_title": "PBMC sample UMAP",
+          "artifact_summary": "PBMC UMAP colored by sample."
+        }
+      },
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "should_use_recent_plot_metadata": true
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "plot_umap",
+            "target_object_id": "$active",
+            "params_should_preserve": {
+              "color_by": "sample",
+              "legend_loc": "right",
+              "point_size": 6
+            },
+            "params_should_override": {
+              "title": "PBMC samples overview"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "planner_subset_then_export_b_cells",
+      "component": "planner",
+      "title": "先提取再导出",
+      "user_message": "把 B cells 单独拿出来然后导出成 h5ad",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "should_use_obs_field": "cell_type"
+      },
+      "expected": {
+        "steps": [
+          {
+            "skill": "subset_cells",
+            "target_object_id": "$active",
+            "params": {
+              "obs_field": "cell_type",
+              "op": "eq",
+              "value": "B cells"
+            }
+          },
+          {
+            "skill": "export_h5ad",
+            "target_object_id": "$prev"
+          }
+        ]
+      }
+    },
+    {
+      "id": "answerer_direct_cell_count",
+      "component": "answerer",
+      "title": "直接回答当前细胞数",
+      "user_message": "当前对象有多少细胞？",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "inline_explicit_visual_bytes": false
+      },
+      "expected": {
+        "decision": "direct_answer",
+        "confidence": "high",
+        "answer_should_mention": ["2638"],
+        "evidence_should_include": ["n_obs"]
+      }
+    },
+    {
+      "id": "answerer_direct_annotation_fields",
+      "component": "answerer",
+      "title": "直接回答主要注释字段",
+      "user_message": "当前对象有哪些主要注释字段？",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false
+      },
+      "expected": {
+        "decision": "direct_answer",
+        "confidence": "high",
+        "answer_should_mention": ["cell_type", "sample", "leiden"]
+      }
+    },
+    {
+      "id": "answerer_active_object_switched_cell_count",
+      "component": "answerer",
+      "title": "对象切换后直答当前细胞数",
+      "user_message": "这个对象现在多少细胞？",
+      "context_overrides": {
+        "active_object": {
+          "label": "pbmc3k_b_cells",
+          "kind": "subset",
+          "n_obs": 412,
+          "n_vars": 1838
+        }
+      },
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "inline_explicit_visual_bytes": false
+      },
+      "expected": {
+        "decision": "direct_answer",
+        "confidence": "high",
+        "answer_should_mention": ["412"],
+        "evidence_should_include": ["n_obs"]
+      }
+    },
+    {
+      "id": "answerer_conflicting_working_memory_current_cell_count",
+      "component": "answerer",
+      "title": "stale working memory 不应覆盖当前对象细胞数",
+      "user_message": "当前这个对象多少细胞？",
+      "context_overrides": {
+        "active_object": {
+          "label": "pbmc3k_b_cells",
+          "kind": "subset",
+          "n_obs": 412,
+          "n_vars": 1838
+        },
+        "recent_plot": {
+          "object_id": "obj_pbmc3k",
+          "object_label": "pbmc3k",
+          "artifact_title": "PBMC old UMAP",
+          "artifact_summary": "An older PBMC UMAP from the parent object.",
+          "color_by": "cell_type",
+          "legend_loc": "on data",
+          "point_size": 8,
+          "title": "PBMC cell types"
+        }
+      },
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "inline_explicit_visual_bytes": false
+      },
+      "expected": {
+        "decision": "direct_answer",
+        "confidence": "high",
+        "answer_should_mention": ["412"],
+        "evidence_should_include": ["n_obs"]
+      }
+    },
+    {
+      "id": "answerer_needs_execution_markers",
+      "component": "answerer",
+      "title": "marker 查询不能直接回答",
+      "user_message": "找出 B cells 的 marker",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false
+      },
+      "expected": {
+        "decision": "needs_execution",
+        "confidence": "high"
+      }
+    },
+    {
+      "id": "answerer_explicit_image_only",
+      "component": "answerer",
+      "title": "只应携带当前显式图片",
+      "user_message": "看这张 UMAP 图，图例有没有挡住点？",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "inline_explicit_visual_bytes": true,
+        "recent_visual_artifacts_should_remain_summary_only": true
+      },
+      "expected": {
+        "decision": "direct_answer_or_needs_execution",
+        "request_body_expectations": {
+          "input_image_count": 1
+        }
+      }
+    },
+    {
+      "id": "answerer_two_explicit_images_only",
+      "component": "answerer",
+      "title": "两张显式图片应按两张 input_image 发送且不夹带 recent 图",
+      "user_message": "比较这两张 UMAP 图，哪一张的图例更挡住点？",
+      "context_expectations": {
+        "compact_context": true,
+        "inline_recent_visual_bytes": false,
+        "inline_explicit_visual_bytes": true,
+        "recent_visual_artifacts_should_remain_summary_only": true
+      },
+      "expected": {
+        "decision": "direct_answer_or_needs_execution",
+        "request_body_expectations": {
+          "input_image_count": 2
+        }
+      }
+    },
+    {
+      "id": "evaluator_export_completed",
+      "component": "evaluator",
+      "title": "导出任务已完成",
+      "user_message": "导出当前对象为 h5ad",
+      "current_job": {
+        "status": "succeeded",
+        "steps": [
+          {
+            "skill": "export_h5ad",
+            "status": "succeeded",
+            "summary": "Exported the active object to pbmc3k.h5ad and generated a file artifact.",
+            "artifact_kind": "file",
+            "metadata": {
+              "artifact_title": "pbmc3k.h5ad",
+              "artifact_summary": "Exported h5ad file artifact for the active object."
+            }
+          }
+        ]
+      },
+      "expected": {
+        "completed": true,
+        "reason_should_mention": ["export", "artifact"]
+      }
+    },
+    {
+      "id": "evaluator_active_object_switch_export_completed",
+      "component": "evaluator",
+      "title": "对象切换后 export 完成判定不应被旧 recent plot 干扰",
+      "user_message": "导出当前这个对象为 h5ad",
+      "context_overrides": {
+        "active_object": {
+          "label": "pbmc3k_b_cells",
+          "kind": "subset",
+          "n_obs": 412,
+          "n_vars": 1838
+        },
+        "recent_plot": {
+          "object_id": "obj_pbmc3k",
+          "object_label": "pbmc3k",
+          "artifact_title": "PBMC old UMAP",
+          "artifact_summary": "An older PBMC UMAP from the parent object.",
+          "color_by": "sample",
+          "legend_loc": "right",
+          "point_size": 6,
+          "title": "PBMC by sample"
+        }
+      },
+      "current_job": {
+        "status": "succeeded",
+        "steps": [
+          {
+            "skill": "export_h5ad",
+            "status": "succeeded",
+            "summary": "Exported the subset object to pbmc3k_b_cells.h5ad and generated a file artifact.",
+            "artifact_kind": "file",
+            "metadata": {
+              "artifact_title": "pbmc3k_b_cells.h5ad",
+              "artifact_summary": "Exported h5ad file artifact for the subset object."
+            }
+          }
+        ]
+      },
+      "expected": {
+        "completed": true,
+        "reason_should_mention": ["export", "artifact"]
+      }
+    },
+    {
+      "id": "evaluator_subset_without_plot_not_completed",
+      "component": "evaluator",
+      "title": "子集已生成但图还没画",
+      "user_message": "把 B cells 提出来再画 UMAP",
+      "current_job": {
+        "status": "running_or_partial",
+        "steps": [
+          {
+            "skill": "subset_cells",
+            "status": "succeeded"
+          }
+        ]
+      },
+      "expected": {
+        "completed": false
+      }
+    },
+    {
+      "id": "evaluator_subset_then_export_not_completed",
+      "component": "evaluator",
+      "title": "subset+export 工作流只做完子集还不算完成",
+      "user_message": "把 B cells 单独拿出来然后导出成 h5ad",
+      "current_job": {
+        "status": "running_or_partial",
+        "steps": [
+          {
+            "skill": "subset_cells",
+            "status": "succeeded"
+          }
+        ]
+      },
+      "expected": {
+        "completed": false
+      }
+    },
+    {
+      "id": "evaluator_subset_then_export_completed",
+      "component": "evaluator",
+      "title": "subset+export 工作流完整完成",
+      "user_message": "把 B cells 单独拿出来然后导出成 h5ad",
+      "current_job": {
+        "status": "succeeded",
+        "steps": [
+          {
+            "skill": "subset_cells",
+            "status": "succeeded"
+          },
+          {
+            "skill": "export_h5ad",
+            "status": "succeeded",
+            "summary": "Exported the subset object to pbmc3k_b_cells.h5ad and generated a file artifact.",
+            "artifact_kind": "file",
+            "metadata": {
+              "artifact_title": "pbmc3k_b_cells.h5ad",
+              "artifact_summary": "Exported h5ad file artifact for the subset object."
+            }
+          }
+        ]
+      },
+      "expected": {
+        "completed": true,
+        "reason_should_mention": ["export", "artifact"]
+      }
+    },
+    {
+      "id": "evaluator_followup_plot_completed",
+      "component": "evaluator",
+      "title": "跟随式改图完成",
+      "user_message": "把这个图图例放右边",
+      "current_job": {
+        "status": "succeeded",
+        "steps": [
+          {
+            "skill": "plot_umap",
+            "status": "succeeded",
+            "metadata": {
+              "legend_loc": "right",
+              "color_by": "cell_type"
+            },
+            "artifact_kind": "plot"
+          }
+        ]
+      },
+      "expected": {
+        "completed": true
+      }
+    }
+  ]
+}

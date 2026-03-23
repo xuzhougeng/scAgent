@@ -337,10 +337,14 @@ func (e *LLMEvaluator) buildRequest(requestPayload EvaluationRequest) map[string
 			},
 			{
 				"role": "user",
-				"content": buildUserInputContent(
+				"content": buildUserInputContentWithPolicy(
 					requestPayload.Message,
 					requestPayload.InputArtifacts,
 					requestPayload.RecentArtifacts,
+					UserInputContentPolicy{
+						IncludeInputVisualArtifacts:  true,
+						IncludeRecentVisualArtifacts: false,
+					},
 				),
 			},
 		},
@@ -365,6 +369,11 @@ func (e *LLMEvaluator) instructions(requestPayload EvaluationRequest) string {
 		"If the current request includes attached images, consider them part of the evidence when judging completion.",
 		"If the request is a long workflow and intermediate preprocessing has not yet reached the necessary state, return completed=false.",
 		"If the request asks for a concrete output such as a plot, marker table, subset object, export file, or assessment summary and that output already exists in the current job results, return completed=true.",
+		"For export requests, a succeeded export_h5ad step with a generated file artifact is a strong signal for completed=true.",
+		"If current_job already succeeded and contains export_h5ad with metadata indicating artifact_kind=file, treat the export request as completed even if recent_artifacts is empty.",
+		"A succeeded export_h5ad step is terminal for a simple export request; do not require extra downstream steps or repeated artifact references.",
+		"For plot or plot-edit requests, a succeeded plot_umap or plot_gene_umap step that produced the requested plot is a strong signal for completed=true.",
+		"For workflow requests such as subset-then-plot, an earlier succeeded subset step alone is not sufficient; all requested downstream outputs must exist before completed=true.",
 		"Current execution context:",
 	}
 	lines = append(lines, formatEvaluationContext(requestPayload)...)
@@ -384,9 +393,10 @@ func completionSchema() map[string]any {
 }
 
 func formatEvaluationContext(request EvaluationRequest) []string {
-	planningContext := formatPlanningContext(PlanningRequest{
+	planningContext := formatPlanningContextWithPolicy(PlanningRequest{
 		Message:         request.Message,
 		Session:         request.Session,
+		Workspace:       request.Workspace,
 		ActiveObject:    request.ActiveObject,
 		Objects:         request.Objects,
 		InputArtifacts:  request.InputArtifacts,
@@ -394,7 +404,7 @@ func formatEvaluationContext(request EvaluationRequest) []string {
 		RecentJobs:      request.RecentJobs,
 		RecentArtifacts: request.RecentArtifacts,
 		WorkingMemory:   request.WorkingMemory,
-	})
+	}, evaluatorPlanningContextPolicy())
 	if request.CurrentJob == nil {
 		return append(planningContext, "- current_job=none")
 	}
@@ -421,6 +431,9 @@ func formatCurrentJobContext(job *models.Job) string {
 		}
 		if len(step.Facts) > 0 {
 			details = append(details, "facts="+compactJSON(mustMarshalJSON(step.Facts)))
+		}
+		if len(step.Metadata) > 0 {
+			details = append(details, "metadata="+compactJSON(mustMarshalJSON(step.Metadata)))
 		}
 		stepParts = append(stepParts, "{"+strings.Join(details, " ")+"}")
 	}

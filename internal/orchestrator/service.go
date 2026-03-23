@@ -49,6 +49,7 @@ type PlanningRequest struct {
 type PlannerDebugPreview struct {
 	PlannerMode           string          `json:"planner_mode"`
 	PlanningRequest       PlanningRequest `json:"planning_request"`
+	PlannerContext        []string        `json:"planner_context,omitempty"`
 	DeveloperInstructions string          `json:"developer_instructions,omitempty"`
 	RequestBody           map[string]any  `json:"request_body,omitempty"`
 	Note                  string          `json:"note,omitempty"`
