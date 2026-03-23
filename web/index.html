@@ -12,13 +12,13 @@
       <aside class="panel explorer">
         <div class="panel-head">
           <p class="eyebrow">分析导航</p>
-          <h1>工作区与对象</h1>
+          <h1>工作区与文件</h1>
         </div>
         <div id="workspaceNavigator" class="workspace-navigator"></div>
         <div id="sessionMeta" class="session-meta"></div>
         <div class="object-tree-section-head">
-          <strong>分析对象</strong>
-          <span>技能会作用到当前选中的对象</span>
+          <strong>已有文件</strong>
+          <span>当前 workspace 的 h5ad 与结果文件</span>
         </div>
         <div id="objectTree" class="object-tree"></div>
         <div id="skillHubEntry" class="skill-hub"></div>
@@ -57,6 +57,7 @@
         <div id="uploadStatus" class="upload-status muted"></div>
         <div id="quickActions" class="quick-actions"></div>
         <div id="chat" class="chat"></div>
+        <div id="composerModeBar" class="composer-mode hidden" aria-live="polite"></div>
         <form id="composer" class="composer">
           <textarea
             id="messageInput"

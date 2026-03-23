@@ -513,7 +513,15 @@ func (h *Handler) handleRetryJob(w http.ResponseWriter, r *http.Request, jobID s
 		return
 	}
 
-	job, snapshot, err := h.service.RetryJob(r.Context(), jobID)
+	var payload struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil && err.Error() != "EOF" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid retry payload"})
+		return
+	}
+
+	job, snapshot, err := h.service.RetryJob(r.Context(), jobID, payload.Message)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

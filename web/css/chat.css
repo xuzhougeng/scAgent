@@ -256,17 +256,25 @@
   color: #8b2d21;
 }
 
+.message-actions {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.message-action-button {
+  padding: 4px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
 .retry-job-button {
-  margin-top: 10px;
-  padding: 6px 16px;
-  font-size: 13px;
-  font-weight: 500;
   color: #8b2d21;
   background: rgba(171, 68, 52, 0.08);
   border: 1px solid rgba(171, 68, 52, 0.22);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
 }
 
 .retry-job-button:hover {
@@ -274,26 +282,23 @@
   border-color: rgba(171, 68, 52, 0.35);
 }
 
-.retry-job-button:disabled {
-  opacity: 0.5;
-  cursor: default;
+.edit-job-button {
+  color: #2f5a40;
+  background: rgba(61, 107, 75, 0.08);
+  border: 1px solid rgba(61, 107, 75, 0.18);
 }
 
-.message-actions {
-  margin-top: 6px;
-  display: flex;
-  gap: 8px;
+.edit-job-button:hover {
+  color: #1f412c;
+  background: rgba(61, 107, 75, 0.14);
+  border-color: rgba(61, 107, 75, 0.28);
 }
 
 .regenerate-button {
-  padding: 4px 12px;
-  font-size: 12px;
   color: #666;
   background: transparent;
   border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .regenerate-button:hover {
@@ -302,6 +307,7 @@
   border-color: rgba(0, 0, 0, 0.2);
 }
 
+.message-action-button:disabled,
 .regenerate-button:disabled {
   opacity: 0.5;
   cursor: default;
@@ -507,6 +513,40 @@
   flex-shrink: 0;
 }
 
+.composer-mode {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(61, 107, 75, 0.16);
+  border-radius: 16px;
+  background: rgba(243, 249, 239, 0.76);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.composer-mode.hidden {
+  display: none;
+}
+
+.composer-mode-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.composer-mode-copy p {
+  margin: 0;
+}
+
+.composer-mode button {
+  padding: 6px 12px;
+  border: 1px solid rgba(61, 107, 75, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.84);
+  color: #244531;
+  cursor: pointer;
+}
+
 .planner-tools {
   display: flex;
   align-items: center;
@@ -616,6 +656,10 @@
 }
 
 @media (max-width: 1100px) {
+  .composer-mode {
+    flex-wrap: wrap;
+  }
+
   .composer,
   .upload-bar {
     grid-template-columns: 1fr;

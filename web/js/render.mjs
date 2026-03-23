@@ -38,6 +38,7 @@ const renderActions = {
   async createWorkspace() {},
   async switchConversation() {},
   async switchWorkspace() {},
+  async editJobRequest() {},
   async retryJob() {},
   async regenerateResponse() {},
   async renameWorkspace() {},
@@ -642,6 +643,7 @@ async function renderChat() {
     container.appendChild(node);
   }
   bindArtifactPreviewButtons(container);
+  bindEditJobButtons(container);
   bindRetryButtons(container);
   bindRegenerateButtons(container);
   container.scrollTop = container.scrollHeight;
@@ -685,12 +687,40 @@ async function buildMessageNode(message, template) {
     if (job && job.status !== "queued" && job.status !== "running") {
       const actions = document.createElement("div");
       actions.className = "message-actions";
-      actions.innerHTML = `<button type="button" class="regenerate-button" data-job-id="${escapeAttribute(job.id)}">重新生成</button>`;
+      actions.innerHTML = buildMessageActionsMarkup(job);
       node.appendChild(actions);
     }
   }
 
   return node;
+}
+
+function buildMessageActionsMarkup(job) {
+  if (!job || job.status === "queued" || job.status === "running") {
+    return "";
+  }
+
+  const disabled = hasActiveJob() ? " disabled" : "";
+  const buttons = [];
+  if (job.status === "failed" || job.status === "incomplete" || job.status === "canceled") {
+    buttons.push(
+      `<button type="button" class="message-action-button retry-job-button" data-job-id="${escapeAttribute(job.id)}"${disabled}>重试</button>`,
+    );
+  }
+  buttons.push(
+    `<button type="button" class="message-action-button edit-job-button" data-job-id="${escapeAttribute(job.id)}"${disabled}>编辑并重发</button>`,
+  );
+  if (job.status === "succeeded" || job.status === "incomplete") {
+    buttons.push(
+      `<button type="button" class="message-action-button regenerate-button" data-job-id="${escapeAttribute(job.id)}"${disabled}>重新生成</button>`,
+    );
+  }
+  return buttons.join("");
+}
+
+function hasActiveJob() {
+  const jobs = appState.snapshot?.jobs || [];
+  return jobs.some((job) => job && (job.status === "queued" || job.status === "running"));
 }
 
 function parseDelimitedTableBlock(text, formatHint = "") {
@@ -1437,6 +1467,17 @@ function bindArtifactPreviewButtons(container) {
   for (const button of container.querySelectorAll(".artifact-preview-button")) {
     button.addEventListener("click", () => {
       openImageModal(button.dataset.artifactUrl, button.dataset.artifactTitle);
+    });
+  }
+}
+
+function bindEditJobButtons(container) {
+  for (const button of container.querySelectorAll(".edit-job-button")) {
+    button.addEventListener("click", () => {
+      const jobId = button.dataset.jobId;
+      if (jobId) {
+        renderActions.editJobRequest(jobId);
+      }
     });
   }
 }

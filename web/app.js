@@ -26,6 +26,7 @@ async function startApp() {
     createWorkspace,
     switchConversation,
     switchWorkspace,
+    editJobRequest,
     retryJob,
     regenerateResponse,
     renameWorkspace,
@@ -55,6 +56,7 @@ async function startApp() {
 
   function renderApp() {
     render();
+    renderComposerMode();
     updateComposerControls();
   }
 
@@ -72,6 +74,11 @@ async function startApp() {
     return null;
   }
 
+  function clearComposerEditState() {
+    appState.composerEditJobId = null;
+    appState.composerEditOriginalMessage = "";
+  }
+
   function updateComposerControls() {
     const button = document.getElementById("composerSubmitButton");
     if (!button) {
@@ -84,6 +91,7 @@ async function startApp() {
       (appState.cancelPendingJobId === activeJob.id ||
         activeJob.summary === "正在停止当前任务...");
     const isSubmitting = Boolean(appState.composerPending);
+    const isEditing = Boolean(appState.composerEditJobId);
 
     button.classList.toggle("is-stop", Boolean(activeJob));
     if (activeJob) {
@@ -92,15 +100,56 @@ async function startApp() {
       return;
     }
 
-    button.textContent = isSubmitting ? "提交中..." : "运行";
+    button.textContent = isSubmitting ? (isEditing ? "重发中..." : "提交中...") : isEditing ? "重发" : "运行";
     button.disabled = isSubmitting || !appState.sessionId;
   }
 
+  function renderComposerMode() {
+    const container = document.getElementById("composerModeBar");
+    if (!container) {
+      return;
+    }
+
+    if (!appState.composerEditJobId) {
+      container.classList.add("hidden");
+      container.innerHTML = "";
+      return;
+    }
+
+    container.classList.remove("hidden");
+    container.innerHTML = `
+      <div class="composer-mode-copy">
+        <strong>编辑并重发</strong>
+        <p class="muted">修改后点击“重发”。提交成功后，这条旧请求及其结果会被替换。</p>
+      </div>
+      <button id="composerModeCancelButton" type="button">取消</button>
+    `;
+
+    container.querySelector("#composerModeCancelButton")?.addEventListener("click", () => {
+      clearComposerEditState();
+      appState.workspaceStatus = "已取消编辑并重发。";
+      renderApp();
+    });
+  }
+
   function syncSnapshot(snapshot) {
+    const previousWorkspaceId = appState.workspaceId;
     appState.snapshot = snapshot;
     appState.sessionId = snapshot?.session?.id || null;
     appState.workspaceId = snapshot?.workspace?.id || snapshot?.session?.workspace_id || null;
     appState.activeObjectId = snapshot?.session?.active_object_id || null;
+    if (previousWorkspaceId && appState.workspaceId !== previousWorkspaceId) {
+      appState.selectedResourceKey = null;
+    }
+    if (!appState.selectedResourceKey && appState.activeObjectId) {
+      appState.selectedResourceKey = `object:${appState.activeObjectId}`;
+    }
+    if (
+      appState.composerEditJobId &&
+      !snapshot?.jobs?.some((job) => job?.id === appState.composerEditJobId)
+    ) {
+      clearComposerEditState();
+    }
     persistContext();
 
     if (!snapshot?.workspace) {
@@ -271,6 +320,7 @@ async function startApp() {
     renderSessionMeta();
 
     try {
+      clearComposerEditState();
       const snapshot = await fetchJSON(`/api/sessions/${sessionId}`);
       appState.plannerPreview = null;
       syncSnapshot(snapshot);
@@ -295,6 +345,7 @@ async function startApp() {
     renderSessionMeta();
 
     try {
+      clearComposerEditState();
       const snapshot = await fetchJSON(`/api/workspaces/${appState.workspaceId}/conversations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -332,6 +383,7 @@ async function startApp() {
       if (!conversation) {
         throw new Error("目标 workspace 暂无可用对话。");
       }
+      clearComposerEditState();
       appState.workspaceSnapshot = workspaceSnapshot;
       const snapshot = await fetchJSON(`/api/sessions/${conversation.id}`);
       appState.plannerPreview = null;
@@ -353,6 +405,7 @@ async function startApp() {
     renderSessionMeta();
 
     try {
+      clearComposerEditState();
       const snapshot = await createWorkspaceWithLabel(`分析工作区 ${nextIndex}`, { withSample: false });
       appState.plannerPreview = null;
       syncSnapshot(snapshot);
@@ -367,8 +420,46 @@ async function startApp() {
     }
   }
 
+  async function editJobRequest(jobId) {
+    if (!jobId) {
+      return;
+    }
+    if (currentActiveJob()) {
+      appState.workspaceStatus = "请先等待当前任务完成，或先停止当前任务。";
+      renderApp();
+      return;
+    }
+
+    const job = (appState.snapshot?.jobs || []).find((item) => item.id === jobId);
+    if (!job) {
+      appState.workspaceStatus = "未找到原始任务。";
+      renderApp();
+      return;
+    }
+
+    const message = (appState.snapshot?.messages || []).find(
+      (item) => item.id === job.message_id && item.role === "user",
+    );
+    if (!message) {
+      appState.workspaceStatus = "未找到原始消息。";
+      renderApp();
+      return;
+    }
+
+    const input = document.getElementById("messageInput");
+    appState.composerEditJobId = job.id;
+    appState.composerEditOriginalMessage = message.content || "";
+    appState.plannerPreview = null;
+    input.value = message.content || "";
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    appState.workspaceStatus = "已载入原请求，请修改后点击“重发”。";
+    renderApp();
+  }
+
   async function retryJob(jobId) {
     try {
+      clearComposerEditState();
       const response = await fetchJSON(`/api/jobs/${jobId}/retry`, {
         method: "POST",
       });
@@ -415,6 +506,7 @@ async function startApp() {
 
   async function regenerateResponse(jobId) {
     try {
+      clearComposerEditState();
       const response = await fetchJSON(`/api/jobs/${jobId}/regenerate`, {
         method: "POST",
       });
@@ -493,6 +585,8 @@ async function startApp() {
 
     const input = document.getElementById("messageInput");
     const message = input.value.trim();
+    const editJobId = appState.composerEditJobId;
+    const isEditRetry = Boolean(editJobId);
     if (!message || !appState.sessionId || appState.composerPending) {
       return;
     }
@@ -500,7 +594,7 @@ async function startApp() {
     appState.composerPending = true;
     updateComposerControls();
 
-    const optimisticMessage = appState.snapshot
+    const optimisticMessage = !isEditRetry && appState.snapshot
       ? {
           id: `local_user_${Date.now()}`,
           session_id: appState.sessionId,
@@ -521,14 +615,24 @@ async function startApp() {
     }
 
     try {
-      const response = await fetchJSON("/api/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: appState.sessionId,
-          message,
-        }),
-      });
+      const response = isEditRetry
+        ? await fetchJSON(`/api/jobs/${editJobId}/retry`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message }),
+          })
+        : await fetchJSON("/api/messages", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_id: appState.sessionId,
+              message,
+            }),
+          });
+      if (isEditRetry) {
+        clearComposerEditState();
+        appState.workspaceStatus = "已重发编辑后的请求。";
+      }
       syncSnapshot(response.snapshot);
       renderApp();
     } catch (error) {
@@ -574,6 +678,7 @@ async function startApp() {
         });
         syncSnapshot(response.snapshot);
         appState.activeObjectId = response.object.id;
+        appState.selectedResourceKey = `object:${response.object.id}`;
         status.textContent = `${file.name} 已作为 ${response.object.label} 附加到当前 workspace。`;
         input.value = "";
         fileNameEl.textContent = "选择文件后将自动上传";

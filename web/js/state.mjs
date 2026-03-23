@@ -2,6 +2,7 @@ export const appState = {
   sessionId: null,
   workspaceId: null,
   activeObjectId: null,
+  selectedResourceKey: null,
   snapshot: null,
   workspaceSnapshot: null,
   workspaceList: [],
@@ -15,6 +16,8 @@ export const appState = {
   artifactTextCache: new Map(),
   composerPending: false,
   cancelPendingJobId: null,
+  composerEditJobId: null,
+  composerEditOriginalMessage: "",
 };
 
 export const storageKeys = {
@@ -156,13 +159,28 @@ export const jobPhaseStatusLabels = {
 
 export const objectKindLabels = {
   raw_dataset: "原始数据集",
+  filtered_dataset: "过滤后数据集",
   subset: "细胞子集",
   reclustered_subset: "重聚类子集",
+  de_result: "差异分析结果",
+  marker_result: "marker 结果",
+  plot_artifact: "绘图产物",
+  object_summary: "对象摘要",
+  unknown: "未知对象",
 };
 
 export const objectStateLabels = {
   resident: "常驻",
   materialized: "已落盘",
+  evicted: "已卸载",
+  deleted: "已删除",
+};
+
+export const artifactKindLabels = {
+  plot: "图像结果",
+  table: "表格结果",
+  object_summary: "对象摘要",
+  file: "通用文件",
 };
 
 export const annotationRoleLabels = {

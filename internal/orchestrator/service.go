@@ -643,7 +643,7 @@ func (s *Service) SubmitMessage(ctx context.Context, sessionID, content string) 
 	return s.SubmitMessageWithArtifacts(ctx, sessionID, content, nil)
 }
 
-func (s *Service) RetryJob(ctx context.Context, jobID string) (*models.Job, *models.SessionSnapshot, error) {
+func (s *Service) RetryJob(ctx context.Context, jobID, overrideContent string) (*models.Job, *models.SessionSnapshot, error) {
 	job, ok := s.store.GetJob(jobID)
 	if !ok {
 		return nil, nil, fmt.Errorf("未找到任务 %q", jobID)
@@ -655,6 +655,10 @@ func (s *Service) RetryJob(ctx context.Context, jobID string) (*models.Job, *mod
 	if !ok {
 		return nil, nil, fmt.Errorf("未找到原始消息 %q", job.MessageID)
 	}
+	nextContent := strings.TrimSpace(overrideContent)
+	if nextContent == "" {
+		nextContent = msg.Content
+	}
 
 	// Delete the old assistant messages, job, and user message to avoid
 	// duplicates — SubmitMessage will re-create the user message.
@@ -663,7 +667,7 @@ func (s *Service) RetryJob(ctx context.Context, jobID string) (*models.Job, *mod
 	s.store.DeleteJob(jobID)
 	s.publishSnapshot(job.SessionID)
 
-	return s.SubmitMessage(ctx, job.SessionID, msg.Content)
+	return s.SubmitMessage(ctx, job.SessionID, nextContent)
 }
 
 func (s *Service) RegenerateResponse(ctx context.Context, jobID string) (*models.Job, *models.SessionSnapshot, error) {

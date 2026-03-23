@@ -279,6 +279,84 @@ func TestCancelJobEndpoint(t *testing.T) {
 	}
 }
 
+func TestRetryJobEndpointAcceptsEditedMessage(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	service := orchestrator.NewServiceWithComponents(
+		store,
+		registry,
+		&fakeRuntime{},
+		orchestrator.NewFakePlanner(),
+		orchestrator.NewFakeEvaluator(),
+		&stubAnswerer{directAnswer: "已处理编辑后的请求。", directOK: true},
+		t.TempDir(),
+	)
+	handler := NewHandler(service, docsPath())
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	sessionRecord := store.CreateSession("retry-edit")
+	now := time.Now().UTC()
+	finishedAt := now
+	store.AddMessage(&models.Message{
+		ID:        "msg_original",
+		SessionID: sessionRecord.ID,
+		Role:      models.MessageUser,
+		Content:   "旧请求",
+		CreatedAt: now,
+	})
+	store.SaveJob(&models.Job{
+		ID:          "job_original",
+		WorkspaceID: sessionRecord.WorkspaceID,
+		SessionID:   sessionRecord.ID,
+		MessageID:   "msg_original",
+		Status:      models.JobCanceled,
+		CreatedAt:   now,
+		FinishedAt:  &finishedAt,
+	})
+	store.AddMessage(&models.Message{
+		ID:        "msg_old_assistant",
+		SessionID: sessionRecord.ID,
+		JobID:     "job_original",
+		Role:      models.MessageAssistant,
+		Content:   "当前任务已停止。",
+		CreatedAt: now,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/jobs/job_original/retry", bytes.NewBufferString(`{"message":"新的请求"}`))
+	request.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var response struct {
+		Job      *models.Job            `json:"job"`
+		Snapshot models.SessionSnapshot `json:"snapshot"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode retry response: %v", err)
+	}
+	if response.Job != nil {
+		t.Fatalf("expected direct answer without background job, got %+v", response.Job)
+	}
+	if len(response.Snapshot.Messages) != 2 {
+		t.Fatalf("expected replacement messages, got %+v", response.Snapshot.Messages)
+	}
+	if response.Snapshot.Messages[0].Role != models.MessageUser || response.Snapshot.Messages[0].Content != "新的请求" {
+		t.Fatalf("expected edited user message, got %+v", response.Snapshot.Messages[0])
+	}
+	if response.Snapshot.Messages[1].Role != models.MessageAssistant || response.Snapshot.Messages[1].Content != "已处理编辑后的请求。" {
+		t.Fatalf("expected replacement assistant response, got %+v", response.Snapshot.Messages[1])
+	}
+}
+
 func TestMessageDirectAnswerFlow(t *testing.T) {
 	service := newTestServiceWithAnswerer(t, orchestrator.NewFakePlanner(), &fakeRuntime{}, &stubAnswerer{
 		directAnswer: "当前对象 pbmc3k 有 2638 个细胞。",
