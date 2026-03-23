@@ -3,7 +3,14 @@ async function startApp() {
     { fetchJSON },
     { formatConversationLabel, formatPlannerMode },
     { bindSidebarResize },
-    { bindImageModal, bindStatusOverviewModal },
+    {
+      bindConfirmModal,
+      bindImageModal,
+      bindPlannerPreviewModal,
+      bindStatusOverviewModal,
+      bindWorkspaceFilesModal,
+      openPlannerPreviewModal,
+    },
     { appState, storageKeys },
     {
       configureRenderActions,
@@ -31,14 +38,19 @@ async function startApp() {
     regenerateResponse,
     renameWorkspace,
     renameConversation,
+    deleteWorkspace,
+    deleteConversation,
   });
 
   bindSidebarResize();
   bindComposer();
   bindUpload();
   bindPlannerPreview();
+  bindConfirmModal();
   bindImageModal();
+  bindPlannerPreviewModal();
   bindStatusOverviewModal();
+  bindWorkspaceFilesModal();
   renderQuickActions();
   await bootstrap();
 
@@ -134,15 +146,17 @@ async function startApp() {
 
   function syncSnapshot(snapshot) {
     const previousWorkspaceId = appState.workspaceId;
+    const previousActiveObjectId = appState.activeObjectId;
     appState.snapshot = snapshot;
     appState.sessionId = snapshot?.session?.id || null;
     appState.workspaceId = snapshot?.workspace?.id || snapshot?.session?.workspace_id || null;
     appState.activeObjectId = snapshot?.session?.active_object_id || null;
+    const previousDefaultResourceKey = previousActiveObjectId ? `object:${previousActiveObjectId}` : null;
     if (previousWorkspaceId && appState.workspaceId !== previousWorkspaceId) {
       appState.selectedResourceKey = null;
     }
-    if (!appState.selectedResourceKey && appState.activeObjectId) {
-      appState.selectedResourceKey = `object:${appState.activeObjectId}`;
+    if (!appState.selectedResourceKey || appState.selectedResourceKey === previousDefaultResourceKey) {
+      appState.selectedResourceKey = appState.activeObjectId ? `object:${appState.activeObjectId}` : null;
     }
     if (
       appState.composerEditJobId &&
@@ -263,6 +277,10 @@ async function startApp() {
     });
   }
 
+  function defaultWorkspaceLabel() {
+    return `分析工作区 ${(appState.workspaceList?.length || 0) + 1}`;
+  }
+
   function preferredConversation(workspaceSnapshot, preferredSessionId = "") {
     const conversations = workspaceSnapshot?.conversations || [];
     if (!conversations.length) {
@@ -275,6 +293,24 @@ async function startApp() {
       }
     }
     return [...conversations].sort(compareConversationCreatedAt)[0] || null;
+  }
+
+  async function activateConversation(sessionId) {
+    const snapshot = await fetchJSON(`/api/sessions/${sessionId}`);
+    appState.plannerPreview = null;
+    syncSnapshot(snapshot);
+    connectEvents();
+    return snapshot;
+  }
+
+  async function activateWorkspaceSnapshot(workspaceSnapshot, preferredSessionId = "") {
+    const conversation = preferredConversation(workspaceSnapshot, preferredSessionId);
+    if (!conversation) {
+      throw new Error("目标 workspace 暂无可用对话。");
+    }
+    appState.workspaceSnapshot = workspaceSnapshot;
+    const snapshot = await activateConversation(conversation.id);
+    return { snapshot, conversation };
   }
 
   async function restoreContext() {
@@ -321,12 +357,9 @@ async function startApp() {
 
     try {
       clearComposerEditState();
-      const snapshot = await fetchJSON(`/api/sessions/${sessionId}`);
-      appState.plannerPreview = null;
-      syncSnapshot(snapshot);
+      const snapshot = await activateConversation(sessionId);
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
       appState.workspaceStatus = `已切换到 ${formatConversationLabel(snapshot.session)}。`;
-      connectEvents();
       renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
@@ -379,18 +412,10 @@ async function startApp() {
 
     try {
       const workspaceSnapshot = await fetchJSON(`/api/workspaces/${workspaceId}`);
-      const conversation = preferredConversation(workspaceSnapshot);
-      if (!conversation) {
-        throw new Error("目标 workspace 暂无可用对话。");
-      }
       clearComposerEditState();
-      appState.workspaceSnapshot = workspaceSnapshot;
-      const snapshot = await fetchJSON(`/api/sessions/${conversation.id}`);
-      appState.plannerPreview = null;
-      syncSnapshot(snapshot);
+      const { snapshot } = await activateWorkspaceSnapshot(workspaceSnapshot);
       await refreshWorkspaceList();
       appState.workspaceStatus = `已切换到 ${workspaceSnapshot.workspace?.label || workspaceId}。`;
-      connectEvents();
       renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
@@ -400,13 +425,12 @@ async function startApp() {
   }
 
   async function createWorkspace() {
-    const nextIndex = (appState.workspaceList?.length || 0) + 1;
     appState.workspaceStatus = "正在创建 workspace...";
     renderSessionMeta();
 
     try {
       clearComposerEditState();
-      const snapshot = await createWorkspaceWithLabel(`分析工作区 ${nextIndex}`, { withSample: false });
+      const snapshot = await createWorkspaceWithLabel(defaultWorkspaceLabel(), { withSample: false });
       appState.plannerPreview = null;
       syncSnapshot(snapshot);
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
@@ -479,10 +503,11 @@ async function startApp() {
         body: JSON.stringify({ label }),
       });
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
-      renderSessionMeta();
+      appState.workspaceStatus = `已将工作区重命名为 ${label}。`;
+      renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
-      renderSessionMeta();
+      renderApp();
     }
   }
 
@@ -495,12 +520,112 @@ async function startApp() {
       });
       syncSnapshot(snapshot);
       await refreshWorkspaceSnapshot();
-      renderSessionMeta();
-      updateComposerControls();
+      appState.workspaceStatus = `已将对话重命名为 ${label}。`;
+      renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
-      renderSessionMeta();
-      updateComposerControls();
+      renderApp();
+    }
+  }
+
+  async function deleteConversation(sessionId) {
+    if (!sessionId) {
+      return;
+    }
+
+    const isCurrentConversation = sessionId === appState.sessionId;
+    if (isCurrentConversation && currentActiveJob()) {
+      appState.workspaceStatus = "请先停止当前任务，再删除当前对话。";
+      renderApp();
+      return;
+    }
+
+    const conversation = (appState.workspaceSnapshot?.conversations || []).find(
+      (item) => item.id === sessionId,
+    );
+    const fallbackConversation = isCurrentConversation
+      ? [...(appState.workspaceSnapshot?.conversations || [])]
+          .filter((item) => item.id !== sessionId)
+          .sort(compareConversationCreatedAt)[0] || null
+      : null;
+
+    appState.workspaceStatus = "正在删除对话...";
+    renderSessionMeta();
+
+    try {
+      await fetchJSON(`/api/sessions/${sessionId}`, {
+        method: "DELETE",
+      });
+      if (isCurrentConversation) {
+        clearComposerEditState();
+        appState.plannerPreview = null;
+      }
+      await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
+      if (isCurrentConversation) {
+        if (!fallbackConversation?.id) {
+          throw new Error("删除后未找到可切换的对话。");
+        }
+        await activateConversation(fallbackConversation.id);
+        await refreshWorkspaceSnapshot();
+      }
+      appState.workspaceStatus = `已删除 ${formatConversationLabel(conversation || { id: sessionId })}。`;
+      renderApp();
+    } catch (error) {
+      appState.workspaceStatus = error.message;
+      renderApp();
+    }
+  }
+
+  async function deleteWorkspace(workspaceId) {
+    if (!workspaceId) {
+      return;
+    }
+
+    const isCurrentWorkspace = workspaceId === appState.workspaceId;
+    if (isCurrentWorkspace && currentActiveJob()) {
+      appState.workspaceStatus = "请先停止当前任务，再删除当前工作区。";
+      renderApp();
+      return;
+    }
+
+    const workspace =
+      (appState.workspaceList || []).find((item) => item.id === workspaceId) ||
+      (appState.workspaceSnapshot?.workspace?.id === workspaceId ? appState.workspaceSnapshot.workspace : null) ||
+      (appState.snapshot?.workspace?.id === workspaceId ? appState.snapshot.workspace : null);
+
+    appState.workspaceStatus = "正在删除工作区...";
+    renderSessionMeta();
+
+    try {
+      await fetchJSON(`/api/workspaces/${workspaceId}`, {
+        method: "DELETE",
+      });
+
+      if (isCurrentWorkspace) {
+        clearComposerEditState();
+        appState.plannerPreview = null;
+      }
+
+      await refreshWorkspaceList();
+
+      if (isCurrentWorkspace) {
+        const nextWorkspace = appState.workspaceList[0] || null;
+        if (nextWorkspace?.id) {
+          const workspaceSnapshot = await fetchJSON(`/api/workspaces/${nextWorkspace.id}`);
+          await activateWorkspaceSnapshot(workspaceSnapshot);
+        } else {
+          const snapshot = await createWorkspaceWithLabel(defaultWorkspaceLabel(), { withSample: false });
+          syncSnapshot(snapshot);
+          await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
+          connectEvents();
+        }
+      }
+
+      appState.workspaceStatus = `已删除工作区 ${workspace?.label || workspaceId}。`;
+      renderApp();
+    } catch (error) {
+      appState.workspaceStatus = error.message;
+      renderApp();
     }
   }
 
@@ -733,6 +858,7 @@ async function startApp() {
         );
         status.textContent = `规划预览已生成，当前规划器为 ${formatPlannerMode(appState.plannerPreview.planner_mode)}。`;
         renderPlannerPreview();
+        openPlannerPreviewModal();
       } catch (error) {
         status.textContent = error.message;
       }

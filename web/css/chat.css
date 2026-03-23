@@ -550,6 +550,7 @@
 .planner-tools {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 12px;
   flex-shrink: 0;

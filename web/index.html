@@ -12,15 +12,10 @@
       <aside class="panel explorer">
         <div class="panel-head">
           <p class="eyebrow">分析导航</p>
-          <h1>工作区与文件</h1>
+          <h1>工作区与会话</h1>
         </div>
         <div id="workspaceNavigator" class="workspace-navigator"></div>
         <div id="sessionMeta" class="session-meta"></div>
-        <div class="object-tree-section-head">
-          <strong>已有文件</strong>
-          <span>当前 workspace 的 h5ad 与结果文件</span>
-        </div>
-        <div id="objectTree" class="object-tree"></div>
         <div id="skillHubEntry" class="skill-hub"></div>
         <div id="statusOverviewEntry" class="status-overview-slot"></div>
       </aside>
@@ -68,6 +63,7 @@
         </form>
         <div class="planner-tools">
           <button id="plannerPreviewButton" type="button" class="ghost-button">预览规划上下文</button>
+          <button id="workspaceFilesButton" type="button" class="ghost-button">查看 Workspace 文件</button>
           <div id="plannerPreviewStatus" class="muted"></div>
         </div>
       </main>
@@ -96,7 +92,6 @@
           <h2>当前上下文</h2>
         </div>
         <div id="inspector" class="inspector-body"></div>
-        <div id="plannerPreview" class="planner-preview"></div>
       </aside>
     </div>
 
@@ -135,6 +130,57 @@
           <button id="statusOverviewModalClose" type="button" class="ghost-button">关闭</button>
         </div>
         <div id="statusOverviewModalContent" class="status-modal-body"></div>
+      </div>
+    </div>
+
+    <div id="workspaceFilesModal" class="workspace-files-modal hidden" aria-hidden="true">
+      <div id="workspaceFilesModalBackdrop" class="workspace-files-modal-backdrop"></div>
+      <div class="workspace-files-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="workspaceFilesModalTitle">
+        <div class="workspace-files-modal-head">
+          <div>
+            <p class="eyebrow">Workspace 文件</p>
+            <h3 id="workspaceFilesModalTitle">当前 Workspace 输出文件</h3>
+          </div>
+          <button id="workspaceFilesModalClose" type="button" class="ghost-button">关闭</button>
+        </div>
+        <div id="workspaceFilesModalContent" class="workspace-files-modal-body"></div>
+      </div>
+    </div>
+
+    <div id="plannerPreviewModal" class="planner-preview-modal hidden" aria-hidden="true">
+      <div id="plannerPreviewModalBackdrop" class="planner-preview-modal-backdrop"></div>
+      <div class="planner-preview-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="plannerPreviewModalTitle">
+        <div class="planner-preview-modal-head">
+          <div>
+            <p class="eyebrow">规划预览</p>
+            <h3 id="plannerPreviewModalTitle">当前规划上下文</h3>
+          </div>
+          <div class="planner-preview-modal-actions">
+            <span id="plannerPreviewCopyStatus" class="muted"></span>
+            <button id="plannerPreviewCopyButton" type="button" class="ghost-button">复制规划上下文</button>
+            <button id="plannerPreviewModalClose" type="button" class="ghost-button">关闭</button>
+          </div>
+        </div>
+        <div id="plannerPreviewModalContent" class="planner-preview planner-preview-modal-body"></div>
+      </div>
+    </div>
+
+    <div id="confirmModal" class="confirm-modal hidden" aria-hidden="true">
+      <div id="confirmModalBackdrop" class="confirm-modal-backdrop"></div>
+      <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+        <div class="confirm-modal-head">
+          <div>
+            <p id="confirmModalEyebrow" class="eyebrow">确认操作</p>
+            <h3 id="confirmModalTitle">确认执行这个操作？</h3>
+          </div>
+        </div>
+        <div class="confirm-modal-body">
+          <p id="confirmModalMessage" class="confirm-modal-message"></p>
+        </div>
+        <div class="confirm-modal-actions">
+          <button id="confirmModalCancel" type="button" class="ghost-button">取消</button>
+          <button id="confirmModalConfirm" type="button" class="confirm-modal-confirm">确认</button>
+        </div>
       </div>
     </div>
 

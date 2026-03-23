@@ -5,6 +5,7 @@ import {
   formatAnalysisState,
   formatAnnotation,
   formatAnnotationRole,
+  formatArtifactKind,
   formatConversationLabel,
   formatJobPhaseKind,
   formatJobPhaseStatus,
@@ -29,8 +30,10 @@ import {
 } from "./format.mjs";
 import {
   closeStatusOverviewModal,
+  openConfirmModal,
   openImageModal,
   openStatusOverviewModal,
+  openWorkspaceFilesModal,
 } from "./modals.mjs";
 
 const renderActions = {
@@ -43,6 +46,8 @@ const renderActions = {
   async regenerateResponse() {},
   async renameWorkspace() {},
   async renameConversation() {},
+  async deleteWorkspace() {},
+  async deleteConversation() {},
 };
 
 const artifactTablePreviewOptions = {
@@ -50,8 +55,199 @@ const artifactTablePreviewOptions = {
   maxTableCols: 8,
 };
 
+let entityContextMenu = null;
+let entityContextMenuEventsBound = false;
+
 export function configureRenderActions(actions) {
   Object.assign(renderActions, actions);
+}
+
+function ensureEntityContextMenu() {
+  if (entityContextMenu?.isConnected) {
+    return entityContextMenu;
+  }
+
+  entityContextMenu = document.getElementById("entityContextMenu");
+  if (!entityContextMenu) {
+    entityContextMenu = document.createElement("div");
+    entityContextMenu.id = "entityContextMenu";
+    entityContextMenu.className = "workspace-context-menu hidden";
+    entityContextMenu.setAttribute("role", "menu");
+    document.body.appendChild(entityContextMenu);
+  }
+
+  if (!entityContextMenuEventsBound) {
+    document.addEventListener(
+      "click",
+      (event) => {
+        const target = event.target;
+        if (target instanceof Element && target.closest(".workspace-context-menu")) {
+          return;
+        }
+        closeEntityContextMenu();
+      },
+      true,
+    );
+    document.addEventListener(
+      "contextmenu",
+      (event) => {
+        const target = event.target;
+        if (target instanceof Element && target.closest(".workspace-context-menu")) {
+          return;
+        }
+        closeEntityContextMenu();
+      },
+      true,
+    );
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeEntityContextMenu();
+      }
+    });
+    window.addEventListener("resize", closeEntityContextMenu);
+    window.addEventListener("blur", closeEntityContextMenu);
+    document.addEventListener(
+      "scroll",
+      () => {
+        closeEntityContextMenu();
+      },
+      true,
+    );
+    entityContextMenuEventsBound = true;
+  }
+
+  return entityContextMenu;
+}
+
+function closeEntityContextMenu() {
+  const menu = entityContextMenu || document.getElementById("entityContextMenu");
+  if (!menu) {
+    return;
+  }
+  menu.classList.add("hidden");
+  menu.innerHTML = "";
+  menu.style.left = "";
+  menu.style.top = "";
+}
+
+function positionEntityContextMenu(menu, clientX, clientY) {
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  const rect = menu.getBoundingClientRect();
+  const left = Math.max(12, Math.min(clientX, window.innerWidth - rect.width - 12));
+  const top = Math.max(12, Math.min(clientY, window.innerHeight - rect.height - 12));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+
+function openEntityContextMenu(event, items) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const menu = ensureEntityContextMenu();
+  menu.innerHTML = `
+    <div class="workspace-context-menu-surface">
+      ${items
+        .map(
+          (item, index) => `
+            <button
+              type="button"
+              class="workspace-context-menu-item ${item.danger ? "danger" : ""}"
+              data-menu-index="${index}"
+            >${escapeHTML(item.label)}</button>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+
+  for (const button of menu.querySelectorAll("[data-menu-index]")) {
+    button.addEventListener("click", async () => {
+      const item = items[Number(button.dataset.menuIndex)];
+      closeEntityContextMenu();
+      if (item?.onSelect) {
+        await item.onSelect();
+      }
+    });
+  }
+
+  menu.classList.remove("hidden");
+  positionEntityContextMenu(menu, event.clientX, event.clientY);
+}
+
+function startMenuInlineRename(element, onSave) {
+  if (!(element instanceof HTMLElement) || !element.isConnected) {
+    return;
+  }
+  const currentValue = element.textContent.trim();
+  window.requestAnimationFrame(() => {
+    if (!(element instanceof HTMLElement) || !element.isConnected) {
+      return;
+    }
+    startInlineEdit(element, currentValue, onSave);
+  });
+}
+
+function openWorkspaceContextMenu(event, workspaceID, renameElement) {
+  openEntityContextMenu(event, [
+    {
+      label: "重命名",
+      onSelect: async () => {
+        startMenuInlineRename(renameElement, async (newLabel) => {
+          await renderActions.renameWorkspace(workspaceID, newLabel);
+        });
+      },
+    },
+    {
+      label: "删除工作区",
+      danger: true,
+      onSelect: async () => {
+        const label = renameElement?.textContent?.trim() || workspaceID;
+        const confirmed = await openConfirmModal({
+          eyebrow: "删除工作区",
+          title: `确认删除“${label}”？`,
+          message: "工作区下的对话、对象和结果文件都会一起移除，这个操作不能撤销。",
+          confirmLabel: "删除工作区",
+          danger: true,
+        });
+        if (!confirmed) {
+          return;
+        }
+        await renderActions.deleteWorkspace(workspaceID);
+      },
+    },
+  ]);
+}
+
+function openConversationContextMenu(event, conversationID, renameElement) {
+  openEntityContextMenu(event, [
+    {
+      label: "重命名",
+      onSelect: async () => {
+        startMenuInlineRename(renameElement, async (newLabel) => {
+          await renderActions.renameConversation(conversationID, newLabel);
+        });
+      },
+    },
+    {
+      label: "删除对话",
+      danger: true,
+      onSelect: async () => {
+        const label = renameElement?.textContent?.trim() || conversationID;
+        const confirmed = await openConfirmModal({
+          eyebrow: "删除对话",
+          title: `确认删除“${label}”？`,
+          message: "这条对话的消息、任务记录和关联结果会一起移除，这个操作不能撤销。",
+          confirmLabel: "删除对话",
+          danger: true,
+        });
+        if (!confirmed) {
+          return;
+        }
+        await renderActions.deleteConversation(conversationID);
+      },
+    },
+  ]);
 }
 
 export function renderQuickActions() {
@@ -76,13 +272,15 @@ export function renderQuickActions() {
 }
 
 export function render() {
+  closeEntityContextMenu();
   renderWorkspaceNavigator();
   renderStatusOverviewEntry();
   renderStatusOverviewModal();
   renderSessionMeta();
   renderConsoleInfoBar();
   renderSkillHub();
-  renderObjectTree();
+  renderWorkspaceFilesEntry();
+  void renderWorkspaceFilesModal();
   renderChat();
   renderInspector();
   renderPlannerPreview();
@@ -98,24 +296,34 @@ export function renderSessionMeta() {
   const conversations = appState.workspaceSnapshot?.conversations || (session ? [session] : []);
   const currentWorkspace = appState.workspaceSnapshot?.workspace || workspace;
   const workspaceLabel = currentWorkspace?.label || "未命名 workspace";
+  const collapsed = Boolean(appState.sessionMetaCollapsed);
   const workspaceStatus = appState.workspaceStatus ? `<p class="workspace-status muted">${escapeHTML(appState.workspaceStatus)}</p>` : "";
   const conversationMarkup = conversations.length
     ? `
-      <div class="conversation-list">
-        ${conversations
-          .map(
-            (conversation) => `
-              <button
-                type="button"
-                class="conversation-chip ${conversation.id === session.id ? "active" : ""}"
-                data-conversation-id="${escapeAttribute(conversation.id)}"
-              >
-                <span class="conversation-chip-label">${escapeHTML(formatConversationLabel(conversation))}</span>
-                <span class="conversation-chip-id">${escapeHTML(conversation.id)}</span>
-              </button>
-            `,
-          )
-          .join("")}
+      <div class="workspace-collection-meta">
+        <span>${escapeHTML(`${conversations.length} 个对话`)}</span>
+        ${conversations.length > 3 ? `<span>仅显示 3 条高度，可滚动查看更多</span>` : ""}
+      </div>
+      <div class="workspace-collection-scroll">
+        <div class="conversation-list">
+          ${conversations
+            .map(
+              (conversation) => `
+                <button
+                  type="button"
+                  class="conversation-chip ${conversation.id === session.id ? "active" : ""}"
+                  data-conversation-id="${escapeAttribute(conversation.id)}"
+                >
+                  <span
+                    class="conversation-chip-label"
+                    title="双击可重命名，右击可重命名或删除"
+                  >${escapeHTML(formatConversationLabel(conversation))}</span>
+                  <span class="conversation-chip-id">${escapeHTML(conversation.id)}</span>
+                </button>
+              `,
+            )
+            .join("")}
+        </div>
       </div>
     `
     : "<p class='muted'>当前 workspace 还没有其他对话。</p>";
@@ -125,7 +333,11 @@ export function renderSessionMeta() {
     <div class="workspace-meta-head">
       <div>
         <div class="workspace-title-row">
-          <div class="workspace-title" data-workspace-id="${escapeAttribute(currentWorkspace?.id || "")}" title="双击重命名">${escapeHTML(workspaceLabel)}</div>
+          <div
+            class="workspace-title"
+            data-workspace-id="${escapeAttribute(currentWorkspace?.id || "")}"
+            title="双击可重命名，右击可重命名或删除"
+          >${escapeHTML(workspaceLabel)}</div>
           <details class="workspace-help-popover">
             <summary aria-label="查看工作区与对话说明">?</summary>
             <div class="workspace-help-body">
@@ -142,34 +354,54 @@ export function renderSessionMeta() {
           class="ghost-button conversation-create-button"
           title="保留当前工作区里的对象和结果，只开启新的聊天线程"
         >新对话</button>
-    </div>
-    </div>
-    ${workspaceStatus}
-    <div class="workspace-summary-grid">
-      <div class="workspace-summary-item">
-        <strong>${objects.length}</strong>
-        <span>共享对象</span>
-      </div>
-      <div class="workspace-summary-item">
-        <strong>${jobs.length}</strong>
-        <span>本对话任务</span>
-      </div>
-      <div class="workspace-summary-item">
-        <strong>${artifacts.length}</strong>
-        <span>共享结果</span>
+        <button
+          type="button"
+          class="ghost-button workspace-panel-toggle"
+          data-toggle-panel="session-meta"
+          aria-expanded="${collapsed ? "false" : "true"}"
+        >${collapsed ? "展开" : "收起"}</button>
       </div>
     </div>
-    <div class="workspace-section-label">对话</div>
-    ${conversationMarkup}
+    <div class="workspace-panel-body ${collapsed ? "collapsed" : ""}">
+      ${workspaceStatus}
+      <div class="workspace-summary-grid">
+        <div class="workspace-summary-item">
+          <strong>${objects.length}</strong>
+          <span>h5ad 文件</span>
+        </div>
+        <div class="workspace-summary-item">
+          <strong>${jobs.length}</strong>
+          <span>本对话任务</span>
+        </div>
+        <div class="workspace-summary-item">
+          <strong>${artifacts.length}</strong>
+          <span>结果文件</span>
+        </div>
+      </div>
+      <div class="workspace-section-label">对话</div>
+      ${conversationMarkup}
+    </div>
   `;
   bindWorkspaceMeta(meta);
 }
 
 export function renderPlannerPreview() {
-  const container = document.getElementById("plannerPreview");
+  const container = document.getElementById("plannerPreviewModalContent");
+  const copyButton = document.getElementById("plannerPreviewCopyButton");
+  const copyStatus = document.getElementById("plannerPreviewCopyStatus");
   const preview = appState.plannerPreview;
+  if (!container) {
+    return;
+  }
+  if (copyButton) {
+    copyButton.disabled = !preview;
+    copyButton.onclick = null;
+  }
+  if (copyStatus) {
+    copyStatus.textContent = "";
+  }
   if (!preview) {
-    container.innerHTML = "";
+    container.innerHTML = "<p class='muted'>当前还没有规划预览。</p>";
     return;
   }
 
@@ -219,6 +451,55 @@ export function renderPlannerPreview() {
   }
 
   container.innerHTML = blocks.join("");
+
+  if (copyButton) {
+    copyButton.onclick = async () => {
+      try {
+        await copyTextToClipboard(JSON.stringify(buildPlannerPreviewClipboardPayload(preview), null, 2));
+        if (copyStatus) {
+          copyStatus.textContent = "已复制";
+        }
+      } catch (error) {
+        if (copyStatus) {
+          copyStatus.textContent = error?.message || "复制失败";
+        }
+      }
+    };
+  }
+}
+
+function buildPlannerPreviewClipboardPayload(preview) {
+  return {
+    planner_mode: preview?.planner_mode || "",
+    note: preview?.note || "",
+    planning_request: preview?.planning_request || null,
+    developer_instructions: preview?.developer_instructions || "",
+    request_body: preview?.request_body || null,
+  };
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("浏览器未允许复制");
+    }
+  } finally {
+    textarea.remove();
+  }
 }
 
 function renderSidebarCard({ title, body, badge = "", open = true }) {
@@ -411,6 +692,25 @@ function renderStatusOverviewModal() {
   bindLoadedSkillButtons(content);
 }
 
+function renderWorkspaceFilesEntry() {
+  const button = document.getElementById("workspaceFilesButton");
+  if (!button) {
+    return;
+  }
+
+  const entries = buildWorkspaceFileEntries();
+  const currentWorkspace = appState.workspaceSnapshot?.workspace || appState.snapshot?.workspace || null;
+  const objectCount = entries.filter((entry) => entry.type === "object").length;
+  const artifactCount = entries.filter((entry) => entry.type === "artifact").length;
+
+  button.textContent = `查看 Workspace 文件 (${entries.length})`;
+  button.title = entries.length
+    ? `${currentWorkspace?.label || "当前 workspace"} 中有 ${objectCount} 个 h5ad 文件、${artifactCount} 个结果文件`
+    : "当前 workspace 还没有可查看的文件";
+  button.disabled = !entries.length;
+  button.onclick = entries.length ? openWorkspaceFilesModal : null;
+}
+
 function renderWorkspaceNavigator() {
   const container = document.getElementById("workspaceNavigator");
   if (!container) {
@@ -423,6 +723,7 @@ function renderWorkspaceNavigator() {
     : currentWorkspace
       ? [currentWorkspace]
       : [];
+  const collapsed = Boolean(appState.workspaceNavigatorCollapsed);
 
   container.innerHTML = `
     <div class="workspace-navigator-head">
@@ -430,35 +731,54 @@ function renderWorkspaceNavigator() {
         <div class="workspace-meta-eyebrow">工作区</div>
         <div class="workspace-navigator-title">工作区列表</div>
       </div>
-      <button
-        id="newWorkspaceButton"
-        type="button"
-        class="ghost-button conversation-create-button"
-        title="新建独立工作区，适合换数据集或开始全新分析"
-      >新工作区</button>
+      <div class="workspace-meta-actions">
+        <button
+          id="newWorkspaceButton"
+          type="button"
+          class="ghost-button conversation-create-button"
+          title="新建独立工作区，适合换数据集或开始全新分析"
+        >新工作区</button>
+        <button
+          type="button"
+          class="ghost-button workspace-panel-toggle"
+          data-toggle-panel="workspace-navigator"
+          aria-expanded="${collapsed ? "false" : "true"}"
+        >${collapsed ? "展开" : "收起"}</button>
+      </div>
     </div>
-    ${
-      workspaceList.length
-        ? `
-          <div class="workspace-list">
-            ${workspaceList
-              .map(
-                (item) => `
-                  <button
-                    type="button"
-                    class="workspace-chip ${item.id === currentWorkspace?.id ? "active" : ""}"
-                    data-workspace-id="${escapeAttribute(item.id)}"
-                  >
-                    <span class="workspace-chip-label">${escapeHTML(item.label || item.id)}</span>
-                    <span class="workspace-chip-id">${escapeHTML(item.id)}</span>
-                  </button>
-                `,
-              )
-              .join("")}
-          </div>
-        `
-        : "<p class='muted'>当前还没有工作区。</p>"
-    }
+    <div class="workspace-panel-body ${collapsed ? "collapsed" : ""}">
+      ${
+        workspaceList.length
+          ? `
+            <div class="workspace-collection-meta">
+              <span>${escapeHTML(`${workspaceList.length} 个工作区`)}</span>
+              ${workspaceList.length > 3 ? `<span>仅显示 3 条高度，可滚动查看更多</span>` : ""}
+            </div>
+            <div class="workspace-collection-scroll">
+              <div class="workspace-list">
+                ${workspaceList
+                  .map(
+                    (item) => `
+                      <button
+                        type="button"
+                        class="workspace-chip ${item.id === currentWorkspace?.id ? "active" : ""}"
+                        data-workspace-id="${escapeAttribute(item.id)}"
+                      >
+                        <span
+                          class="workspace-chip-label"
+                          title="双击可重命名，右击可重命名或删除"
+                        >${escapeHTML(item.label || item.id)}</span>
+                        <span class="workspace-chip-id">${escapeHTML(item.id)}</span>
+                      </button>
+                    `,
+                  )
+                  .join("")}
+              </div>
+            </div>
+          `
+          : "<p class='muted'>当前还没有工作区。</p>"
+      }
+    </div>
   `;
 
   bindWorkspaceNavigator(container);
@@ -498,6 +818,14 @@ function renderConsoleInfoBar() {
 }
 
 function bindWorkspaceNavigator(container) {
+  const toggleButton = container.querySelector('[data-toggle-panel="workspace-navigator"]');
+  if (toggleButton) {
+    toggleButton.addEventListener("click", () => {
+      appState.workspaceNavigatorCollapsed = !appState.workspaceNavigatorCollapsed;
+      renderWorkspaceNavigator();
+    });
+  }
+
   const createWorkspaceButton = container.querySelector("#newWorkspaceButton");
   if (createWorkspaceButton) {
     createWorkspaceButton.addEventListener("click", async () => {
@@ -510,6 +838,9 @@ function bindWorkspaceNavigator(container) {
       await renderActions.switchWorkspace(button.dataset.workspaceId);
     });
     const label = button.querySelector(".workspace-chip-label");
+    button.addEventListener("contextmenu", (event) => {
+      openWorkspaceContextMenu(event, button.dataset.workspaceId, label || button);
+    });
     if (label) {
       label.addEventListener("dblclick", (event) => {
         event.stopPropagation();
@@ -523,6 +854,14 @@ function bindWorkspaceNavigator(container) {
 }
 
 function bindWorkspaceMeta(container) {
+  const toggleButton = container.querySelector('[data-toggle-panel="session-meta"]');
+  if (toggleButton) {
+    toggleButton.addEventListener("click", () => {
+      appState.sessionMetaCollapsed = !appState.sessionMetaCollapsed;
+      renderSessionMeta();
+    });
+  }
+
   const createButton = container.querySelector("#newConversationButton");
   if (createButton) {
     createButton.addEventListener("click", async () => {
@@ -532,6 +871,9 @@ function bindWorkspaceMeta(container) {
 
   const workspaceTitle = container.querySelector(".workspace-title[data-workspace-id]");
   if (workspaceTitle) {
+    workspaceTitle.addEventListener("contextmenu", (event) => {
+      openWorkspaceContextMenu(event, workspaceTitle.dataset.workspaceId, workspaceTitle);
+    });
     workspaceTitle.addEventListener("dblclick", (event) => {
       event.stopPropagation();
       startInlineEdit(workspaceTitle, workspaceTitle.textContent.trim(), async (newLabel) => {
@@ -545,6 +887,9 @@ function bindWorkspaceMeta(container) {
       await renderActions.switchConversation(button.dataset.conversationId);
     });
     const label = button.querySelector(".conversation-chip-label");
+    button.addEventListener("contextmenu", (event) => {
+      openConversationContextMenu(event, button.dataset.conversationId, label || button);
+    });
     if (label) {
       label.addEventListener("dblclick", (event) => {
         event.stopPropagation();
@@ -584,47 +929,132 @@ function renderSkillHub() {
   });
 }
 
-function renderObjectTree() {
-  const container = document.getElementById("objectTree");
-  container.innerHTML = "";
-
-  if (!appState.snapshot?.objects?.length) {
-    container.innerHTML = "<p class='muted'>当前 workspace 还没有分析对象。</p>";
+async function renderWorkspaceFilesModal() {
+  const container = document.getElementById("workspaceFilesModalContent");
+  const title = document.getElementById("workspaceFilesModalTitle");
+  if (!container) {
     return;
   }
 
-  const objectsByParent = new Map();
-  for (const object of appState.snapshot.objects) {
-    const parentKey = object.parent_id || "root";
-    if (!objectsByParent.has(parentKey)) {
-      objectsByParent.set(parentKey, []);
-    }
-    objectsByParent.get(parentKey).push(object);
+  const renderVersion = ++appState.workspaceFilesModalRenderVersion;
+  const entries = buildWorkspaceFileEntries();
+  const currentWorkspace = appState.workspaceSnapshot?.workspace || appState.snapshot?.workspace || null;
+  if (title) {
+    title.textContent = currentWorkspace?.label
+      ? `当前 Workspace 文件 · ${currentWorkspace.label}`
+      : "当前 Workspace 输出文件";
+  }
+  if (!entries.length) {
+    container.innerHTML = `
+      <div class="workspace-files-modal-empty">
+        <p class="muted">当前 workspace 还没有可查看的文件。</p>
+      </div>
+    `;
+    return;
   }
 
-  const walk = (parentId, depth) => {
-    const children = objectsByParent.get(parentId) || [];
-    for (const object of children) {
-      const node = document.createElement("button");
-      node.type = "button";
-      node.className = `tree-node depth-${Math.min(depth, 3)} ${
-        object.id === appState.activeObjectId ? "active" : ""
-      }`;
-      node.innerHTML = `
-        <span class="label">${escapeHTML(object.label)}</span>
-        <span class="meta">${escapeHTML(formatObjectKind(object.kind))} · ${escapeHTML(String(object.n_obs))} 个细胞 · ${escapeHTML(formatObjectState(object.state))}</span>
-      `;
-      node.addEventListener("click", () => {
-        appState.activeObjectId = object.id;
-        renderInspector();
-        renderObjectTree();
-      });
-      container.appendChild(node);
-      walk(object.id, depth + 1);
-    }
-  };
+  const groups = buildWorkspaceFileGroups(entries);
+  const selectedResource = selectedWorkspaceResource();
+  const detailMarkup = await buildWorkspaceFileDetailMarkup(selectedResource);
+  if (renderVersion !== appState.workspaceFilesModalRenderVersion) {
+    return;
+  }
 
-  walk("root", 0);
+  container.innerHTML = `
+    <div class="workspace-files-modal-summary">
+      <div class="workspace-summary-item">
+        <strong>${entries.length}</strong>
+        <span>总文件数</span>
+      </div>
+      <div class="workspace-summary-item">
+        <strong>${entries.filter((entry) => entry.type === "object").length}</strong>
+        <span>h5ad 文件</span>
+      </div>
+      <div class="workspace-summary-item">
+        <strong>${entries.filter((entry) => entry.type === "artifact").length}</strong>
+        <span>结果文件</span>
+      </div>
+    </div>
+    <div class="workspace-files-modal-layout">
+      <section class="workspace-files-modal-panel">
+        <div class="workspace-files-modal-panel-head">
+          <strong>文件列表</strong>
+          <span class="muted">当前 workspace 产生的对象与结果</span>
+        </div>
+        <div class="workspace-files-modal-list">
+          ${groups
+            .map(
+              (group) => `
+                <section class="workspace-file-group">
+                  <div class="workspace-section-label">${escapeHTML(group.title)}</div>
+                  <div class="workspace-file-list">
+                    ${group.entries.map((entry) => buildWorkspaceFileNodeMarkup(entry)).join("")}
+                  </div>
+                </section>
+              `,
+            )
+            .join("")}
+        </div>
+      </section>
+      <section class="workspace-files-modal-panel workspace-files-modal-detail-panel">
+        <div class="workspace-files-modal-panel-head">
+          <strong>${escapeHTML(selectedResource?.label || selectedResource?.fileName || "文件详情")}</strong>
+          <span class="muted">${escapeHTML(selectedResource?.fileName || "选择一个文件查看详情")}</span>
+        </div>
+        <div class="workspace-files-modal-detail">
+          ${detailMarkup}
+        </div>
+      </section>
+    </div>
+  `;
+
+  bindWorkspaceFileList(container, () => {
+    void renderWorkspaceFilesModal();
+  });
+  bindArtifactPreviewButtons(container);
+}
+
+function buildWorkspaceFileGroups(entries) {
+  return [
+    {
+      title: "h5ad 文件",
+      entries: entries.filter((entry) => entry.type === "object"),
+    },
+    {
+      title: "结果文件",
+      entries: entries.filter((entry) => entry.type === "artifact"),
+    },
+  ].filter((group) => group.entries.length);
+}
+
+function buildWorkspaceFileNodeMarkup(entry) {
+  return `
+    <button
+      type="button"
+      class="tree-node workspace-file-node ${entry.resourceKey === selectedResourceKey() ? "active" : ""}"
+      data-resource-key="${escapeAttribute(entry.resourceKey)}"
+    >
+      <div class="resource-node-head">
+        <span class="resource-node-title">${escapeHTML(entry.fileName)}</span>
+        ${entry.isActiveContext ? '<span class="resource-node-badge">当前上下文</span>' : ""}
+      </div>
+      <span class="label">${escapeHTML(entry.label)}</span>
+      <span class="meta">${escapeHTML(entry.metaPrimary)}</span>
+      <span class="meta meta-secondary">${escapeHTML(entry.metaSecondary)}</span>
+    </button>
+  `;
+}
+
+function bindWorkspaceFileList(container, onSelect = null) {
+  for (const button of container.querySelectorAll("[data-resource-key]")) {
+    button.addEventListener("click", () => {
+      appState.selectedResourceKey = button.dataset.resourceKey || null;
+      if (typeof onSelect === "function") {
+        onSelect();
+      }
+      renderInspector();
+    });
+  }
 }
 
 async function renderChat() {
@@ -1162,28 +1592,94 @@ function buildPlanStepMarkup(step, index) {
   `;
 }
 
-function renderInspector() {
-  const container = document.getElementById("inspector");
-  const object = activeObject();
-  const blocks = [
-    renderSidebarCard({
-      title: "Working Memory",
-      open: true,
-      body: renderWorkingMemoryMarkup(appState.snapshot?.working_memory),
-    }),
-  ];
+function buildSelectedResourceDetailBlocks({ includeWorkingMemory = true } = {}) {
+  const resource = selectedWorkspaceResource();
+  const object = resource?.type === "object" ? resource.object : activeObject();
+  const blocks = [];
 
-  if (!object) {
+  if (includeWorkingMemory) {
     blocks.push(
       renderSidebarCard({
-        title: "当前对象",
-        body: "<p class='muted'>请选择一个对象查看详情。</p>",
+        title: "Working Memory",
+        open: true,
+        body: renderWorkingMemoryMarkup(appState.snapshot?.working_memory),
       }),
     );
-    container.innerHTML = blocks.join("");
-    return;
   }
 
+  if (!resource && !object) {
+    blocks.push(
+      renderSidebarCard({
+        title: "文件详情",
+        body: "<p class='muted'>当前工作区还没有可查看的文件。</p>",
+      }),
+    );
+    return blocks;
+  }
+
+  if (resource?.type === "artifact") {
+    const artifact = resource.artifact;
+    const artifactURL = artifactResourceURL(artifact);
+    const linkedObject = findWorkspaceObject(artifact.object_id);
+    blocks.push(
+      renderSidebarCard({
+        title: resource.fileName,
+        body: `
+          <div class="kv"><span>文件标题</span><span>${escapeHTML(artifact.title || resource.fileName)}</span></div>
+          <div class="kv"><span>类型</span><span>${escapeHTML(formatArtifactKind(artifact.kind))}</span></div>
+          <div class="kv"><span>内容类型</span><span>${escapeHTML(artifact.content_type || "未记录")}</span></div>
+          <div class="kv"><span>文件路径</span><span>${escapeHTML(artifact.path || "未记录")}</span></div>
+          <div class="kv"><span>关联对象</span><span>${escapeHTML(linkedObject?.label || artifact.object_id || "无")}</span></div>
+          <div class="kv"><span>关联任务</span><span>${escapeHTML(artifact.job_id || "无")}</span></div>
+          <div class="kv"><span>摘要</span><span>${escapeHTML(artifact.summary || "无")}</span></div>
+          <div class="kv"><span>操作</span><span>${
+            artifactURL
+              ? `<a class="inline-link" href="${artifactURL}" target="_blank" rel="noreferrer">打开</a> · <a class="inline-link" href="${artifactURL}" download>下载</a>`
+              : "暂不可用"
+          }</span></div>
+        `,
+      }),
+    );
+    if (linkedObject) {
+      blocks.push(
+        renderSidebarCard({
+          title: "关联对象",
+          body: `
+            <div class="kv"><span>名称</span><span>${escapeHTML(linkedObject.label)}</span></div>
+            <div class="kv"><span>类型</span><span>${escapeHTML(formatObjectKind(linkedObject.kind))}</span></div>
+            <div class="kv"><span>细胞数</span><span>${escapeHTML(String(linkedObject.n_obs))}</span></div>
+            <div class="kv"><span>状态</span><span>${escapeHTML(formatObjectState(linkedObject.state))}</span></div>
+          `,
+        }),
+      );
+    }
+  } else if (object) {
+    appendObjectInspectorCards(blocks, object, {
+      title: resource?.fileName || object.label,
+    });
+  }
+
+  return blocks;
+}
+
+function renderInspector() {
+  const container = document.getElementById("inspector");
+  if (!container) {
+    return;
+  }
+  container.innerHTML = buildSelectedResourceDetailBlocks({ includeWorkingMemory: true }).join("");
+}
+
+async function buildWorkspaceFileDetailMarkup(resource) {
+  const blocks = buildSelectedResourceDetailBlocks({ includeWorkingMemory: false });
+  if (resource?.type === "artifact") {
+    const previewCard = await buildArtifactCardMarkup(resource.artifact, "modal");
+    return `${previewCard}${blocks.join("")}`;
+  }
+  return blocks.join("");
+}
+
+function appendObjectInspectorCards(blocks, object, { title } = {}) {
   const relatedJobs = (appState.snapshot?.jobs || []).filter((job) =>
     (job.steps || []).some(
       (step) =>
@@ -1199,8 +1695,10 @@ function renderInspector() {
 
   blocks.push(
     renderSidebarCard({
-      title: object.label,
+      title: title || object.label,
       body: `
+        <div class="kv"><span>对象名称</span><span>${escapeHTML(object.label)}</span></div>
+        <div class="kv"><span>当前上下文</span><span>${escapeHTML(object.id === appState.activeObjectId ? "是" : "否")}</span></div>
         <div class="kv"><span>对象 ID</span><span>${escapeHTML(object.id)}</span></div>
         <div class="kv"><span>类型</span><span>${escapeHTML(formatObjectKind(object.kind))}</span></div>
         <div class="kv"><span>父对象</span><span>${escapeHTML(object.parent_id || "无")}</span></div>
@@ -1208,7 +1706,7 @@ function renderInspector() {
         <div class="kv"><span>细胞数</span><span>${escapeHTML(String(object.n_obs))}</span></div>
         <div class="kv"><span>基因数</span><span>${escapeHTML(String(object.n_vars))}</span></div>
         <div class="kv"><span>状态</span><span>${escapeHTML(formatObjectState(object.state))}</span></div>
-        <div class="kv"><span>落盘文件</span><span>${escapeHTML(object.materialized_path || "尚未生成")}</span></div>
+        <div class="kv"><span>文件路径</span><span>${escapeHTML(object.materialized_path || "尚未生成")}</span></div>
         <div class="kv"><span>下载</span><span>${
           object.materialized_url
             ? `<a class="inline-link" href="${object.materialized_url}" download>获取 h5ad</a>`
@@ -1272,8 +1770,6 @@ function renderInspector() {
         : "<p class='muted'>这个对象还没有关联任务。</p>",
     }),
   );
-
-  container.innerHTML = blocks.join("");
 }
 
 function renderWorkingMemoryMarkup(memory) {
@@ -1560,6 +2056,153 @@ function bindLoadedSkillButtons(container) {
   }
 }
 
+function buildWorkspaceFileEntries() {
+  const deduped = new Map();
+
+  for (const object of workspaceObjects()) {
+    const entry = buildObjectFileEntry(object);
+    if (entry) {
+      storeWorkspaceFileEntry(deduped, entry);
+    }
+  }
+
+  for (const artifact of workspaceArtifacts()) {
+    const entry = buildArtifactFileEntry(artifact);
+    if (entry) {
+      storeWorkspaceFileEntry(deduped, entry);
+    }
+  }
+
+  return Array.from(deduped.values()).sort(compareWorkspaceFileEntries);
+}
+
+function buildObjectFileEntry(object) {
+  if (!object) {
+    return null;
+  }
+  const location = object.materialized_path || object.materialized_url || "";
+  if (!location) {
+    return null;
+  }
+
+  const parent = findWorkspaceObject(object.parent_id);
+  return {
+    type: "object",
+    resourceKey: `object:${object.id}`,
+    fileName: resourceBasename(location) || `${object.label || object.id}.h5ad`,
+    label: object.label || object.id,
+    metaPrimary: `${formatObjectKind(object.kind)} · ${object.n_obs} 个细胞`,
+    metaSecondary: `${formatObjectState(object.state)}${parent ? ` · 来自 ${parent.label}` : ""}`,
+    createdAt: object.last_accessed_at || object.created_at || "",
+    isActiveContext: object.id === appState.activeObjectId,
+    locationKey: normalizeResourceLocation(location),
+    object,
+  };
+}
+
+function buildArtifactFileEntry(artifact) {
+  if (!artifact) {
+    return null;
+  }
+  const location = artifact.path || artifact.url || artifact.title || "";
+  if (!location) {
+    return null;
+  }
+
+  const linkedObject = findWorkspaceObject(artifact.object_id);
+  return {
+    type: "artifact",
+    resourceKey: `artifact:${artifact.id}`,
+    fileName: resourceBasename(location) || artifact.id || "artifact",
+    label: artifact.title || resourceBasename(location) || artifact.id || "未命名结果",
+    metaPrimary: `${formatArtifactKind(artifact.kind)} · ${linkedObject?.label || artifact.object_id || "未关联对象"}`,
+    metaSecondary: artifact.summary || artifact.content_type || "结果文件",
+    createdAt: artifact.created_at || "",
+    isActiveContext: false,
+    locationKey: normalizeResourceLocation(location),
+    artifact,
+  };
+}
+
+function storeWorkspaceFileEntry(entries, entry) {
+  const existing = entries.get(entry.locationKey);
+  if (!existing) {
+    entries.set(entry.locationKey, entry);
+    return;
+  }
+  if (existing.type === "object") {
+    return;
+  }
+  if (entry.type === "object") {
+    entries.set(entry.locationKey, entry);
+    return;
+  }
+  if (String(entry.createdAt || "").localeCompare(String(existing.createdAt || "")) > 0) {
+    entries.set(entry.locationKey, entry);
+  }
+}
+
+function compareWorkspaceFileEntries(a, b) {
+  if (a.type !== b.type) {
+    return a.type === "object" ? -1 : 1;
+  }
+  if (a.isActiveContext !== b.isActiveContext) {
+    return a.isActiveContext ? -1 : 1;
+  }
+  const createdAtOrder = String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+  if (createdAtOrder !== 0) {
+    return createdAtOrder;
+  }
+  return String(a.fileName || "").localeCompare(String(b.fileName || ""), "zh-CN");
+}
+
+function selectedResourceKey() {
+  if (appState.selectedResourceKey) {
+    return appState.selectedResourceKey;
+  }
+  if (appState.activeObjectId) {
+    return `object:${appState.activeObjectId}`;
+  }
+  return null;
+}
+
+function selectedWorkspaceResource() {
+  const desiredKey = selectedResourceKey();
+  const entries = buildWorkspaceFileEntries();
+  if (desiredKey) {
+    const selected = entries.find((entry) => entry.resourceKey === desiredKey);
+    if (selected) {
+      return selected;
+    }
+  }
+  return entries[0] || null;
+}
+
+function workspaceObjects() {
+  return appState.workspaceSnapshot?.objects || appState.snapshot?.objects || [];
+}
+
+function workspaceArtifacts() {
+  return appState.workspaceSnapshot?.artifacts || appState.snapshot?.artifacts || [];
+}
+
+function findWorkspaceObject(objectID) {
+  if (!objectID) {
+    return null;
+  }
+  return workspaceObjects().find((object) => object.id === objectID) || null;
+}
+
+function resourceBasename(value) {
+  const normalized = String(value || "").replaceAll("\\", "/");
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] || normalized;
+}
+
+function normalizeResourceLocation(value) {
+  return String(value || "").trim().replaceAll("\\", "/");
+}
+
 function activeObject() {
-  return (appState.snapshot?.objects || []).find((object) => object.id === appState.activeObjectId);
+  return findWorkspaceObject(appState.activeObjectId);
 }
