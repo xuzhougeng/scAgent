@@ -435,6 +435,32 @@ class SkillRuntimeSupport:
             return [cmap(0.5)]
         return [cmap(position) for position in np.linspace(0.0, 1.0, len(categories))]
 
+    def _group_palette_map(self, adata: Any, groupby: str | None, group_labels: list[str], palette: str | None) -> dict[str, Any]:
+        import seaborn as sns
+
+        if not group_labels:
+            return {}
+
+        palette_name = str(palette or "").strip()
+        if palette_name:
+            try:
+                colors = sns.color_palette(palette_name, n_colors=len(group_labels))
+            except ValueError:
+                fallback = "tab10" if len(group_labels) <= 10 else "tab20"
+                colors = sns.color_palette(fallback, n_colors=len(group_labels))
+            return dict(zip(group_labels, colors))
+
+        group_field = str(groupby or "").strip()
+        if group_field:
+            uns_key = f"{group_field}_colors"
+            raw_colors = adata.uns.get(uns_key)
+            if isinstance(raw_colors, (list, tuple)) and len(raw_colors) >= len(group_labels):
+                return dict(zip(group_labels, list(raw_colors)[: len(group_labels)]))
+
+        default_palette = "tab10" if len(group_labels) <= 10 else "tab20"
+        colors = sns.color_palette(default_palette, n_colors=len(group_labels))
+        return dict(zip(group_labels, colors))
+
     def _render_categorical_umap_legend(
         self,
         ax: Any,
@@ -706,53 +732,95 @@ class SkillRuntimeSupport:
 
     def _save_violin_plot(
         self,
+        adata: Any,
         path: Path,
+        groupby: str | None,
         group_labels: list[str],
         gene_labels: list[str],
         grouped_values: list[list[Any]],
         *,
         title: str | None = None,
+        palette: str | None = None,
     ) -> None:
         _, _, plt, np, _ = self.analysis_modules()
+        import pandas as pd
+        import seaborn as sns
+
         figure_title = str(title or "Violin plot").strip() or "Violin plot"
-        fig, axes = plt.subplots(
-            len(gene_labels),
-            1,
-            figsize=(max(6.2, len(group_labels) * 0.72 + 2.5), max(3.4, len(gene_labels) * 2.6)),
-            squeeze=False,
-        )
-        positions = np.arange(1, len(group_labels) + 1)
+        total_height = max(1.0 * len(gene_labels) + (1.6 if title else 0.8), 5.0)
+        fig, axes = plt.subplots(len(gene_labels), 1, figsize=(max(0.55 * len(group_labels) + 4.0, 10.0), total_height), sharex=True)
+        axes = np.atleast_1d(axes)
+        group_palette = self._group_palette_map(adata, groupby, group_labels, palette)
 
         for index, gene_label in enumerate(gene_labels):
-            axis = axes[index][0]
-            values = []
-            for group_values in grouped_values[index]:
+            axis = axes[index]
+            frames = []
+            for group_label, group_values in zip(group_labels, grouped_values[index]):
                 numeric = np.asarray(group_values, dtype=float)
                 numeric = numeric[np.isfinite(numeric)]
-                values.append(numeric if numeric.size > 0 else np.asarray([0.0]))
+                if numeric.size == 0:
+                    continue
+                frames.append(pd.DataFrame({"group": group_label, "expression": numeric}))
 
-            violin = axis.violinplot(values, positions=positions, showmedians=True, showextrema=False)
-            for body in violin["bodies"]:
-                body.set_facecolor("#2f7d4a")
-                body.set_edgecolor("none")
-                body.set_alpha(0.72)
-            if "cmedians" in violin:
-                violin["cmedians"].set_color("#1f2933")
-                violin["cmedians"].set_linewidth(1.1)
+            if frames:
+                gene_df = pd.concat(frames, ignore_index=True)
+            else:
+                gene_df = pd.DataFrame({"group": group_labels, "expression": np.zeros(len(group_labels), dtype=float)})
 
-            axis.set_title(gene_label, loc="left", fontsize=10)
-            axis.set_ylabel("Expression")
-            axis.set_xticks(
-                positions,
-                group_labels if index == len(gene_labels) - 1 else [""] * len(group_labels),
-                rotation=45,
-                ha="right",
+            sns.violinplot(
+                data=gene_df,
+                x="group",
+                y="expression",
+                hue="group",
+                order=group_labels,
+                hue_order=group_labels,
+                palette=group_palette,
+                dodge=False,
+                inner="box",
+                cut=0,
+                linewidth=0.8,
+                saturation=1,
+                ax=axis,
             )
+
+            legend = axis.get_legend()
+            if legend is not None:
+                legend.remove()
+
+            axis.set_ylabel(gene_label, fontsize=10, rotation=0, labelpad=34, fontweight="bold")
+            axis.yaxis.label.set_horizontalalignment("right")
+            axis.yaxis.label.set_verticalalignment("center")
+            axis.set_title("")
+            axis.grid(axis="y", alpha=0.2, linewidth=0.6)
+            axis.set_axisbelow(True)
+
+            max_expr = float(gene_df["expression"].max()) if not gene_df.empty else 0.0
+            display_max = math.ceil(max_expr * 10.0) / 10.0 if max_expr > 0 else 0.0
+            ylim_max = display_max if display_max > 0 else 1.0
+            axis.set_ylim(0, ylim_max)
+            axis.set_yticks([])
+            axis.spines["left"].set_visible(False)
             axis.spines["top"].set_visible(False)
             axis.spines["right"].set_visible(False)
+            axis.text(1.003, 1.0, f"{display_max:.1f}", transform=axis.transAxes, ha="left", va="top", fontsize=8)
 
-        fig.suptitle(figure_title)
-        fig.tight_layout()
+            if index < len(gene_labels) - 1:
+                axis.set_xlabel("")
+                axis.tick_params(labelbottom=False)
+            else:
+                axis.set_xlabel(str(groupby or "group"), fontsize=10)
+                for label in axis.get_xticklabels():
+                    label.set_rotation(45)
+                    label.set_ha("right")
+
+        if title:
+            fig.suptitle(figure_title, fontsize=14, fontweight="bold", y=0.995)
+        fig.subplots_adjust(hspace=0.0)
+        rect = (0, 0, 1, 0.985) if title else None
+        if rect is not None:
+            fig.tight_layout(rect=rect, h_pad=0.0)
+        else:
+            fig.tight_layout(h_pad=0.0)
         fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
         plt.close(fig)
 

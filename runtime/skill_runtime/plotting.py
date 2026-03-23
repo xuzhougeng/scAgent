@@ -224,8 +224,18 @@ def plot_violin(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         grouped_values.append(gene_groups)
 
     title = str(ctx.params.get("title") or "").strip() or None
+    palette = str(ctx.params.get("palette") or "").strip() or None
     path = state._plot_path(ctx.workspace_root, ctx.skill, target.label, ctx.request_id)
-    state._save_violin_plot(path, group_labels, [item["requested"] for item in resolved_genes], grouped_values, title=title)
+    state._save_violin_plot(
+        adata,
+        path,
+        groupby or None,
+        group_labels,
+        [item["requested"] for item in resolved_genes],
+        grouped_values,
+        title=title,
+        palette=palette,
+    )
 
     summary_bits = [f"已为 {target.label} 生成小提琴图（基因：{state.format_list_zh([item['requested'] for item in resolved_genes])}）。"]
     if groupby:
@@ -248,6 +258,7 @@ def plot_violin(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
             "genes": requested_genes,
             "resolved_genes": resolved_genes,
             "missing_genes": missing_genes,
+            "palette": palette,
         },
     }
 
