@@ -24,8 +24,8 @@
 
 ## 最小使用流程
 
-1. 启动 Python runtime
-2. 启动 Go server
+1. 运行 `make dev`
+2. 如果 `data/samples/pbmc3k.h5ad` 不存在，系统会自动下载默认 PBMC3K 样例
 3. 打开主页面
 4. 上传一个 `.h5ad`
 5. 先看系统自动给出的数据评估
@@ -85,6 +85,23 @@
 - 如果 Python runtime 重启，控制层会在下一次执行前按需把带 `.h5ad` 落盘文件的对象重新注册回 runtime
 - 还没有落盘文件的临时内存对象，当前仍然无法在 runtime 重启后自动恢复
 - `pin / evict / reload` 这类更完整的对象恢复策略还在后续 roadmap 里
+
+如果你想做一次“硬清理”，可以运行：
+
+```bash
+make restore
+```
+
+它会删除：
+
+- `data/state`
+- `data/workspaces`
+- 以及旧的会话残留目录
+
+但会保留：
+
+- `data/weixin-bridge`
+- `data/samples`
 
 ## 典型案例
 

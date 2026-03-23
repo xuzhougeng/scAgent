@@ -67,12 +67,13 @@ For local development, the easiest path is:
 
 ```bash
 cp .env.example .env
-./start.sh
+make dev
 ```
 
-`start.sh` will:
+`make dev` / `start.sh` will:
 
 - load `.env` if it exists
+- ensure `data/samples/pbmc3k.h5ad` exists, downloading the default PBMC3K sample if needed
 - start the Python runtime through `pixi run runtime` by default
 - fail fast when Pixi is unavailable unless `SCAGENT_USE_PIXI=0`
 - wait for the runtime health check
@@ -83,11 +84,18 @@ Available Makefile targets:
 
 ```bash
 make dev             # run via start.sh
-make restore         # reset store.db and workspace files, preserve WeChat login state
+make restore         # reset state and workspace data, preserve WeChat login state
 make weixin          # run with WeChat bridge enabled
 make weixin-login    # WeChat login flow
 make weixin-logout   # WeChat logout flow
 ```
+
+Data directory conventions:
+
+- `data/samples`: default sample files such as `pbmc3k.h5ad`
+- `data/state`: SQLite control-plane persistence
+- `data/workspaces`: current workspace-scoped objects and artifacts
+- `data/weixin-bridge`: WeChat login/session state that `make restore` intentionally preserves
 
 Or run both processes manually:
 
@@ -137,6 +145,9 @@ All variables can be set in `.env` or passed as CLI flags. See `.env.example` fo
 | `SCAGENT_WEB_DIR` | `web` | Static frontend directory |
 | `SCAGENT_SKILLS_PATH` | `skills/registry.json` | Skill catalog file |
 | `SCAGENT_DOCS_DIR` | `docs` | Markdown help content |
+| `SCAGENT_SAMPLE_H5AD` | `data/samples/pbmc3k.h5ad` | Default sample `.h5ad` used to bootstrap an empty workspace |
+| `SCAGENT_SAMPLE_H5AD_URL` | `https://exampledata.scverse.org/tutorials/scverse-getting-started-anndata-pbmc3k_processed.h5ad` | Download source used when the sample file is missing |
+| `SCAGENT_SAMPLE_AUTO_DOWNLOAD` | `1` | Auto-download the default sample during `make dev` / `start.sh` when missing |
 | `SCAGENT_PLUGIN_DIR` | `data/skill-hub/plugins` | Uploaded plugin bundles |
 | `SCAGENT_PLUGIN_STATE_PATH` | `data/skill-hub/state.json` | Plugin enable/disable state |
 

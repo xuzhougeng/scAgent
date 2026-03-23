@@ -204,7 +204,7 @@ Response:
       {
         "id": "step_1",
         "skill": "subset_cells",
-        "target_object_id": "$active",
+        "target_object_id": "$focus",
         "params": {
           "obs_field": "cell_type",
           "op": "eq",
@@ -237,16 +237,33 @@ Response shape:
     "message": "根据这个 h5ad 的细胞类型字段做 subset",
     "session": {},
     "focus_object": {},
+    "global_object": {},
+    "root_object": {},
     "objects": []
   },
+  "planner_context": [],
   "developer_instructions": "",
   "request_body": {},
   "note": "..."
 }
 ```
 
-In `llm` mode this includes the prompt/request preview built from the current `.h5ad` metadata.
+In `llm` mode:
+
+- `planning_request` is the internal full snapshot
+- `planner_context` is the compact context actually rendered into the planner prompt
+- `request_body` is the actual request body sent to the LLM planner
+
 In `fake` mode it mainly contains object context plus a note.
+
+## Planner Logical Targets
+
+Planner steps can refer to logical object targets instead of concrete IDs:
+
+- `$focus`: the focused object for the current conversation
+- `$global`: the best global-scope object within the current lineage
+- `$root`: the lineage root object
+- `$prev`: the output object from the previous step
 
 ### `GET /api/skills`
 

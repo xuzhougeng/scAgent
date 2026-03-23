@@ -236,18 +236,29 @@ func resetAllData(dataDir string, stdout io.Writer) error {
 		return fmt.Errorf("data dir is required")
 	}
 
-	statePath := filepath.Join(dataDir, "state", "store.db")
+	statePath := filepath.Join(dataDir, "state")
+	sessionsPath := filepath.Join(dataDir, "sessions")
 	workspacesPath := filepath.Join(dataDir, "workspaces")
 
-	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove state db: %w", err)
+	if err := os.RemoveAll(statePath); err != nil {
+		return fmt.Errorf("remove state dir: %w", err)
+	}
+	if err := os.RemoveAll(sessionsPath); err != nil {
+		return fmt.Errorf("remove legacy sessions: %w", err)
 	}
 	if err := os.RemoveAll(workspacesPath); err != nil {
 		return fmt.Errorf("remove workspaces: %w", err)
 	}
 
 	if stdout != nil {
-		fmt.Fprintf(stdout, "reset complete\nstate_db=%s\nworkspaces=%s\npreserved=%s\n", statePath, workspacesPath, filepath.Join(dataDir, "weixin-bridge"))
+		fmt.Fprintf(
+			stdout,
+			"reset complete\nstate=%s\nsessions=%s\nworkspaces=%s\npreserved=%s\n",
+			statePath,
+			sessionsPath,
+			workspacesPath,
+			filepath.Join(dataDir, "weixin-bridge"),
+		)
 	}
 	return nil
 }

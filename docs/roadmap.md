@@ -33,6 +33,14 @@
 - [x] job 保存结构化 `checkpoints`
 - [x] 前端任务卡展示执行检查点，而不是只显示纯文本摘要
 
+### 已落地的对象解析与上下文治理
+
+- [x] 引入 resolver-first 的对象解析模型：`focus / global / root / prev`
+- [x] planner 上下文改成 compact context，避免把所有历史和图片字节全量塞进 prompt
+- [x] planner preview 区分内部快照和真实发送给 planner 的压缩上下文
+- [x] `make restore` 清理状态和工作区数据，保留 `data/weixin-bridge`
+- [x] `make dev` 在样例缺失时自动下载默认 PBMC3K `.h5ad`
+
 ## 进行中
 
 ### UMAP 补全为可自动达成（P1 + P2）
@@ -57,12 +65,14 @@
 - [ ] 支持对子集对象单独 recluster
 - [ ] 在对象树中清晰展示 parent / child 关系
 
-### 会话与对象控制（原 P4）
+### 对象生命周期与恢复策略（原 P4）
 
-目标：让对象切换、对象生命周期和结果持久化成为稳定后端能力。
+目标：让对象选择、对象生命周期和结果恢复成为稳定后端能力。
 
-- [ ] `set_focus_object` 做成真实后端能力
 - [ ] pin / evict / reload 策略
+- [ ] 运行时重启后的更完整对象恢复
+- [ ] 更明确的 global/root/focus 选择与回退策略
+- [x] resolver-first 对象解析：`focus / global / root / prev`
 - [x] SQLite 持久化 session / object / job / artifact
 
 ### 帮助站补全（原 P5）
@@ -90,13 +100,15 @@
 - [ ] 建立 subset / recluster 的对象衍生关系
 - [ ] 在 UI 中体现 parent / child 对象链路
 
-### 3. 做对象控制和持久化，稳定长期使用体验
+### 3. 做对象生命周期和恢复，稳定长期使用体验
 
-如果没有对象控制和持久化，前面能力越多，状态管理越容易变乱。这部分是进入“可长期使用”阶段前必须补上的基础设施。
+如果没有 resolver-first 的对象语义、缓存回收和恢复策略，前面能力越多，状态管理越容易变乱。这部分是进入“可长期使用”阶段前必须补上的基础设施。
 
-- [ ] 实现 `set_focus_object`
 - [ ] 明确对象缓存与回收策略
+- [ ] 明确 runtime 重启后的对象恢复策略
+- [ ] 继续加强全局对象 / 子集对象 / 根对象之间的选择规则
 - [x] 引入 SQLite 持久化 session / object / job / artifact
+- [x] 引入 resolver-first 对象解析
 
 ### 4. 补帮助站内容，降低非技术用户门槛
 

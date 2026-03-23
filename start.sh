@@ -22,6 +22,9 @@ fi
 : "${SCAGENT_DOCS_DIR:=docs}"
 : "${SCAGENT_DATA_DIR:=data}"
 : "${SCAGENT_WEB_DIR:=web}"
+: "${SCAGENT_SAMPLE_H5AD:=${SCAGENT_DATA_DIR}/samples/pbmc3k.h5ad}"
+: "${SCAGENT_SAMPLE_H5AD_URL:=https://exampledata.scverse.org/tutorials/scverse-getting-started-anndata-pbmc3k_processed.h5ad}"
+: "${SCAGENT_SAMPLE_AUTO_DOWNLOAD:=1}"
 : "${SCAGENT_OPENAI_BASE_URL:=https://api.openai.com/v1}"
 : "${SCAGENT_OPENAI_MODEL:=gpt-5.4}"
 : "${SCAGENT_OPENAI_REASONING_EFFORT:=low}"
@@ -36,6 +39,7 @@ export MPLCONFIGDIR="${SCAGENT_MPLCONFIGDIR}"
 export MPLBACKEND="${MPLBACKEND:-Agg}"
 export SCAGENT_PLUGIN_DIR
 export SCAGENT_PLUGIN_STATE_PATH
+export SCAGENT_SAMPLE_H5AD
 
 resolve_pixi_bin() {
   if [[ -n "${SCAGENT_PIXI_BIN}" ]]; then
@@ -63,6 +67,50 @@ resolve_pixi_bin() {
   return 1
 }
 
+download_sample_h5ad() {
+  local sample_path="${SCAGENT_SAMPLE_H5AD}"
+  local sample_dir
+  local tmp_path
+
+  if [[ -f "${sample_path}" ]]; then
+    return 0
+  fi
+  if [[ "${SCAGENT_SAMPLE_AUTO_DOWNLOAD}" != "1" ]]; then
+    return 0
+  fi
+  if [[ -z "${SCAGENT_SAMPLE_H5AD_URL}" ]]; then
+    echo "sample h5ad is missing and SCAGENT_SAMPLE_H5AD_URL is empty: ${sample_path}" >&2
+    exit 1
+  fi
+
+  sample_dir="$(dirname "${sample_path}")"
+  mkdir -p "${sample_dir}"
+  tmp_path="${sample_path}.download"
+  rm -f "${tmp_path}"
+
+  echo "sample h5ad not found, downloading to ${sample_path}"
+  echo "  source: ${SCAGENT_SAMPLE_H5AD_URL}"
+
+  if command -v curl >/dev/null 2>&1; then
+    if ! curl -fL --retry 3 --retry-delay 1 "${SCAGENT_SAMPLE_H5AD_URL}" -o "${tmp_path}"; then
+      rm -f "${tmp_path}"
+      echo "failed to download sample h5ad from ${SCAGENT_SAMPLE_H5AD_URL}" >&2
+      exit 1
+    fi
+  elif command -v wget >/dev/null 2>&1; then
+    if ! wget -O "${tmp_path}" "${SCAGENT_SAMPLE_H5AD_URL}"; then
+      rm -f "${tmp_path}"
+      echo "failed to download sample h5ad from ${SCAGENT_SAMPLE_H5AD_URL}" >&2
+      exit 1
+    fi
+  else
+    echo "curl or wget is required to download the sample h5ad." >&2
+    exit 1
+  fi
+
+  mv "${tmp_path}" "${sample_path}"
+}
+
 if [[ "${SCAGENT_PLANNER_MODE}" == "llm" && -z "${SCAGENT_OPENAI_API_KEY}" ]]; then
   echo "SCAGENT_OPENAI_API_KEY is required when SCAGENT_PLANNER_MODE=llm" >&2
   exit 1
@@ -77,6 +125,8 @@ if [[ "${SCAGENT_USE_PIXI}" != "0" ]]; then
   fi
   runtime_cmd=("${pixi_bin}" run runtime)
 fi
+
+download_sample_h5ad
 
 cleanup() {
   if [[ -n "${RUNTIME_PID:-}" ]]; then

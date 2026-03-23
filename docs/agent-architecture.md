@@ -32,7 +32,7 @@
                          |                              |
                          v                              v
                   +------+-------+             +--------------------------+
-                  | Skill Registry |           | data/sessions/           |
+                  | Skill Registry |           | data/workspaces/         |
                   | wired/planned  |           | objects / artifacts      |
                   +----------------+           +--------------------------+
 ```
@@ -124,6 +124,12 @@ Web UI
 - `Planner`
   把需要调查的自然语言请求转换成合法 plan。
   在 `llm` 模式下使用真实语义规划；`fake` 模式仅作为显式 demo / test 模式存在，不作为线上静默兜底。
+- `ObjectResolver`
+  基于对象谱系和作用域生成：
+  - `focus_object`
+  - `global_object`
+  - `root_object`
+  并把它们提供给 planner / answerer / evaluator 使用。
 - `Evaluator`
   在每个成功 step 后判断“是否已经满足用户请求”。
   `llm` 模式下不再静默降级为规则判断。
@@ -184,3 +190,21 @@ Web UI
 - `planned` 只是 registry 占位，不会被正常规划执行
 - planner preview 只构造上下文，不执行 runtime
 - 状态现在会落到 `data/state/store.db`，底层持久化改成 SQLite
+
+## 当前对象选择模型
+
+系统把对象解析拆成了 3 个逻辑层次：
+
+- `focus_object`
+  当前对话/界面关注的对象，适合“这个对象”“导出当前对象”这类请求。
+- `global_object`
+  同一条数据谱系下覆盖全局范围的对象，适合“所有数据的 UMAP”“当前数据集整体情况”这类请求。
+- `root_object`
+  谱系根对象，保留原始来源语义，适合回溯和全局比较。
+
+planner 里的逻辑目标引用也和这个模型保持一致：
+
+- `$focus`
+- `$global`
+- `$root`
+- `$prev`

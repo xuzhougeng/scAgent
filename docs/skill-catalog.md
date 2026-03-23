@@ -7,11 +7,24 @@ This catalog organizes common single-cell analysis skills by workflow stage.
 - `wired`: already accepted by the current execution chain
 - `planned`: schema is defined, but the runtime handler is not implemented yet
 
+## Logical Object Targets
+
+Most skills accept `target_object_id`.
+
+At the registry/runtime level, omitting `target_object_id` still means “default to the focused object”.
+At the planner level, however, the system can now resolve logical targets before execution:
+
+- `$focus`: the focused object for the current conversation
+- `$global`: the best whole-dataset object in the same lineage
+- `$root`: the lineage root object
+- `$prev`: the output object from the previous step
+
+This means a request like “画当前这个对象的 UMAP” and a request like “画当前数据集整体的 UMAP” no longer have to hit the same object.
+
 ## Session
 
 - `inspect_dataset` (`wired`): summarize the focused object and available annotations
 - `assess_dataset` (`wired`): evaluate whether the uploaded h5ad is raw-like, partially processed, or analysis-ready
-- `set_focus_object` (`planned`): switch the focused object
 
 ## Quality Control
 
