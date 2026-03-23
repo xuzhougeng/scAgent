@@ -35,6 +35,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sessions", h.handleSessions)
 	mux.HandleFunc("/api/sessions/", h.handleSessionRoutes)
 	mux.HandleFunc("/api/messages", h.handleMessages)
+	mux.HandleFunc("/api/jobs/", h.handleJobRoutes)
 	mux.HandleFunc("/healthz", h.handleHealth)
 }
 
@@ -423,6 +424,38 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job, snapshot, err := h.service.SubmitMessage(r.Context(), payload.SessionID, payload.Message)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	status := http.StatusAccepted
+	if job == nil {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, map[string]any{
+		"job":      job,
+		"snapshot": snapshot,
+	})
+}
+
+func (h *Handler) handleJobRoutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
+	if strings.HasSuffix(path, "/retry") {
+		jobID := strings.TrimSuffix(path, "/retry")
+		jobID = strings.TrimSuffix(jobID, "/")
+		h.handleRetryJob(w, r, jobID)
+		return
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown job route"})
+}
+
+func (h *Handler) handleRetryJob(w http.ResponseWriter, r *http.Request, jobID string) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	job, snapshot, err := h.service.RetryJob(r.Context(), jobID)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

@@ -531,6 +531,21 @@ func (s *Service) SubmitMessage(ctx context.Context, sessionID, content string) 
 	return s.SubmitMessageWithArtifacts(ctx, sessionID, content, nil)
 }
 
+func (s *Service) RetryJob(ctx context.Context, jobID string) (*models.Job, *models.SessionSnapshot, error) {
+	job, ok := s.store.GetJob(jobID)
+	if !ok {
+		return nil, nil, fmt.Errorf("未找到任务 %q", jobID)
+	}
+	if job.Status != models.JobFailed && job.Status != models.JobIncomplete {
+		return nil, nil, fmt.Errorf("只能重试失败或未完成的任务")
+	}
+	msg, ok := s.store.GetMessage(job.SessionID, job.MessageID)
+	if !ok {
+		return nil, nil, fmt.Errorf("未找到原始消息 %q", job.MessageID)
+	}
+	return s.SubmitMessage(ctx, job.SessionID, msg.Content)
+}
+
 func (s *Service) SubmitMessageWithArtifacts(ctx context.Context, sessionID, content string, inputArtifacts []*models.Artifact) (*models.Job, *models.SessionSnapshot, error) {
 	sessionRecord, ok := s.store.GetSession(sessionID)
 	if !ok {

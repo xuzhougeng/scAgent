@@ -26,6 +26,7 @@ async function startApp() {
     createWorkspace,
     switchConversation,
     switchWorkspace,
+    retryJob,
   });
 
   bindSidebarResize();
@@ -313,6 +314,19 @@ async function startApp() {
     } catch (error) {
       appState.workspaceStatus = error.message;
       renderSessionMeta();
+    }
+  }
+
+  async function retryJob(jobId) {
+    try {
+      const response = await fetchJSON(`/api/jobs/${jobId}/retry`, {
+        method: "POST",
+      });
+      syncSnapshot(response.snapshot);
+      render();
+    } catch (error) {
+      appState.workspaceStatus = error.message;
+      render();
     }
   }
 

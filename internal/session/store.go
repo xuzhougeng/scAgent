@@ -224,6 +224,17 @@ func (s *Store) AddMessage(message *models.Message) {
 	s.persistLocked()
 }
 
+func (s *Store) GetMessage(sessionID, messageID string) (*models.Message, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, msg := range s.messages[sessionID] {
+		if msg.ID == messageID {
+			return cloneMessage(msg), true
+		}
+	}
+	return nil, false
+}
+
 func (s *Store) Snapshot(sessionID string) (*models.SessionSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

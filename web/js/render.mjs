@@ -38,6 +38,7 @@ const renderActions = {
   async createWorkspace() {},
   async switchConversation() {},
   async switchWorkspace() {},
+  async retryJob() {},
 };
 
 const artifactTablePreviewOptions = {
@@ -597,6 +598,7 @@ async function renderChat() {
     container.appendChild(node);
   }
   bindArtifactPreviewButtons(container);
+  bindRetryButtons(container);
   container.scrollTop = container.scrollHeight;
 }
 
@@ -838,6 +840,11 @@ async function buildJobResultMarkup(job, assistantMessage) {
       ${
         job.error
           ? `<p class="message-job-error">${escapeHTML(job.error)}</p>`
+          : ""
+      }
+      ${
+        job.status === "failed" || job.status === "incomplete"
+          ? `<button type="button" class="retry-job-button" data-job-id="${escapeAttribute(job.id)}">重试</button>`
           : ""
       }
       ${
@@ -1344,6 +1351,19 @@ function bindArtifactPreviewButtons(container) {
   for (const button of container.querySelectorAll(".artifact-preview-button")) {
     button.addEventListener("click", () => {
       openImageModal(button.dataset.artifactUrl, button.dataset.artifactTitle);
+    });
+  }
+}
+
+function bindRetryButtons(container) {
+  for (const button of container.querySelectorAll(".retry-job-button")) {
+    button.addEventListener("click", () => {
+      const jobId = button.dataset.jobId;
+      if (jobId) {
+        button.disabled = true;
+        button.textContent = "重试中…";
+        renderActions.retryJob(jobId);
+      }
     });
   }
 }

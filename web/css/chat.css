@@ -241,6 +241,29 @@
   color: #8b2d21;
 }
 
+.retry-job-button {
+  margin-top: 10px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #8b2d21;
+  background: rgba(171, 68, 52, 0.08);
+  border: 1px solid rgba(171, 68, 52, 0.22);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.retry-job-button:hover {
+  background: rgba(171, 68, 52, 0.15);
+  border-color: rgba(171, 68, 52, 0.35);
+}
+
+.retry-job-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .message-step-list,
 .message-artifact-group,
 .message-checkpoint-group,
