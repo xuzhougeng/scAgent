@@ -37,6 +37,23 @@ func (p failingLLMPlanner) Mode() string {
 	return "llm"
 }
 
+type unhealthyLLMPlanner struct {
+	planCalls int
+}
+
+func (p *unhealthyLLMPlanner) Plan(context.Context, PlanningRequest) (models.Plan, error) {
+	p.planCalls++
+	return models.Plan{}, errors.New("unexpected planner call")
+}
+
+func (p *unhealthyLLMPlanner) Mode() string {
+	return "llm"
+}
+
+func (p *unhealthyLLMPlanner) Health(context.Context) error {
+	return errors.New("planner request failed: context deadline exceeded")
+}
+
 type scriptedPlanner struct {
 	mode     string
 	plans    []models.Plan
@@ -1335,6 +1352,53 @@ func TestRunJobFailsCleanlyWhenPlannerIsUnavailable(t *testing.T) {
 	lastMessage := snapshot.Messages[len(snapshot.Messages)-1]
 	if lastMessage.Role != models.MessageAssistant || lastMessage.Content != "规划器暂时不可用，本次执行未开始。请稍后重试。" {
 		t.Fatalf("unexpected assistant failure message: %+v", lastMessage)
+	}
+}
+
+func TestRunJobFailsFastWhenPlannerHealthCheckFails(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	now := time.Now().UTC()
+	sessionRecord := store.CreateSession("test")
+	sessionRecord.ActiveObjectID = "obj_active"
+	store.SaveSession(sessionRecord)
+	store.SaveObject(&models.ObjectMeta{
+		ID:             "obj_active",
+		SessionID:      sessionRecord.ID,
+		Label:          "pbmc3k",
+		Kind:           models.ObjectRawDataset,
+		BackendRef:     "backend_seed",
+		State:          models.ObjectResident,
+		InMemory:       true,
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	})
+	store.SaveJob(newQueuedInvestigationJob("job_healthcheck_failure", sessionRecord.ID, now))
+
+	planner := &unhealthyLLMPlanner{}
+	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, NewFakeEvaluator(), t.TempDir())
+
+	service.runJob(context.Background(), sessionRecord.ID, "job_healthcheck_failure", "画图", nil)
+
+	if planner.planCalls != 0 {
+		t.Fatalf("expected planner preflight to fail before Plan was called, got %d plan calls", planner.planCalls)
+	}
+	job, ok := store.GetJob("job_healthcheck_failure")
+	if !ok {
+		t.Fatalf("expected job to exist after run")
+	}
+	if job.Status != models.JobFailed {
+		t.Fatalf("expected job to fail, got %s (%s)", job.Status, job.Error)
+	}
+	if len(job.Checkpoints) == 0 {
+		t.Fatalf("expected failure checkpoint to be recorded")
+	}
+	if rawError := job.Checkpoints[0].Metadata["raw_error"]; !strings.Contains(rawError.(string), "planner health check failed") {
+		t.Fatalf("expected raw error to preserve planner health failure, got %+v", job.Checkpoints[0].Metadata)
 	}
 }
 

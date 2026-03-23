@@ -59,6 +59,7 @@ type SystemStatus struct {
 	Summary               string                `json:"summary"`
 	PlannerMode           string                `json:"planner_mode"`
 	PlannerReady          bool                  `json:"planner_ready"`
+	PlannerReachable      bool                  `json:"planner_reachable"`
 	LLMLoaded             bool                  `json:"llm_loaded"`
 	RuntimeConnected      bool                  `json:"runtime_connected"`
 	RuntimeMode           string                `json:"runtime_mode,omitempty"`
@@ -157,6 +158,25 @@ func (s *Service) PlannerMode() string {
 	return s.planner.Mode()
 }
 
+func (s *Service) checkPlannerHealth(ctx context.Context) error {
+	if s == nil || s.planner == nil {
+		return fmt.Errorf("planner is not configured")
+	}
+
+	checker, ok := s.planner.(PlannerHealthChecker)
+	if !ok {
+		return nil
+	}
+
+	healthCtx := ctx
+	if healthCtx == nil {
+		healthCtx = context.Background()
+	}
+	probeCtx, cancel := context.WithTimeout(healthCtx, 1500*time.Millisecond)
+	defer cancel()
+	return checker.Health(probeCtx)
+}
+
 func (s *Service) Status(ctx context.Context) *SystemStatus {
 	if err := s.refreshSkills(); err != nil {
 		return &SystemStatus{
@@ -164,6 +184,7 @@ func (s *Service) Status(ctx context.Context) *SystemStatus {
 			Summary:          "当前处于演示模式：技能注册表加载失败。",
 			PlannerMode:      s.PlannerMode(),
 			PlannerReady:     s.planner != nil,
+			PlannerReachable: s.planner != nil,
 			LLMLoaded:        s.PlannerMode() == "llm",
 			RuntimeConnected: false,
 			Notes:            []string{err.Error()},
@@ -171,9 +192,16 @@ func (s *Service) Status(ctx context.Context) *SystemStatus {
 	}
 
 	status := &SystemStatus{
-		PlannerMode:  s.PlannerMode(),
-		PlannerReady: s.planner != nil,
-		LLMLoaded:    s.PlannerMode() == "llm",
+		PlannerMode:      s.PlannerMode(),
+		PlannerReady:     s.planner != nil,
+		PlannerReachable: s.planner != nil,
+		LLMLoaded:        s.PlannerMode() == "llm",
+	}
+	if status.PlannerReady {
+		if err := s.checkPlannerHealth(ctx); err != nil {
+			status.PlannerReachable = false
+			status.Notes = append(status.Notes, "规划器连通性检查失败："+err.Error())
+		}
 	}
 
 	runtimeStatus, err := s.runtime.Status(ctx)
@@ -193,7 +221,7 @@ func (s *Service) Status(ctx context.Context) *SystemStatus {
 	status.ExecutableSkills = runtimeStatus.ExecutableSkills
 	status.Notes = append(status.Notes, runtimeStatus.Notes...)
 
-	if status.LLMLoaded && status.RealAnalysisExecution {
+	if status.LLMLoaded && status.PlannerReachable && status.RealAnalysisExecution {
 		status.SystemMode = "live"
 		status.Summary = "当前处于正式模式：LLM 规划器已启用，分析执行为真实运行。"
 		return status
@@ -201,6 +229,8 @@ func (s *Service) Status(ctx context.Context) *SystemStatus {
 
 	status.SystemMode = "demo"
 	switch {
+	case status.LLMLoaded && !status.PlannerReachable:
+		status.Summary = "当前处于演示模式：LLM 规划器已加载，但连通性检查失败。"
 	case !status.LLMLoaded && status.RealH5ADInspection && !status.RealAnalysisExecution:
 		status.Summary = "当前处于演示模式：规则规划器生效，h5ad 检查为真实执行，但分析步骤仍为占位实现。"
 	case status.LLMLoaded && !status.RealAnalysisExecution:
@@ -1220,6 +1250,9 @@ func (s *Service) replanRemainingSteps(ctx context.Context, sessionRecord *model
 func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningRequest) (models.Plan, error) {
 	if err := s.refreshSkills(); err != nil {
 		return models.Plan{}, err
+	}
+	if err := s.checkPlannerHealth(ctx); err != nil {
+		return models.Plan{}, fmt.Errorf("planner health check failed: %w", err)
 	}
 	plan, err := s.planner.Plan(ctx, request)
 	if err != nil {

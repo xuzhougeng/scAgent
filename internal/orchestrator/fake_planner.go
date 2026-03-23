@@ -18,6 +18,10 @@ type PlannerDebugger interface {
 	DebugPreview(ctx context.Context, request PlanningRequest) (*PlannerDebugPreview, error)
 }
 
+type PlannerHealthChecker interface {
+	Health(ctx context.Context) error
+}
+
 type FakePlanner struct{}
 
 var plotAssignmentPattern = regexp.MustCompile(`(?i)\b(color_by|legend_loc|palette|title|point_size|figure_width|figure_height)\s*=\s*(?:'([^']*)'|"([^"]*)"|([^\s,;]+))`)

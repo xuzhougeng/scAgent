@@ -40,6 +40,20 @@ func (p singleStepPlanner) Mode() string {
 	return "llm"
 }
 
+type unhealthyPlanner struct{}
+
+func (p unhealthyPlanner) Plan(context.Context, orchestrator.PlanningRequest) (models.Plan, error) {
+	return models.Plan{Steps: []models.PlanStep{{Skill: "inspect_dataset", TargetObjectID: "$active", Params: map[string]any{}, MemoryRefs: []string{}}}}, nil
+}
+
+func (p unhealthyPlanner) Mode() string {
+	return "llm"
+}
+
+func (p unhealthyPlanner) Health(context.Context) error {
+	return context.DeadlineExceeded
+}
+
 func (a *stubAnswerer) BuildDirectAnswer(_ context.Context, _ orchestrator.PlanningRequest) (string, bool, error) {
 	if a.directErr != nil {
 		return "", false, a.directErr
@@ -651,6 +665,7 @@ func TestStatusAPI(t *testing.T) {
 	var response struct {
 		SystemMode            string   `json:"system_mode"`
 		PlannerMode           string   `json:"planner_mode"`
+		PlannerReachable      bool     `json:"planner_reachable"`
 		LLMLoaded             bool     `json:"llm_loaded"`
 		RuntimeConnected      bool     `json:"runtime_connected"`
 		RealH5ADInspection    bool     `json:"real_h5ad_inspection"`
@@ -674,6 +689,9 @@ func TestStatusAPI(t *testing.T) {
 	if response.PlannerMode != "fake" {
 		t.Fatalf("expected fake planner mode, got %q", response.PlannerMode)
 	}
+	if !response.PlannerReachable {
+		t.Fatalf("expected non-LLM planner to be treated as reachable")
+	}
 	if response.LLMLoaded {
 		t.Fatalf("expected llm_loaded=false")
 	}
@@ -691,6 +709,44 @@ func TestStatusAPI(t *testing.T) {
 	}
 	if len(response.Runtime.EnvironmentChecks) == 0 {
 		t.Fatalf("expected runtime environment checks in status payload")
+	}
+}
+
+func TestStatusAPIReportsPlannerReachabilityFailure(t *testing.T) {
+	service := newTestService(t, unhealthyPlanner{}, &fakeRuntime{})
+	handler := NewHandler(service, docsPath())
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var response struct {
+		PlannerMode      string   `json:"planner_mode"`
+		PlannerReady     bool     `json:"planner_ready"`
+		PlannerReachable bool     `json:"planner_reachable"`
+		Notes            []string `json:"notes"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
+
+	if response.PlannerMode != "llm" {
+		t.Fatalf("expected llm planner mode, got %q", response.PlannerMode)
+	}
+	if !response.PlannerReady {
+		t.Fatalf("expected planner to be configured")
+	}
+	if response.PlannerReachable {
+		t.Fatalf("expected planner_reachable=false when health check fails")
+	}
+	if len(response.Notes) == 0 || !strings.Contains(response.Notes[0], "规划器连通性检查失败") {
+		t.Fatalf("expected planner health failure note, got %+v", response.Notes)
 	}
 }
 

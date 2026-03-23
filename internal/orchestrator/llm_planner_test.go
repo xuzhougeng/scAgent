@@ -347,6 +347,63 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 	}
 }
 
+func TestLLMPlannerHealthChecksResponsesEndpoint(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	var requestCount int
+	httpClient := &http.Client{
+		Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			requestCount++
+			if request.Method != http.MethodPost {
+				t.Fatalf("expected POST, got %s", request.Method)
+			}
+			if request.URL.String() != "https://example.test/v1/responses" {
+				t.Fatalf("unexpected health check url: %s", request.URL.String())
+			}
+			if request.Header.Get("Authorization") != "Bearer test-key" {
+				t.Fatalf("missing authorization header")
+			}
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				return nil, err
+			}
+			if string(body) != "{}" {
+				t.Fatalf("unexpected health check body: %s", string(body))
+			}
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Status:     "400 Bad Request",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(bytes.NewBufferString(`{"error":{"message":"missing model"}}`)),
+			}, nil
+		}),
+	}
+
+	planner, err := NewLLMPlanner(LLMPlannerConfig{
+		APIKey:          "test-key",
+		BaseURL:         "https://example.test/v1",
+		Model:           "gpt-5.4",
+		ReasoningEffort: "low",
+		Skills:          registry,
+	}, httpClient)
+	if err != nil {
+		t.Fatalf("create LLM planner: %v", err)
+	}
+
+	if err := planner.Health(context.Background()); err != nil {
+		t.Fatalf("health check should accept 400 validation response: %v", err)
+	}
+	if err := planner.Health(context.Background()); err != nil {
+		t.Fatalf("cached health check should still succeed: %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected cached health result, got %d requests", requestCount)
+	}
+}
+
 func skillsRegistryPath() string {
 	_, currentFile, _, _ := runtime.Caller(0)
 	return filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "skills", "registry.json"))

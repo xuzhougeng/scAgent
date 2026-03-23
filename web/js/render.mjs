@@ -249,6 +249,12 @@ function buildSystemStatusMarkup() {
     statusPill(status.system_mode === "live" ? "ok" : "warn", `模式：${formatSystemMode(status.system_mode)}`),
     statusPill(status.planner_mode === "llm" ? "ok" : "warn", `规划器：${formatPlannerMode(status.planner_mode)}`),
     statusPill(status.llm_loaded ? "ok" : "muted", `模型：${status.llm_loaded ? "已加载" : "未加载"}`),
+    status.planner_mode === "llm"
+      ? statusPill(
+          status.planner_reachable ? "ok" : "bad",
+          `规划连通：${status.planner_reachable ? "正常" : "异常"}`,
+        )
+      : statusPill("muted", "规划连通：规则模式"),
     statusPill(status.runtime_connected ? "ok" : "bad", `运行时：${status.runtime_connected ? "已连接" : "离线"}`),
     statusPill(status.real_h5ad_inspection ? "ok" : "muted", `h5ad 检查：${status.real_h5ad_inspection ? "真实" : "占位"}`),
     statusPill(status.real_analysis_execution ? "ok" : "warn", `分析执行：${status.real_analysis_execution ? "真实" : "占位"}`),
@@ -376,6 +382,11 @@ function renderStatusOverviewEntry() {
       </div>
       <div class="status-overview-meta">
         ${statusPill(status.system_mode === "live" ? "ok" : "warn", formatSystemMode(status.system_mode))}
+        ${
+          status.planner_mode === "llm"
+            ? statusPill(status.planner_reachable ? "ok" : "bad", status.planner_reachable ? "规划器在线" : "规划器异常")
+            : statusPill("muted", "规则规划")
+        }
         ${statusPill(status.runtime_connected ? "ok" : "bad", status.runtime_connected ? "运行时在线" : "运行时离线")}
         ${statusPill(
           failingChecks.length ? "bad" : "ok",

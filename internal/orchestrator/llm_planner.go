@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"scagent/internal/models"
@@ -67,6 +68,9 @@ type LLMPlanner struct {
 	reasoningEffort string
 	skills          *skill.Registry
 	httpClient      *http.Client
+	healthMu        sync.Mutex
+	healthCheckedAt time.Time
+	healthErr       error
 }
 
 func NewLLMPlanner(config LLMPlannerConfig, httpClient *http.Client) (*LLMPlanner, error) {
@@ -107,6 +111,27 @@ func NewLLMPlanner(config LLMPlannerConfig, httpClient *http.Client) (*LLMPlanne
 
 func (p *LLMPlanner) Mode() string {
 	return "llm"
+}
+
+func (p *LLMPlanner) Health(ctx context.Context) error {
+	const healthCacheTTL = 15 * time.Second
+
+	p.healthMu.Lock()
+	if !p.healthCheckedAt.IsZero() && time.Since(p.healthCheckedAt) < healthCacheTTL {
+		err := p.healthErr
+		p.healthMu.Unlock()
+		return err
+	}
+	p.healthMu.Unlock()
+
+	err := p.probeHealth(ctx)
+
+	p.healthMu.Lock()
+	p.healthCheckedAt = time.Now()
+	p.healthErr = err
+	p.healthMu.Unlock()
+
+	return err
 }
 
 func (p *LLMPlanner) Plan(ctx context.Context, requestPayload PlanningRequest) (models.Plan, error) {
@@ -162,6 +187,33 @@ func (p *LLMPlanner) DebugPreview(_ context.Context, requestPayload PlanningRequ
 		RequestBody:           p.buildRequest(requestPayload),
 		Note:                  "Authorization headers are omitted from this preview.",
 	}, nil
+}
+
+func (p *LLMPlanner) probeHealth(ctx context.Context) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/responses", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		return fmt.Errorf("create planner health check request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+p.apiKey)
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := p.httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("planner request failed: %w", err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return fmt.Errorf("read planner health check response: %w", err)
+	}
+
+	switch response.StatusCode {
+	case http.StatusOK, http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return nil
+	default:
+		return fmt.Errorf("planner health check returned %s: %s", response.Status, compactJSON(string(body)))
+	}
 }
 
 func (p *LLMPlanner) buildRequest(requestPayload PlanningRequest) map[string]any {
