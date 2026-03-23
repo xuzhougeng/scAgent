@@ -404,6 +404,62 @@ func TestLLMPlannerHealthChecksResponsesEndpoint(t *testing.T) {
 	}
 }
 
+func TestLLMPlannerRetriesTimeoutOnce(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	var requestCount int
+	httpClient := &http.Client{
+		Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			requestCount++
+			if requestCount == 1 {
+				return nil, context.DeadlineExceeded
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(bytes.NewBufferString(`{
+					"output": [
+						{
+							"type": "message",
+							"content": [
+								{
+									"type": "output_text",
+									"text": "{\"steps\":[{\"id\":\"step_1\",\"skill\":\"normalize_total\",\"target_object_id\":\"$active\",\"params\":{},\"memory_refs\":null}]}"
+								}
+							]
+						}
+					]
+				}`)),
+			}, nil
+		}),
+	}
+
+	planner, err := NewLLMPlanner(LLMPlannerConfig{
+		APIKey:          "test-key",
+		BaseURL:         "https://example.test/v1",
+		Model:           "gpt-5.4",
+		ReasoningEffort: "low",
+		Skills:          registry,
+	}, httpClient)
+	if err != nil {
+		t.Fatalf("create LLM planner: %v", err)
+	}
+
+	plan, err := planner.Plan(context.Background(), PlanningRequest{Message: "预处理"})
+	if err != nil {
+		t.Fatalf("expected timeout retry to recover, got %v", err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected one retry after timeout, got %d requests", requestCount)
+	}
+	if len(plan.Steps) != 1 || plan.Steps[0].Skill != "normalize_total" {
+		t.Fatalf("unexpected plan after retry: %+v", plan)
+	}
+}
+
 func skillsRegistryPath() string {
 	_, currentFile, _, _ := runtime.Caller(0)
 	return filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "skills", "registry.json"))

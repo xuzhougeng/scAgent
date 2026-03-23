@@ -43,7 +43,11 @@ type unhealthyLLMPlanner struct {
 
 func (p *unhealthyLLMPlanner) Plan(context.Context, PlanningRequest) (models.Plan, error) {
 	p.planCalls++
-	return models.Plan{}, errors.New("unexpected planner call")
+	return models.Plan{
+		Steps: []models.PlanStep{
+			{ID: "step_1", Skill: "normalize_total", TargetObjectID: "$active"},
+		},
+	}, nil
 }
 
 func (p *unhealthyLLMPlanner) Mode() string {
@@ -1355,50 +1359,26 @@ func TestRunJobFailsCleanlyWhenPlannerIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestRunJobFailsFastWhenPlannerHealthCheckFails(t *testing.T) {
+func TestBuildExecutablePlanDoesNotBlockOnPlannerHealthFailure(t *testing.T) {
 	registry, err := skill.LoadRegistry(skillsRegistryPath())
 	if err != nil {
 		t.Fatalf("load skills registry: %v", err)
 	}
 
-	store := session.NewStore()
-	now := time.Now().UTC()
-	sessionRecord := store.CreateSession("test")
-	sessionRecord.ActiveObjectID = "obj_active"
-	store.SaveSession(sessionRecord)
-	store.SaveObject(&models.ObjectMeta{
-		ID:             "obj_active",
-		SessionID:      sessionRecord.ID,
-		Label:          "pbmc3k",
-		Kind:           models.ObjectRawDataset,
-		BackendRef:     "backend_seed",
-		State:          models.ObjectResident,
-		InMemory:       true,
-		CreatedAt:      now,
-		LastAccessedAt: now,
-	})
-	store.SaveJob(newQueuedInvestigationJob("job_healthcheck_failure", sessionRecord.ID, now))
-
 	planner := &unhealthyLLMPlanner{}
-	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, NewFakeEvaluator(), t.TempDir())
+	service := NewService(session.NewStore(), registry, nil, planner, t.TempDir())
 
-	service.runJob(context.Background(), sessionRecord.ID, "job_healthcheck_failure", "画图", nil)
-
-	if planner.planCalls != 0 {
-		t.Fatalf("expected planner preflight to fail before Plan was called, got %d plan calls", planner.planCalls)
+	plan, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
+		Message: "完成常规的数据预处理",
+	})
+	if err != nil {
+		t.Fatalf("expected execution path to ignore planner health failure, got %v", err)
 	}
-	job, ok := store.GetJob("job_healthcheck_failure")
-	if !ok {
-		t.Fatalf("expected job to exist after run")
+	if planner.planCalls != 1 {
+		t.Fatalf("expected planner Plan to be called once, got %d", planner.planCalls)
 	}
-	if job.Status != models.JobFailed {
-		t.Fatalf("expected job to fail, got %s (%s)", job.Status, job.Error)
-	}
-	if len(job.Checkpoints) == 0 {
-		t.Fatalf("expected failure checkpoint to be recorded")
-	}
-	if rawError := job.Checkpoints[0].Metadata["raw_error"]; !strings.Contains(rawError.(string), "planner health check failed") {
-		t.Fatalf("expected raw error to preserve planner health failure, got %+v", job.Checkpoints[0].Metadata)
+	if len(plan.Steps) != 1 || plan.Steps[0].Skill != "normalize_total" {
+		t.Fatalf("unexpected plan: %+v", plan)
 	}
 }
 

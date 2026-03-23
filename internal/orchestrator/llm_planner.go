@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -140,26 +142,9 @@ func (p *LLMPlanner) Plan(ctx context.Context, requestPayload PlanningRequest) (
 		return models.Plan{}, fmt.Errorf("marshal planner request: %w", err)
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/responses", bytes.NewReader(payload))
+	body, err := p.executeResponsesRequest(ctx, payload)
 	if err != nil {
-		return models.Plan{}, fmt.Errorf("create planner request: %w", err)
-	}
-	request.Header.Set("Authorization", "Bearer "+p.apiKey)
-	request.Header.Set("Content-Type", "application/json")
-
-	response, err := p.httpClient.Do(request)
-	if err != nil {
-		return models.Plan{}, fmt.Errorf("planner request failed: %w", err)
-	}
-	defer response.Body.Close()
-
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return models.Plan{}, fmt.Errorf("read planner response: %w", err)
-	}
-
-	if response.StatusCode >= http.StatusBadRequest {
-		return models.Plan{}, fmt.Errorf("planner returned %s: %s", response.Status, compactJSON(string(body)))
+		return models.Plan{}, err
 	}
 
 	var decoded openAIResponsesResponse
@@ -177,6 +162,58 @@ func (p *LLMPlanner) Plan(ctx context.Context, requestPayload PlanningRequest) (
 		return models.Plan{}, fmt.Errorf("decode planner plan JSON: %w", err)
 	}
 	return plan, nil
+}
+
+func (p *LLMPlanner) executeResponsesRequest(ctx context.Context, payload []byte) ([]byte, error) {
+	const maxAttempts = 2
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/responses", bytes.NewReader(payload))
+		if err != nil {
+			return nil, fmt.Errorf("create planner request: %w", err)
+		}
+		request.Header.Set("Authorization", "Bearer "+p.apiKey)
+		request.Header.Set("Content-Type", "application/json")
+
+		response, err := p.httpClient.Do(request)
+		if err != nil {
+			lastErr = err
+			if attempt < maxAttempts && shouldRetryPlannerRequest(ctx, err) {
+				continue
+			}
+			return nil, fmt.Errorf("planner request failed: %w", err)
+		}
+
+		body, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read planner response: %w", readErr)
+		}
+		if response.StatusCode >= http.StatusBadRequest {
+			return nil, fmt.Errorf("planner returned %s: %s", response.Status, compactJSON(string(body)))
+		}
+		return body, nil
+	}
+
+	return nil, fmt.Errorf("planner request failed: %w", lastErr)
+}
+
+func shouldRetryPlannerRequest(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (p *LLMPlanner) DebugPreview(_ context.Context, requestPayload PlanningRequest) (*PlannerDebugPreview, error) {

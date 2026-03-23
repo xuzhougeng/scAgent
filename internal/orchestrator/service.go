@@ -1251,9 +1251,6 @@ func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningReque
 	if err := s.refreshSkills(); err != nil {
 		return models.Plan{}, err
 	}
-	if err := s.checkPlannerHealth(ctx); err != nil {
-		return models.Plan{}, fmt.Errorf("planner health check failed: %w", err)
-	}
 	plan, err := s.planner.Plan(ctx, request)
 	if err != nil {
 		return models.Plan{}, err
