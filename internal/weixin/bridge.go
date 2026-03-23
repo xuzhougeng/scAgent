@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +28,8 @@ const welcomeMessage = "你好！我是 scAgent，你的单细胞分析助手。
 	"/l — 列出工作区\n" +
 	"/h — 完整帮助\n\n" +
 	"首次使用建议：发一个 h5ad 文件，我会自动评估数据质量并给出分析建议。"
+
+var trailingImageSummaryPattern = regexp.MustCompile(`(?:\n\n)?已附上\s*\d+\s*张图[。.]?\s*$`)
 
 // BridgeConfig holds all settings for the WeChat bridge.
 type BridgeConfig struct {
@@ -791,6 +794,7 @@ func (b *Bridge) buildJobReply(snapshot *models.SessionSnapshot, jobID string) r
 func finalizeReplyPayload(reply replyPayload) replyPayload {
 	reply.Text = strings.TrimSpace(reply.Text)
 	if len(reply.Images) > 0 {
+		reply.Text = strings.TrimSpace(stripTrailingImageSummary(reply.Text))
 		if reply.Text == "" {
 			reply.Text = "已生成图表。"
 		}
@@ -800,6 +804,10 @@ func finalizeReplyPayload(reply replyPayload) replyPayload {
 		reply.Text = "已收到请求。"
 	}
 	return reply
+}
+
+func stripTrailingImageSummary(text string) string {
+	return trailingImageSummaryPattern.ReplaceAllString(text, "")
 }
 
 func jobImageArtifacts(snapshot *models.SessionSnapshot, jobID string) []*models.Artifact {

@@ -67,6 +67,20 @@ func TestBuildJobReplyFallsBackToJobSummary(t *testing.T) {
 	}
 }
 
+func TestFinalizeReplyPayloadRewritesExistingImageSummary(t *testing.T) {
+	reply := finalizeReplyPayload(replyPayload{
+		Text: "如果你愿意，我还可以继续帮你:\n1.画一个更标准的Scanpy stacked violin版本\n2.按你指定的marker列表重画\n3.导出成PNG/PDF\n已附上1张图。",
+		Images: []*models.Artifact{
+			{ID: "art_plot_1"},
+		},
+	})
+
+	expectedText := "如果你愿意，我还可以继续帮你:\n1.画一个更标准的Scanpy stacked violin版本\n2.按你指定的marker列表重画\n3.导出成PNG/PDF\n\n已附上 1 张图。"
+	if reply.Text != expectedText {
+		t.Fatalf("expected normalized reply text %q, got %q", expectedText, reply.Text)
+	}
+}
+
 func TestIsImageArtifactFallsBackToExtension(t *testing.T) {
 	artifact := &models.Artifact{
 		Kind: models.ArtifactPlot,
