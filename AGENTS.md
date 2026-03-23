@@ -9,7 +9,11 @@
   - `api/`: HTTP handlers and API tests.
   - `app/`: server wiring.
   - `models/`, `session/`, `orchestrator/`, `runtime/`, `skill/`: core domain, state, planner, runtime client, and skill registry.
-- `runtime/`: Python runtime service (`server.py`) and environment diagnostics (`doctor.py`).
+- `runtime/`: Python runtime service and diagnostics.
+  - `server.py`: thin runtime entrypoint that wires state, HTTP handler, and startup.
+  - `runtime_core/`: shared runtime infrastructure such as object store, HTTP layer, h5ad inspection, and analysis helpers.
+  - `skill_runtime/`: builtin skill registry, plugin loading, and skill execution/support modules.
+  - `doctor.py`: environment diagnostics entrypoint.
 - `skills/registry.json`: shared skill catalog.
 - `web/`: static frontend (`index.html`, `app.js`, `styles.css`, help pages).
 - `docs/`: Markdown docs rendered by the in-app help site.
@@ -22,13 +26,14 @@
 - `pixi run runtime`: runs the Python runtime inside Pixi.
 - `go run ./cmd/scagent`: runs only the Go control plane.
 - `GOCACHE=/tmp/go-build go test ./...`: runs all Go tests.
-- `python3 -m py_compile runtime/server.py runtime/doctor.py`: checks Python syntax.
+- `python3 -m py_compile runtime/server.py runtime/doctor.py runtime/runtime_core/*.py runtime/skill_runtime/*.py`: checks Python syntax.
 - `node --check web/app.js && node --check web/help.js`: checks frontend script syntax.
 
 ## Coding Style & Naming Conventions
 
 - Go: rely on `gofmt`; exported names use `CamelCase`, package-local helpers use `camelCase`.
 - Python: 4-space indentation, `snake_case` functions, keep runtime responses JSON-friendly.
+- Keep `runtime/server.py` thin; add runtime infrastructure under `runtime/runtime_core/` and skill implementations under `runtime/skill_runtime/` instead of growing the entrypoint.
 - JavaScript/CSS/HTML: follow existing simple static-file style; use 2-space indentation in `web/`.
 - Keep new skill names lower_snake_case, e.g. `plot_gene_umap`, `subcluster_group`.
 
