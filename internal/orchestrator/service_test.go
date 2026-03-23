@@ -447,6 +447,73 @@ func TestRetryJobCanOverrideOriginalMessage(t *testing.T) {
 	}
 }
 
+func TestRetryJobCanEditSucceededJob(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	answerer := &scriptedAnswerer{
+		directAnswer: "已按编辑后的成功任务重新处理。",
+		directOK:     true,
+	}
+	service := NewServiceWithComponents(store, registry, &sequentialRuntime{}, NewFakePlanner(), NewFakeEvaluator(), answerer, t.TempDir())
+
+	sessionRecord := store.CreateSession("retry-succeeded")
+	now := time.Now().UTC()
+	finishedAt := now
+
+	originalMessage := &models.Message{
+		ID:        "msg_succeeded",
+		SessionID: sessionRecord.ID,
+		Role:      models.MessageUser,
+		Content:   "成功任务的原请求",
+		CreatedAt: now,
+	}
+	store.AddMessage(originalMessage)
+	store.SaveJob(&models.Job{
+		ID:          "job_succeeded",
+		WorkspaceID: sessionRecord.WorkspaceID,
+		SessionID:   sessionRecord.ID,
+		MessageID:   originalMessage.ID,
+		Status:      models.JobSucceeded,
+		CreatedAt:   now,
+		FinishedAt:  &finishedAt,
+	})
+	store.AddMessage(&models.Message{
+		ID:        "msg_succeeded_assistant",
+		SessionID: sessionRecord.ID,
+		JobID:     "job_succeeded",
+		Role:      models.MessageAssistant,
+		Content:   "第一次成功执行的回答。",
+		CreatedAt: now,
+	})
+
+	job, snapshot, err := service.RetryJob(context.Background(), "job_succeeded", "修改后的请求")
+	if err != nil {
+		t.Fatalf("retry succeeded job: %v", err)
+	}
+	if job != nil {
+		t.Fatalf("expected direct answer path without background job, got %+v", job)
+	}
+	if _, ok := store.GetJob("job_succeeded"); ok {
+		t.Fatalf("expected original succeeded job to be removed")
+	}
+	if len(answerer.requests) != 1 || answerer.requests[0].Message != "修改后的请求" {
+		t.Fatalf("expected retry to use edited message, got %+v", answerer.requests)
+	}
+	if snapshot == nil || len(snapshot.Messages) != 2 {
+		t.Fatalf("expected replacement user/assistant messages, got %+v", snapshot)
+	}
+	if snapshot.Messages[0].Role != models.MessageUser || snapshot.Messages[0].Content != "修改后的请求" {
+		t.Fatalf("expected new user message, got %+v", snapshot.Messages[0])
+	}
+	if snapshot.Messages[1].Role != models.MessageAssistant || snapshot.Messages[1].Content != "已按编辑后的成功任务重新处理。" {
+		t.Fatalf("expected replacement assistant message, got %+v", snapshot.Messages[1])
+	}
+}
+
 func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
 	store := session.NewStore()
 	service := NewService(store, nil, nil, NewFakePlanner(), t.TempDir())

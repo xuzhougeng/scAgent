@@ -648,8 +648,8 @@ func (s *Service) RetryJob(ctx context.Context, jobID, overrideContent string) (
 	if !ok {
 		return nil, nil, fmt.Errorf("未找到任务 %q", jobID)
 	}
-	if job.Status != models.JobFailed && job.Status != models.JobIncomplete && job.Status != models.JobCanceled {
-		return nil, nil, fmt.Errorf("只能重试失败、未完成或已取消的任务")
+	if job.Status == models.JobRunning || job.Status == models.JobQueued {
+		return nil, nil, fmt.Errorf("任务仍在执行中，无法重发")
 	}
 	msg, ok := s.store.GetMessage(job.SessionID, job.MessageID)
 	if !ok {
