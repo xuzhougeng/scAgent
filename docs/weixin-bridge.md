@@ -245,11 +245,60 @@ scAgent 的 Go 实现参考了 [weixin-agent-sdk](https://github.com/wong2/weixi
 
 ---
 
+## 主动消息推送
+
+微信桥接支持在特定时机主动向用户推送消息，无需用户先发消息触发。
+
+### 首次会话欢迎消息
+
+当微信用户首次与 Bot 交互时，在处理用户消息之前自动推送欢迎/帮助文档，让用户立刻了解 Bot 的能力和使用方式。
+
+**触发条件**：`resolveSession` 检测到该用户没有已缓存的 session，需要新建。
+
+**实现要点**：
+
+1. `resolveSession` 返回 `isNew` 标记，区分首次用户 vs 回归用户
+2. `handleMessage` 检测到 `isNew=true` 时，用 goroutine 先推送欢迎消息
+3. 短暂延迟（200ms）确保欢迎消息在任务结果之前到达
+
+**消息时序**：
+
+```
+用户第一条消息 "分析我的数据"
+  │
+  ├─① resolveSession → 新建 session, isNew=true
+  ├─② goroutine: SendTextMessage(welcomeMessage)   ← 欢迎消息先发
+  ├─③ sleep 200ms（确保顺序）
+  ├─④ 正常处理用户消息 → 提交任务 → 返回结果
+  │
+  用户收到:
+    [欢迎消息]          ← 先到
+    [任务结果/等待提示]  ← 后到
+```
+
+**改动范围**：全部在 `internal/weixin/bridge.go`，约 35 行：
+
+| 改动 | 说明 |
+|------|------|
+| `resolveSession` 签名 | 返回值加 `isNew bool` |
+| `welcomeMessage` 常量 | 定义欢迎文本（命令列表 + 首次使用提示） |
+| `handleMessage` 推送逻辑 | 检测 `isNew`，goroutine 发送，200ms 延迟 |
+| 重试路径适配 | 第二处 `resolveSession` 调用忽略 `isNew`（`_, _,` 丢弃） |
+
+### 扩展方向
+
+- **可配置消息**：将欢迎文本改为从 `BridgeConfig.WelcomeMessage` 读取，为空则不发送
+- **定向推送 API**：新增 `POST /api/push` 端点，支持向指定微信用户推送通知（需额外维护 `weixinUserID → contextToken` 映射）
+- **广播推送**：遍历 `sessions.json` 中所有已知用户批量发送公告
+
+---
+
 ## TODO
 
 - [x] **图片发送**：分析生成的 plot 图片会发回微信（AES-128-ECB 加密 → `getuploadurl` → `POST` CDN → `sendmessage`），实现参考 `cdn/aes-ecb.ts`
 - [x] **h5ad 文件接收**：解析用户发来的 `.h5ad` 文件（CDN 下载 + AES 解密），并导入当前会话作为输入数据
 - [x] **CSV/TSV 文件接收**：解析用户发来的 `.csv` / `.tsv` 文件（CDN 下载 + AES 解密），保存为会话 artifact，并向模型提供行列规模和预览摘要
+- [ ] **主动消息推送**：首次会话自动推送欢迎/帮助消息（见上方"主动消息推送"章节）
 - [ ] **图片接收**：暂缓。若后续恢复，将作为低优先级能力处理，不作为当前默认接口
 - [ ] **RDS/QS 文件支持**：后续考虑支持 `.rds` / `.qs` 的识别、转换和导入流程
 

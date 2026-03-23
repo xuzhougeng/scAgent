@@ -20,6 +20,14 @@ import (
 	"scagent/internal/orchestrator"
 )
 
+const welcomeMessage = "你好！我是 scAgent，你的单细胞分析助手。\n\n" +
+	"发送 .h5ad 文件开始分析，或直接输入问题。\n\n" +
+	"常用命令:\n" +
+	"/status — 查看当前会话\n" +
+	"/l — 列出工作区\n" +
+	"/h — 完整帮助\n\n" +
+	"首次使用建议：发一个 h5ad 文件，我会自动评估数据质量并给出分析建议。"
+
 // BridgeConfig holds all settings for the WeChat bridge.
 type BridgeConfig struct {
 	DataDir      string
@@ -29,9 +37,10 @@ type BridgeConfig struct {
 
 // pendingJob tracks a long-running job so the user can check back later.
 type pendingJob struct {
-	SessionID string
-	JobID     string
-	StartedAt time.Time
+	SessionID    string
+	JobID        string
+	StartedAt    time.Time
+	ContextToken string // for auto-push when job completes
 }
 
 type replyPayload struct {
@@ -277,11 +286,21 @@ func (b *Bridge) handleMessage(ctx context.Context, msg WeixinMessage) {
 	}
 
 	// Resolve or create scAgent session
-	sessionID, err := b.resolveSession(ctx, fromUserID)
+	sessionID, isNewSession, err := b.resolveSession(ctx, fromUserID)
 	if err != nil {
 		log.Printf("[weixin] session resolve error: %v", err)
 		_ = b.client.SendTextMessage(ctx, fromUserID, "系统错误，请稍后重试", contextToken)
 		return
+	}
+
+	// 首次会话：先推送欢迎消息
+	if isNewSession {
+		if err := b.client.SendTextMessage(ctx, fromUserID, welcomeMessage, contextToken); err != nil {
+			log.Printf("[weixin] welcome message failed for %s: %v", fromUserID, err)
+		} else {
+			log.Printf("[weixin] welcome message sent to %s", fromUserID)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	fileResult, err := b.processInboundFiles(ctx, sessionID, msg)
@@ -309,7 +328,7 @@ func (b *Bridge) handleMessage(ctx context.Context, msg WeixinMessage) {
 		// Session may be stale — retry with new session
 		log.Printf("[weixin] submit failed for %s, recreating: %v", sessionID, err)
 		b.deleteSession(fromUserID)
-		sessionID, err = b.resolveSession(ctx, fromUserID)
+		sessionID, _, err = b.resolveSession(ctx, fromUserID)
 		if err != nil {
 			_ = b.client.SendTextMessage(ctx, fromUserID, "系统错误，请稍后重试", contextToken)
 			return
@@ -338,15 +357,18 @@ func (b *Bridge) handleMessage(ctx context.Context, msg WeixinMessage) {
 	// Wait for job completion — if it takes >30s, notify user and track as pending
 	reply, done := b.waitForJobWithTimeout(ctx, sessionID, job.ID, 30*time.Second)
 	if !done {
-		// Job still running — save as pending so user can check back
-		b.mu.Lock()
-		b.pendingJobs[fromUserID] = &pendingJob{
-			SessionID: sessionID,
-			JobID:     job.ID,
-			StartedAt: time.Now(),
+		// Job still running — save as pending and start background watcher
+		pj := &pendingJob{
+			SessionID:    sessionID,
+			JobID:        job.ID,
+			StartedAt:    time.Now(),
+			ContextToken: contextToken,
 		}
+		b.mu.Lock()
+		b.pendingJobs[fromUserID] = pj
 		b.mu.Unlock()
-		reply = replyPayload{Text: "任务运行时间较长，请过一分钟后发消息查看结果。"}
+		reply = replyPayload{Text: "任务运行时间较长，完成后会自动发送结果。"}
+		go b.watchPendingJob(fromUserID, pj)
 	}
 	if err := b.sendReply(ctx, fromUserID, contextToken, reply); err != nil {
 		log.Printf("[weixin] send reply error to %s: %v", fromUserID, err)
@@ -659,6 +681,75 @@ func (b *Bridge) checkPendingJob(fromUserID string) (replyPayload, bool) {
 	return replyPayload{}, false
 }
 
+// watchPendingJob subscribes to session events and auto-pushes the result
+// when the pending job completes, so the user doesn't have to ask for it.
+func (b *Bridge) watchPendingJob(userID string, pj *pendingJob) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[weixin] panic in watchPendingJob for %s: %v", userID, r)
+		}
+	}()
+
+	events, cancel := b.service.Subscribe(pj.SessionID)
+	defer cancel()
+
+	hardTimeout := time.After(b.config.JobTimeout)
+	for {
+		select {
+		case <-hardTimeout:
+			b.clearAndPush(userID, pj, replyPayload{Text: "任务超时，请重新提交。"})
+			return
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
+			if event.Type != "session_updated" {
+				continue
+			}
+			snapshot, ok := event.Data.(*models.SessionSnapshot)
+			if !ok {
+				continue
+			}
+			for _, job := range snapshot.Jobs {
+				if job.ID != pj.JobID {
+					continue
+				}
+				if job.Status == models.JobSucceeded {
+					b.clearAndPush(userID, pj, b.buildJobReply(snapshot, pj.JobID))
+					return
+				}
+				if job.Status == models.JobFailed {
+					msg := "分析失败"
+					if job.Error != "" {
+						msg = fmt.Sprintf("分析失败: %s", job.Error)
+					}
+					b.clearAndPush(userID, pj, replyPayload{Text: msg})
+					return
+				}
+			}
+		}
+	}
+}
+
+// clearAndPush removes the pending job and sends the result to the user.
+func (b *Bridge) clearAndPush(userID string, pj *pendingJob, reply replyPayload) {
+	b.mu.Lock()
+	// Only clear if it's still the same pending job (user may have started a new one)
+	if current := b.pendingJobs[userID]; current == pj {
+		delete(b.pendingJobs, userID)
+	}
+	b.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := b.sendReply(ctx, userID, pj.ContextToken, reply); err != nil {
+		log.Printf("[weixin] auto-push failed for %s: %v", userID, err)
+	} else {
+		log.Printf("[weixin] auto-pushed result to %s (%d chars, %d images)", userID, len(reply.Text), len(reply.Images))
+	}
+}
+
 func (b *Bridge) buildJobReply(snapshot *models.SessionSnapshot, jobID string) replyPayload {
 	reply := replyPayload{
 		Images: jobImageArtifacts(snapshot, jobID),
@@ -764,12 +855,12 @@ func (b *Bridge) sendReply(ctx context.Context, toUserID, contextToken string, r
 	return nil
 }
 
-func (b *Bridge) resolveSession(ctx context.Context, weixinUserID string) (string, error) {
+func (b *Bridge) resolveSession(ctx context.Context, weixinUserID string) (sessionID string, isNew bool, err error) {
 	b.mu.Lock()
 	cached, ok := b.sessions[weixinUserID]
 	b.mu.Unlock()
 	if ok {
-		return cached, nil
+		return cached, false, nil
 	}
 
 	label := fmt.Sprintf("%s-%s", b.config.SessionLabel, truncate(weixinUserID, 12))
@@ -787,9 +878,9 @@ func (b *Bridge) resolveSession(ctx context.Context, weixinUserID string) (strin
 		log.Printf("[weixin] %s → joining workspace %s (%q)", weixinUserID, ws.ID, ws.Label)
 		snapshot, err := b.service.CreateConversation(ctx, ws.ID, label)
 		if err == nil {
-			sessionID := snapshot.Session.ID
-			b.setSession(weixinUserID, sessionID)
-			return sessionID, nil
+			sid := snapshot.Session.ID
+			b.setSession(weixinUserID, sid)
+			return sid, true, nil
 		}
 		log.Printf("[weixin] create conversation in %s failed: %v, creating new", ws.ID, err)
 	}
@@ -798,11 +889,11 @@ func (b *Bridge) resolveSession(ctx context.Context, weixinUserID string) (strin
 	log.Printf("[weixin] %s → creating new session %q", weixinUserID, label)
 	snapshot, err := b.service.CreateSession(ctx, label, true)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	sessionID := snapshot.Session.ID
-	b.setSession(weixinUserID, sessionID)
-	return sessionID, nil
+	sid := snapshot.Session.ID
+	b.setSession(weixinUserID, sid)
+	return sid, true, nil
 }
 
 func (b *Bridge) setSession(weixinUserID, sessionID string) {
