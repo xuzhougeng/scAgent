@@ -36,6 +36,29 @@ func main() {
 	weixinLogout := flag.Bool("weixin-logout", false, "Remove saved WeChat credentials and exit")
 	flag.Parse()
 
+	// Handle login/logout modes early — they don't need the full server.
+	if *weixinLogin || *weixinLogout {
+		bridge := weixin.NewBridge(
+			weixin.NewClient("", ""),
+			nil,
+			weixin.BridgeConfig{
+				DataDir:      *dataDir,
+				SessionLabel: envOrDefault("WEIXIN_BRIDGE_SESSION_LABEL", "WeChat"),
+				JobTimeout:   parseDuration(envOrDefault("WEIXIN_BRIDGE_TIMEOUT_MS", "300000")),
+			},
+		)
+		if *weixinLogin {
+			if err := bridge.Login(); err != nil {
+				log.Fatal(err)
+			}
+		} else {
+			if err := bridge.Logout(); err != nil {
+				log.Fatal(err)
+			}
+		}
+		return
+	}
+
 	server, err := app.NewServer(app.Config{
 		SkillsPath:            *skillsPath,
 		PluginDir:             *pluginDir,
@@ -64,22 +87,6 @@ func main() {
 			JobTimeout:   parseDuration(envOrDefault("WEIXIN_BRIDGE_TIMEOUT_MS", "300000")),
 		},
 	)
-
-	// Login-only mode
-	if *weixinLogin {
-		if err := bridge.Login(); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-
-	// Logout mode
-	if *weixinLogout {
-		if err := bridge.Logout(); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
 
 	shutdownCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
