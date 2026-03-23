@@ -27,6 +27,7 @@ async function startApp() {
     switchConversation,
     switchWorkspace,
     retryJob,
+    regenerateResponse,
   });
 
   bindSidebarResize();
@@ -320,6 +321,19 @@ async function startApp() {
   async function retryJob(jobId) {
     try {
       const response = await fetchJSON(`/api/jobs/${jobId}/retry`, {
+        method: "POST",
+      });
+      syncSnapshot(response.snapshot);
+      render();
+    } catch (error) {
+      appState.workspaceStatus = error.message;
+      render();
+    }
+  }
+
+  async function regenerateResponse(jobId) {
+    try {
+      const response = await fetchJSON(`/api/jobs/${jobId}/regenerate`, {
         method: "POST",
       });
       syncSnapshot(response.snapshot);

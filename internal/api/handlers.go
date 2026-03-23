@@ -446,6 +446,12 @@ func (h *Handler) handleJobRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleRetryJob(w, r, jobID)
 		return
 	}
+	if strings.HasSuffix(path, "/regenerate") {
+		jobID := strings.TrimSuffix(path, "/regenerate")
+		jobID = strings.TrimSuffix(jobID, "/")
+		h.handleRegenerateResponse(w, r, jobID)
+		return
+	}
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown job route"})
 }
 
@@ -456,6 +462,27 @@ func (h *Handler) handleRetryJob(w http.ResponseWriter, r *http.Request, jobID s
 	}
 
 	job, snapshot, err := h.service.RetryJob(r.Context(), jobID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	status := http.StatusAccepted
+	if job == nil {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, map[string]any{
+		"job":      job,
+		"snapshot": snapshot,
+	})
+}
+
+func (h *Handler) handleRegenerateResponse(w http.ResponseWriter, r *http.Request, jobID string) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	job, snapshot, err := h.service.RegenerateResponse(r.Context(), jobID)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

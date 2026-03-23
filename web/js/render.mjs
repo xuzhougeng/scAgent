@@ -39,6 +39,7 @@ const renderActions = {
   async switchConversation() {},
   async switchWorkspace() {},
   async retryJob() {},
+  async regenerateResponse() {},
 };
 
 const artifactTablePreviewOptions = {
@@ -599,6 +600,7 @@ async function renderChat() {
   }
   bindArtifactPreviewButtons(container);
   bindRetryButtons(container);
+  bindRegenerateButtons(container);
   container.scrollTop = container.scrollHeight;
 }
 
@@ -625,6 +627,16 @@ async function buildMessageNode(message, template) {
     detail.className = "message-detail";
     detail.innerHTML = detailMarkup;
     node.appendChild(detail);
+  }
+
+  if (message.role === "assistant" && message.job_id) {
+    const job = (appState.snapshot?.jobs || []).find((item) => item.id === message.job_id);
+    if (job && job.status !== "queued" && job.status !== "running") {
+      const actions = document.createElement("div");
+      actions.className = "message-actions";
+      actions.innerHTML = `<button type="button" class="regenerate-button" data-job-id="${escapeAttribute(job.id)}">重新生成</button>`;
+      node.appendChild(actions);
+    }
   }
 
   return node;
@@ -842,11 +854,7 @@ async function buildJobResultMarkup(job, assistantMessage) {
           ? `<p class="message-job-error">${escapeHTML(job.error)}</p>`
           : ""
       }
-      ${
-        job.status === "failed" || job.status === "incomplete"
-          ? `<button type="button" class="retry-job-button" data-job-id="${escapeAttribute(job.id)}">重试</button>`
-          : ""
-      }
+      ${""/* retry button hidden — kept in backend API only */}
       ${
         artifactCards.length
           ? `<div class="message-artifact-group">
@@ -1363,6 +1371,19 @@ function bindRetryButtons(container) {
         button.disabled = true;
         button.textContent = "重试中…";
         renderActions.retryJob(jobId);
+      }
+    });
+  }
+}
+
+function bindRegenerateButtons(container) {
+  for (const button of container.querySelectorAll(".regenerate-button")) {
+    button.addEventListener("click", () => {
+      const jobId = button.dataset.jobId;
+      if (jobId) {
+        button.disabled = true;
+        button.textContent = "重新生成中…";
+        renderActions.regenerateResponse(jobId);
       }
     });
   }

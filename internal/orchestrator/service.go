@@ -546,6 +546,27 @@ func (s *Service) RetryJob(ctx context.Context, jobID string) (*models.Job, *mod
 	return s.SubmitMessage(ctx, job.SessionID, msg.Content)
 }
 
+func (s *Service) RegenerateResponse(ctx context.Context, jobID string) (*models.Job, *models.SessionSnapshot, error) {
+	job, ok := s.store.GetJob(jobID)
+	if !ok {
+		return nil, nil, fmt.Errorf("未找到任务 %q", jobID)
+	}
+	if job.Status == models.JobRunning || job.Status == models.JobQueued {
+		return nil, nil, fmt.Errorf("任务仍在执行中，无法重新生成")
+	}
+	msg, ok := s.store.GetMessage(job.SessionID, job.MessageID)
+	if !ok {
+		return nil, nil, fmt.Errorf("未找到原始消息 %q", job.MessageID)
+	}
+
+	// Remove the old assistant message(s) and job.
+	s.store.DeleteMessagesByJobID(job.SessionID, jobID)
+	s.store.DeleteJob(jobID)
+	s.publishSnapshot(job.SessionID)
+
+	return s.SubmitMessage(ctx, job.SessionID, msg.Content)
+}
+
 func (s *Service) SubmitMessageWithArtifacts(ctx context.Context, sessionID, content string, inputArtifacts []*models.Artifact) (*models.Job, *models.SessionSnapshot, error) {
 	sessionRecord, ok := s.store.GetSession(sessionID)
 	if !ok {

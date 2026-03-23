@@ -235,6 +235,41 @@ func (s *Store) GetMessage(sessionID, messageID string) (*models.Message, bool) 
 	return nil, false
 }
 
+func (s *Store) DeleteMessage(sessionID, messageID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	messages := s.messages[sessionID]
+	filtered := make([]*models.Message, 0, len(messages))
+	for _, msg := range messages {
+		if msg.ID != messageID {
+			filtered = append(filtered, msg)
+		}
+	}
+	s.messages[sessionID] = filtered
+	s.persistLocked()
+}
+
+func (s *Store) DeleteMessagesByJobID(sessionID, jobID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	messages := s.messages[sessionID]
+	filtered := make([]*models.Message, 0, len(messages))
+	for _, msg := range messages {
+		if msg.JobID != jobID {
+			filtered = append(filtered, msg)
+		}
+	}
+	s.messages[sessionID] = filtered
+	s.persistLocked()
+}
+
+func (s *Store) DeleteJob(jobID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.jobs, jobID)
+	s.persistLocked()
+}
+
 func (s *Store) Snapshot(sessionID string) (*models.SessionSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
