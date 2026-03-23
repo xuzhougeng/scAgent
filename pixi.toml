@@ -10,8 +10,6 @@ MPLBACKEND = "Agg"
 MPLCONFIGDIR = "/tmp/scagent-mpl"
 NUMBA_CACHE_DIR = "/tmp/scagent-numba"
 PYTHONUNBUFFERED = "1"
-SCAGENT_RUNTIME_HOST = "127.0.0.1"
-SCAGENT_RUNTIME_PORT = "8081"
 
 [dependencies]
 python = "3.11.*"
@@ -29,5 +27,5 @@ leidenalg = "0.10.*"
 seaborn = "0.13.*"
 
 [tasks]
-doctor = "python runtime/doctor.py"
-runtime = "python runtime/server.py"
+doctor = "./scripts/pixi_env_exec.sh python runtime/doctor.py"
+runtime = "./scripts/pixi_env_exec.sh python runtime/server.py"

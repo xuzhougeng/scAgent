@@ -24,6 +24,8 @@ Run the environment doctor:
 pixi run doctor
 ```
 
+If `.env` exists in the project root, Pixi loads it before starting the doctor or runtime. This lets you run multiple local instances by changing `SCAGENT_RUNTIME_PORT` and related settings in `.env`.
+
 This checks:
 
 - pinned package imports
@@ -48,11 +50,11 @@ Open `http://127.0.0.1:8080`.
 
 The Pixi environment exports:
 
-- `SCAGENT_RUNTIME_HOST=127.0.0.1`
-- `SCAGENT_RUNTIME_PORT=8081`
 - `MPLBACKEND=Agg`
 - `MPLCONFIGDIR=/tmp/scagent-mpl`
 - `NUMBA_CACHE_DIR=/tmp/scagent-numba`
+
+Runtime host and port come from `.env` or the surrounding shell environment when set; otherwise the runtime falls back to `127.0.0.1:8081`.
 
 These defaults keep the runtime predictable and avoid polluting the user home directory with matplotlib cache files.
 

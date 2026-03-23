@@ -96,6 +96,8 @@ pixi run runtime
 go run ./cmd/scagent
 ```
 
+`pixi run runtime` and `pixi run doctor` load `.env` when it exists, then fall back to `127.0.0.1:8081` if no runtime host/port is set.
+
 Open:
 
 - `http://127.0.0.1:8080/` for the main analysis console
