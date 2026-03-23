@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"scagent/internal/models"
@@ -26,6 +28,9 @@ type Service struct {
 	evaluator Evaluator
 	answerer  Answerer
 	dataRoot  string
+
+	jobMu      sync.Mutex
+	jobCancels map[string]context.CancelFunc
 }
 
 type PlanningRequest struct {
@@ -80,14 +85,64 @@ func NewServiceWithComponents(store *session.Store, skills *skill.Registry, runt
 		answerer = NewNoopAnswerer()
 	}
 	return &Service{
-		store:     store,
-		skills:    skills,
-		runtime:   runtimeClient,
-		planner:   planner,
-		evaluator: evaluator,
-		answerer:  answerer,
-		dataRoot:  dataRoot,
+		store:      store,
+		skills:     skills,
+		runtime:    runtimeClient,
+		planner:    planner,
+		evaluator:  evaluator,
+		answerer:   answerer,
+		dataRoot:   dataRoot,
+		jobCancels: make(map[string]context.CancelFunc),
 	}
+}
+
+func (s *Service) setJobCancel(jobID string, cancel context.CancelFunc) {
+	if s == nil || strings.TrimSpace(jobID) == "" || cancel == nil {
+		return
+	}
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+	s.jobCancels[jobID] = cancel
+}
+
+func (s *Service) clearJobCancel(jobID string) {
+	if s == nil || strings.TrimSpace(jobID) == "" {
+		return
+	}
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+	delete(s.jobCancels, jobID)
+}
+
+func (s *Service) requestJobCancel(jobID string) bool {
+	if s == nil || strings.TrimSpace(jobID) == "" {
+		return false
+	}
+	s.jobMu.Lock()
+	cancel := s.jobCancels[jobID]
+	s.jobMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	return true
+}
+
+func (s *Service) activeSessionJob(sessionID string) *models.Job {
+	if s == nil || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	jobs := s.store.ListSessionJobs(sessionID)
+	for index := len(jobs) - 1; index >= 0; index-- {
+		job := jobs[index]
+		if job == nil {
+			continue
+		}
+		if job.Status == models.JobQueued || job.Status == models.JobRunning {
+			return job
+		}
+	}
+	return nil
 }
 
 func (s *Service) Skills() []skill.Definition {
@@ -563,8 +618,8 @@ func (s *Service) RetryJob(ctx context.Context, jobID string) (*models.Job, *mod
 	if !ok {
 		return nil, nil, fmt.Errorf("未找到任务 %q", jobID)
 	}
-	if job.Status != models.JobFailed && job.Status != models.JobIncomplete {
-		return nil, nil, fmt.Errorf("只能重试失败或未完成的任务")
+	if job.Status != models.JobFailed && job.Status != models.JobIncomplete && job.Status != models.JobCanceled {
+		return nil, nil, fmt.Errorf("只能重试失败、未完成或已取消的任务")
 	}
 	msg, ok := s.store.GetMessage(job.SessionID, job.MessageID)
 	if !ok {
@@ -604,10 +659,49 @@ func (s *Service) RegenerateResponse(ctx context.Context, jobID string) (*models
 	return s.SubmitMessage(ctx, job.SessionID, msg.Content)
 }
 
+func (s *Service) CancelJob(_ context.Context, jobID string) (*models.Job, *models.SessionSnapshot, error) {
+	job, ok := s.store.GetJob(jobID)
+	if !ok {
+		return nil, nil, fmt.Errorf("未找到任务 %q", jobID)
+	}
+	if job.Status != models.JobQueued && job.Status != models.JobRunning {
+		return nil, nil, fmt.Errorf("只能停止排队中或运行中的任务")
+	}
+	if !s.requestJobCancel(jobID) {
+		return nil, nil, fmt.Errorf("当前任务暂时无法停止，请稍后重试")
+	}
+
+	currentJob, ok := s.store.GetJob(jobID)
+	if ok && (currentJob.Status == models.JobQueued || currentJob.Status == models.JobRunning) {
+		currentJob.Summary = "正在停止当前任务..."
+		s.appendJobCheckpoint(
+			currentJob,
+			"execution",
+			"muted",
+			"停止请求",
+			"正在停止",
+			"已收到停止请求，正在终止当前任务。",
+		)
+		s.store.SaveJob(currentJob)
+		s.publishJob(currentJob.SessionID, currentJob.ID)
+		s.publishSnapshot(currentJob.SessionID)
+		job = currentJob
+	}
+
+	snapshot, err := s.store.Snapshot(job.SessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return job, snapshot, nil
+}
+
 func (s *Service) SubmitMessageWithArtifacts(ctx context.Context, sessionID, content string, inputArtifacts []*models.Artifact) (*models.Job, *models.SessionSnapshot, error) {
 	sessionRecord, ok := s.store.GetSession(sessionID)
 	if !ok {
 		return nil, nil, fmt.Errorf("未找到会话 %q", sessionID)
+	}
+	if activeJob := s.activeSessionJob(sessionID); activeJob != nil {
+		return nil, nil, fmt.Errorf("当前已有任务正在运行，请先等待完成或停止当前任务")
 	}
 
 	trimmedContent := strings.TrimSpace(content)
@@ -662,7 +756,9 @@ func (s *Service) SubmitMessageWithArtifacts(ctx context.Context, sessionID, con
 	s.publishJob(sessionID, job.ID)
 	s.publishSnapshot(sessionID)
 
-	go s.runJob(context.Background(), sessionID, job.ID, trimmedContent, inputArtifacts)
+	jobCtx, cancel := context.WithCancel(context.Background())
+	s.setJobCancel(job.ID, cancel)
+	go s.runJob(jobCtx, sessionID, job.ID, trimmedContent, inputArtifacts)
 
 	snapshot, err := s.store.Snapshot(sessionID)
 	if err != nil {
@@ -672,6 +768,11 @@ func (s *Service) SubmitMessageWithArtifacts(ctx context.Context, sessionID, con
 }
 
 func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, inputArtifacts []*models.Artifact) {
+	defer s.clearJobCancel(jobID)
+	if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
+		return
+	}
+
 	job, ok := s.store.GetJob(jobID)
 	if !ok {
 		return
@@ -682,6 +783,9 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 	}
 	workspaceRecord, ok := s.store.GetWorkspace(sessionRecord.WorkspaceID)
 	if !ok {
+		if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
+			return
+		}
 		s.failJob(sessionID, jobID, fmt.Errorf("未找到 workspace %q", sessionRecord.WorkspaceID))
 		return
 	}
@@ -692,15 +796,28 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 	startJobPhase(job, models.JobPhaseInvestigate, "正在规划并收集与问题相关的信息。", nil)
 	s.store.SaveJob(job)
 	s.publishJob(sessionID, jobID)
+	if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
+		return
+	}
 
 	planningRequest, err := s.buildPlanningRequestWithInputs(sessionRecord, message, inputArtifacts)
 	if err != nil {
+		if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
+			return
+		}
 		s.failJob(sessionID, jobID, fmt.Errorf("规划上下文构建失败：%w", err))
+		return
+	}
+	if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
 		return
 	}
 
 	plan, err := s.buildExecutablePlan(ctx, planningRequest)
 	if err != nil {
+		if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) || errors.Is(err, context.Canceled) {
+			s.cancelJobExecution(sessionID, jobID)
+			return
+		}
 		s.failJob(sessionID, jobID, fmt.Errorf("规划器执行失败：%w", err))
 		return
 	}
@@ -718,6 +835,9 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 	)
 	s.store.SaveJob(job)
 	s.publishJob(sessionID, jobID)
+	if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
+		return
+	}
 
 	prevObjectID := sessionRecord.ActiveObjectID
 	stepSummaries := make([]string, 0, len(plan.Steps))
@@ -727,6 +847,10 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 	jobCompleted := false
 
 	for len(pendingPlan.Steps) > 0 {
+		if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
+			return
+		}
+
 		step := pendingPlan.Steps[0]
 		stepResult := models.JobStep{
 			ID:             step.ID,
@@ -739,6 +863,9 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 
 		targetObject, err := s.resolveTargetObject(sessionRecord, prevObjectID, step.TargetObjectID)
 		if err != nil {
+			if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
+				return
+			}
 			stepResult.Status = models.JobFailed
 			stepResult.Summary = err.Error()
 			finishedAt := time.Now().UTC()
@@ -754,6 +881,10 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 			s.store.SaveObject(targetObject)
 		}
 		if err := s.ensureRuntimeObject(ctx, sessionRecord.ID, targetObject); err != nil {
+			if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) || errors.Is(err, context.Canceled) {
+				s.cancelJobExecution(sessionID, jobID)
+				return
+			}
 			stepResult.Status = models.JobFailed
 			stepResult.Summary = err.Error()
 			finishedAt := time.Now().UTC()
@@ -778,6 +909,10 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 			WorkspaceRoot:    s.workspaceRoot(sessionRecord.WorkspaceID),
 		})
 		if err != nil {
+			if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) || errors.Is(err, context.Canceled) {
+				s.cancelJobExecution(sessionID, jobID)
+				return
+			}
 			stepResult.Status = models.JobFailed
 			stepResult.Summary = err.Error()
 			finishedAt := time.Now().UTC()
@@ -858,9 +993,14 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 		workspaceRecord.UpdatedAt = finishedAt
 		workspaceRecord.LastAccessedAt = finishedAt
 		s.store.SaveWorkspace(workspaceRecord)
+		if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
+			return
+		}
 
 		evaluation, evalErr := s.evaluateCompletion(ctx, sessionRecord, job, message, inputArtifacts)
 		switch {
+		case s.finishCanceledJobIfNeeded(ctx, sessionID, jobID):
+			return
 		case evalErr != nil:
 			lastIncompleteReason = ""
 			s.appendJobCheckpoint(
@@ -909,6 +1049,8 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 		remainingPlan := clonePlanWithSteps(pendingPlan.Steps[1:])
 		replannedPlan, replanErr := s.replanRemainingSteps(ctx, sessionRecord, job, message, inputArtifacts)
 		switch {
+		case s.finishCanceledJobIfNeeded(ctx, sessionID, jobID):
+			return
 		case replanErr == nil && len(replannedPlan.Steps) > 0:
 			pendingPlan = replannedPlan
 			if plansEquivalent(replannedPlan, remainingPlan) {
@@ -959,6 +1101,9 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 		s.publishJob(sessionID, jobID)
 		s.publishSnapshot(sessionID)
 	}
+	if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
+		return
+	}
 
 	finishedAt := time.Now().UTC()
 	job.FinishedAt = &finishedAt
@@ -978,11 +1123,18 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 	}
 	completeJobPhase(job, models.JobPhaseInvestigate, defaultPhaseCompletionSummary(job))
 	startJobPhase(job, models.JobPhaseRespond, "正在确认收集结果并生成最终回答。", nil)
+	if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
+		return
+	}
 
 	responseRequest, responseErr := s.buildResponseComposeRequest(sessionRecord, message, job, inputArtifacts)
 	var composed *ResponseComposeResult
 	if responseErr == nil && s.answerer != nil {
 		composed, responseErr = s.answerer.BuildInvestigationResponse(ctx, responseRequest)
+	}
+	if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) || errors.Is(responseErr, context.Canceled) {
+		s.cancelJobExecution(sessionID, jobID)
+		return
 	}
 	if responseErr != nil || composed == nil || strings.TrimSpace(composed.Answer) == "" {
 		composed, _ = NewNoopAnswerer().BuildInvestigationResponse(ctx, responseRequest)
@@ -996,6 +1148,9 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 	}
 	if finalAnswer == "" {
 		finalAnswer = job.Summary
+	}
+	if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
+		return
 	}
 	completeJobPhase(job, models.JobPhaseRespond, "已根据收集到的信息生成最终回答。")
 	s.store.SaveJob(job)
@@ -1055,6 +1210,55 @@ func (s *Service) buildExecutablePlan(ctx context.Context, request PlanningReque
 		return plan, nil
 	}
 	return models.Plan{}, fmt.Errorf("执行计划不合法：%w", validateErr)
+}
+
+func (s *Service) finishCanceledJobIfNeeded(ctx context.Context, sessionID, jobID string) bool {
+	if ctx == nil || !errors.Is(ctx.Err(), context.Canceled) {
+		return false
+	}
+	s.cancelJobExecution(sessionID, jobID)
+	return true
+}
+
+func (s *Service) cancelJobExecution(sessionID, jobID string) {
+	job, ok := s.store.GetJob(jobID)
+	if !ok {
+		return
+	}
+	if job.Status != models.JobQueued && job.Status != models.JobRunning {
+		return
+	}
+
+	finishedAt := time.Now().UTC()
+	summary := "当前任务已停止。"
+	job.Status = models.JobCanceled
+	job.Error = ""
+	job.Summary = summary
+	job.FinishedAt = &finishedAt
+	cancelJobPhase(job, job.CurrentPhase, summary)
+	if job.CurrentPhase != models.JobPhaseRespond {
+		skipJobPhase(job, models.JobPhaseRespond, "任务已取消，未生成最终回答。")
+	}
+	s.appendJobCheckpoint(job, "execution", "muted", "任务已停止", "已取消", "用户已停止当前任务。")
+	s.store.SaveJob(job)
+
+	s.store.AddMessage(&models.Message{
+		ID:        s.store.NextID("msg"),
+		SessionID: sessionID,
+		JobID:     jobID,
+		Role:      models.MessageAssistant,
+		Content:   summary,
+		CreatedAt: finishedAt,
+	})
+
+	if sessionRecord, ok := s.store.GetSession(sessionID); ok {
+		sessionRecord.UpdatedAt = finishedAt
+		sessionRecord.LastAccessedAt = finishedAt
+		s.store.SaveSession(sessionRecord)
+	}
+
+	s.publishJob(sessionID, jobID)
+	s.publishSnapshot(sessionID)
 }
 
 func (s *Service) failJob(sessionID, jobID string, err error) {
@@ -1385,9 +1589,24 @@ func failJobPhase(job *models.Job, kind models.JobPhaseKind, summary string, met
 	job.CurrentPhase = kind
 }
 
+func cancelJobPhase(job *models.Job, kind models.JobPhaseKind, summary string) {
+	phase := ensureJobPhase(job, kind)
+	if phase == nil {
+		return
+	}
+	now := time.Now().UTC()
+	if phase.StartedAt == nil {
+		phase.StartedAt = &now
+	}
+	phase.Status = models.JobPhaseCanceled
+	phase.Summary = strings.TrimSpace(summary)
+	phase.FinishedAt = &now
+	job.CurrentPhase = kind
+}
+
 func skipJobPhase(job *models.Job, kind models.JobPhaseKind, summary string) {
 	phase := ensureJobPhase(job, kind)
-	if phase == nil || phase.Status == models.JobPhaseCompleted || phase.Status == models.JobPhaseRunning {
+	if phase == nil || phase.Status == models.JobPhaseCompleted || phase.Status == models.JobPhaseRunning || phase.Status == models.JobPhaseCanceled {
 		return
 	}
 	now := time.Now().UTC()
@@ -1436,6 +1655,8 @@ func defaultPhaseCompletionSummary(job *models.Job) string {
 		return "信息收集已完成，已具备回答所需证据。"
 	case models.JobIncomplete:
 		return "信息收集已结束，但当前证据仍不足以完整回答。"
+	case models.JobCanceled:
+		return "信息收集已停止。"
 	default:
 		return "信息收集阶段已结束。"
 	}

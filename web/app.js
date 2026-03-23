@@ -50,7 +50,50 @@ async function startApp() {
       await refreshWorkspaceSnapshot();
     }
     connectEvents();
+    renderApp();
+  }
+
+  function renderApp() {
     render();
+    updateComposerControls();
+  }
+
+  function currentActiveJob() {
+    const jobs = appState.snapshot?.jobs || [];
+    for (let index = jobs.length - 1; index >= 0; index -= 1) {
+      const job = jobs[index];
+      if (!job) {
+        continue;
+      }
+      if (job.status === "queued" || job.status === "running") {
+        return job;
+      }
+    }
+    return null;
+  }
+
+  function updateComposerControls() {
+    const button = document.getElementById("composerSubmitButton");
+    if (!button) {
+      return;
+    }
+
+    const activeJob = currentActiveJob();
+    const isStopping =
+      activeJob &&
+      (appState.cancelPendingJobId === activeJob.id ||
+        activeJob.summary === "正在停止当前任务...");
+    const isSubmitting = Boolean(appState.composerPending);
+
+    button.classList.toggle("is-stop", Boolean(activeJob));
+    if (activeJob) {
+      button.textContent = isStopping ? "停止中..." : "停止";
+      button.disabled = Boolean(isStopping);
+      return;
+    }
+
+    button.textContent = isSubmitting ? "提交中..." : "运行";
+    button.disabled = isSubmitting || !appState.sessionId;
   }
 
   function syncSnapshot(snapshot) {
@@ -234,10 +277,11 @@ async function startApp() {
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
       appState.workspaceStatus = `已切换到 ${formatConversationLabel(snapshot.session)}。`;
       connectEvents();
-      render();
+      renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
       renderSessionMeta();
+      updateComposerControls();
     }
   }
 
@@ -261,10 +305,11 @@ async function startApp() {
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
       appState.workspaceStatus = `已创建并切换到 ${formatConversationLabel(snapshot.session)}。`;
       connectEvents();
-      render();
+      renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
       renderSessionMeta();
+      updateComposerControls();
     }
   }
 
@@ -294,10 +339,11 @@ async function startApp() {
       await refreshWorkspaceList();
       appState.workspaceStatus = `已切换到 ${workspaceSnapshot.workspace?.label || workspaceId}。`;
       connectEvents();
-      render();
+      renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
       renderSessionMeta();
+      updateComposerControls();
     }
   }
 
@@ -313,10 +359,11 @@ async function startApp() {
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
       appState.workspaceStatus = `已创建 ${snapshot.workspace?.label || "新 workspace"}。`;
       connectEvents();
-      render();
+      renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
       renderSessionMeta();
+      updateComposerControls();
     }
   }
 
@@ -326,10 +373,10 @@ async function startApp() {
         method: "POST",
       });
       syncSnapshot(response.snapshot);
-      render();
+      renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
-      render();
+      renderApp();
     }
   }
 
@@ -358,9 +405,11 @@ async function startApp() {
       syncSnapshot(snapshot);
       await refreshWorkspaceSnapshot();
       renderSessionMeta();
+      updateComposerControls();
     } catch (error) {
       appState.workspaceStatus = error.message;
       renderSessionMeta();
+      updateComposerControls();
     }
   }
 
@@ -370,10 +419,34 @@ async function startApp() {
         method: "POST",
       });
       syncSnapshot(response.snapshot);
-      render();
+      renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
-      render();
+      renderApp();
+    }
+  }
+
+  async function cancelActiveJob(job) {
+    if (!job?.id) {
+      return;
+    }
+
+    appState.cancelPendingJobId = job.id;
+    updateComposerControls();
+
+    try {
+      const response = await fetchJSON(`/api/jobs/${job.id}/cancel`, {
+        method: "POST",
+      });
+      syncSnapshot(response.snapshot);
+      appState.workspaceStatus = "已发送停止请求。";
+      renderApp();
+    } catch (error) {
+      appState.workspaceStatus = error.message;
+      renderApp();
+    } finally {
+      appState.cancelPendingJobId = null;
+      updateComposerControls();
     }
   }
 
@@ -406,11 +479,26 @@ async function startApp() {
   }
 
   async function submitMessage() {
-    const input = document.getElementById("messageInput");
-    const message = input.value.trim();
-    if (!message || !appState.sessionId) {
+    const activeJob = currentActiveJob();
+    if (activeJob) {
+      if (
+        appState.cancelPendingJobId === activeJob.id ||
+        activeJob.summary === "正在停止当前任务..."
+      ) {
+        return;
+      }
+      await cancelActiveJob(activeJob);
       return;
     }
+
+    const input = document.getElementById("messageInput");
+    const message = input.value.trim();
+    if (!message || !appState.sessionId || appState.composerPending) {
+      return;
+    }
+
+    appState.composerPending = true;
+    updateComposerControls();
 
     const optimisticMessage = appState.snapshot
       ? {
@@ -429,7 +517,7 @@ async function startApp() {
         ...appState.snapshot,
         messages: [...(appState.snapshot.messages || []), optimisticMessage],
       };
-      render();
+      renderApp();
     }
 
     try {
@@ -442,7 +530,7 @@ async function startApp() {
         }),
       });
       syncSnapshot(response.snapshot);
-      render();
+      renderApp();
     } catch (error) {
       if (optimisticMessage && appState.snapshot) {
         appState.snapshot = {
@@ -453,7 +541,10 @@ async function startApp() {
       input.value = message;
       input.focus();
       appState.workspaceStatus = error.message;
-      render();
+      renderApp();
+    } finally {
+      appState.composerPending = false;
+      updateComposerControls();
     }
   }
 
@@ -487,7 +578,7 @@ async function startApp() {
         input.value = "";
         fileNameEl.textContent = "选择文件后将自动上传";
         fileNameEl.classList.remove("has-file");
-        render();
+        renderApp();
       } catch (error) {
         status.textContent = error.message;
         fileNameEl.textContent = "上传失败，请重试";
@@ -550,7 +641,7 @@ async function startApp() {
     appState.eventSource = new EventSource(`/api/sessions/${appState.sessionId}/events`);
     appState.eventSource.addEventListener("session_updated", (event) => {
       syncSnapshot(JSON.parse(event.data));
-      render();
+      renderApp();
     });
   }
 }

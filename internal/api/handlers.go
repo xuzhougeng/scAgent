@@ -492,6 +492,12 @@ func (h *Handler) handleJobRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleRetryJob(w, r, jobID)
 		return
 	}
+	if strings.HasSuffix(path, "/cancel") {
+		jobID := strings.TrimSuffix(path, "/cancel")
+		jobID = strings.TrimSuffix(jobID, "/")
+		h.handleCancelJob(w, r, jobID)
+		return
+	}
 	if strings.HasSuffix(path, "/regenerate") {
 		jobID := strings.TrimSuffix(path, "/regenerate")
 		jobID = strings.TrimSuffix(jobID, "/")
@@ -514,6 +520,27 @@ func (h *Handler) handleRetryJob(w http.ResponseWriter, r *http.Request, jobID s
 	}
 	status := http.StatusAccepted
 	if job == nil {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, map[string]any{
+		"job":      job,
+		"snapshot": snapshot,
+	})
+}
+
+func (h *Handler) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID string) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	job, snapshot, err := h.service.CancelJob(r.Context(), jobID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	status := http.StatusAccepted
+	if job != nil && job.Status == "canceled" {
 		status = http.StatusOK
 	}
 	writeJSON(w, status, map[string]any{

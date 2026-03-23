@@ -637,6 +637,9 @@ func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID str
 					}
 					return replyPayload{Text: "分析失败"}, true
 				}
+				if job.Status == models.JobCanceled {
+					return replyPayload{Text: "任务已停止。"}, true
+				}
 			}
 		}
 	}
@@ -682,6 +685,12 @@ func (b *Bridge) checkPendingJob(fromUserID string) (replyPayload, bool) {
 				return replyPayload{Text: fmt.Sprintf("分析失败: %s", job.Error)}, true
 			}
 			return replyPayload{Text: "分析失败"}, true
+		}
+		if job.Status == models.JobCanceled {
+			b.mu.Lock()
+			delete(b.pendingJobs, fromUserID)
+			b.mu.Unlock()
+			return replyPayload{Text: "任务已停止。"}, true
 		}
 		// Still running
 		elapsed := time.Since(pj.StartedAt).Truncate(time.Second)
@@ -740,6 +749,10 @@ func (b *Bridge) watchPendingJob(userID string, pj *pendingJob) {
 						msg = fmt.Sprintf("分析失败: %s", job.Error)
 					}
 					b.clearAndPush(userID, pj, replyPayload{Text: msg})
+					return
+				}
+				if job.Status == models.JobCanceled {
+					b.clearAndPush(userID, pj, replyPayload{Text: "任务已停止。"})
 					return
 				}
 			}

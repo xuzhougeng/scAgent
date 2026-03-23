@@ -40,6 +40,7 @@ const (
 	JobSucceeded  JobStatus = "succeeded"
 	JobIncomplete JobStatus = "incomplete"
 	JobFailed     JobStatus = "failed"
+	JobCanceled   JobStatus = "canceled"
 )
 
 type JobPhaseKind string
@@ -58,6 +59,7 @@ const (
 	JobPhaseCompleted JobPhaseStatus = "completed"
 	JobPhaseSkipped   JobPhaseStatus = "skipped"
 	JobPhaseFailed    JobPhaseStatus = "failed"
+	JobPhaseCanceled  JobPhaseStatus = "canceled"
 )
 
 type ArtifactKind string

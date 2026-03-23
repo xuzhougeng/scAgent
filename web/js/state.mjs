@@ -13,6 +13,8 @@ export const appState = {
   plannerPreview: null,
   chatRenderVersion: 0,
   artifactTextCache: new Map(),
+  composerPending: false,
+  cancelPendingJobId: null,
 };
 
 export const storageKeys = {
@@ -149,6 +151,7 @@ export const jobPhaseStatusLabels = {
   completed: "已完成",
   skipped: "已跳过",
   failed: "失败",
+  canceled: "已取消",
 };
 
 export const objectKindLabels = {

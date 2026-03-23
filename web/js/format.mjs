@@ -143,6 +143,8 @@ export function statusKindForJob(status) {
       return "ok";
     case "incomplete":
       return "warn";
+    case "canceled":
+      return "muted";
     case "failed":
       return "bad";
     case "running":
@@ -175,6 +177,8 @@ export function statusKindForPhase(status) {
       return "ok";
     case "running":
       return "warn";
+    case "canceled":
+      return "muted";
     case "failed":
       return "error";
     case "skipped":

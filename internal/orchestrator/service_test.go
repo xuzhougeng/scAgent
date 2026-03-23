@@ -78,6 +78,10 @@ type scalarResultRuntime struct {
 	execCalls   []runtimeclient.ExecuteRequest
 }
 
+type blockingRuntime struct {
+	started chan struct{}
+}
+
 type scriptedEvaluator struct {
 	results  []*CompletionEvaluation
 	errs     map[int]error
@@ -248,6 +252,41 @@ func (r *scalarResultRuntime) Execute(_ context.Context, payload runtimeclient.E
 			"stdout": "4848644",
 		},
 	}, nil
+}
+
+func (r *blockingRuntime) Health(context.Context) error {
+	return nil
+}
+
+func (r *blockingRuntime) Status(context.Context) (*runtimeclient.HealthStatus, error) {
+	return &runtimeclient.HealthStatus{}, nil
+}
+
+func (r *blockingRuntime) InitSession(context.Context, runtimeclient.InitSessionRequest) (*runtimeclient.InitSessionResponse, error) {
+	return nil, errors.New("unexpected init session call")
+}
+
+func (r *blockingRuntime) LoadFile(context.Context, runtimeclient.LoadFileRequest) (*runtimeclient.LoadFileResponse, error) {
+	return nil, errors.New("unexpected load file call")
+}
+
+func (r *blockingRuntime) EnsureObject(_ context.Context, payload runtimeclient.EnsureObjectRequest) (*runtimeclient.EnsureObjectResponse, error) {
+	return &runtimeclient.EnsureObjectResponse{
+		Object:  payload.Object,
+		Summary: "already available",
+	}, nil
+}
+
+func (r *blockingRuntime) Execute(ctx context.Context, payload runtimeclient.ExecuteRequest) (*runtimeclient.ExecuteResponse, error) {
+	if r.started != nil {
+		select {
+		case <-r.started:
+		default:
+			close(r.started)
+		}
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func TestBuildExecutablePlanRejectsEmptyLLMPlan(t *testing.T) {
@@ -487,6 +526,182 @@ func TestSubmitMessageWithArtifactsPassesInputArtifactsToAnswerer(t *testing.T) 
 	if len(answerer.requests[0].InputArtifacts) != 1 || answerer.requests[0].InputArtifacts[0].ID != artifact.ID {
 		t.Fatalf("unexpected input artifacts: %+v", answerer.requests[0].InputArtifacts)
 	}
+}
+
+func TestSubmitMessageRejectsConcurrentActiveJob(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	runtime := &blockingRuntime{started: make(chan struct{})}
+	planner := &scriptedPlanner{
+		mode: "llm",
+		plans: []models.Plan{
+			{
+				Steps: []models.PlanStep{
+					{
+						ID:             "step_1",
+						Skill:          "inspect_dataset",
+						TargetObjectID: "$active",
+					},
+				},
+			},
+		},
+	}
+	service := NewServiceWithComponents(store, registry, runtime, planner, NewFakeEvaluator(), NewNoopAnswerer(), t.TempDir())
+
+	sessionRecord := store.CreateSession("test")
+	now := time.Now().UTC()
+	sessionRecord.ActiveObjectID = "obj_active"
+	store.SaveSession(sessionRecord)
+
+	workspaceRecord, ok := store.GetWorkspace(sessionRecord.WorkspaceID)
+	if !ok {
+		t.Fatalf("expected workspace to exist")
+	}
+	workspaceRecord.ActiveObjectID = "obj_active"
+	store.SaveWorkspace(workspaceRecord)
+
+	store.SaveObject(&models.ObjectMeta{
+		ID:             "obj_active",
+		WorkspaceID:    sessionRecord.WorkspaceID,
+		SessionID:      sessionRecord.ID,
+		DatasetID:      workspaceRecord.DatasetID,
+		Label:          "pbmc3k",
+		BackendRef:     "py:test:adata_1",
+		Kind:           models.ObjectRawDataset,
+		NObs:           2638,
+		NVars:          1838,
+		State:          models.ObjectResident,
+		InMemory:       true,
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	})
+
+	job, _, err := service.SubmitMessage(context.Background(), sessionRecord.ID, "查看当前数据集")
+	if err != nil {
+		t.Fatalf("submit first message: %v", err)
+	}
+	if job == nil {
+		t.Fatalf("expected running job to be created")
+	}
+
+	select {
+	case <-runtime.started:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for runtime execution to start")
+	}
+
+	if _, _, err := service.SubmitMessage(context.Background(), sessionRecord.ID, "再来一个任务"); err == nil {
+		t.Fatalf("expected concurrent submit to be rejected")
+	} else if !strings.Contains(err.Error(), "当前已有任务正在运行") {
+		t.Fatalf("unexpected concurrent submit error: %v", err)
+	}
+
+	if _, _, err := service.CancelJob(context.Background(), job.ID); err != nil {
+		t.Fatalf("cancel job: %v", err)
+	}
+
+	for range 100 {
+		currentJob, ok := store.GetJob(job.ID)
+		if ok && currentJob.Status == models.JobCanceled {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	currentJob, _ := store.GetJob(job.ID)
+	t.Fatalf("expected job to become canceled, got %+v", currentJob)
+}
+
+func TestCancelJobAddsCanceledAssistantMessage(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	runtime := &blockingRuntime{started: make(chan struct{})}
+	planner := &scriptedPlanner{
+		mode: "llm",
+		plans: []models.Plan{
+			{
+				Steps: []models.PlanStep{
+					{
+						ID:             "step_1",
+						Skill:          "inspect_dataset",
+						TargetObjectID: "$active",
+					},
+				},
+			},
+		},
+	}
+	service := NewServiceWithComponents(store, registry, runtime, planner, NewFakeEvaluator(), NewNoopAnswerer(), t.TempDir())
+
+	sessionRecord := store.CreateSession("test")
+	now := time.Now().UTC()
+	sessionRecord.ActiveObjectID = "obj_active"
+	store.SaveSession(sessionRecord)
+
+	workspaceRecord, ok := store.GetWorkspace(sessionRecord.WorkspaceID)
+	if !ok {
+		t.Fatalf("expected workspace to exist")
+	}
+	workspaceRecord.ActiveObjectID = "obj_active"
+	store.SaveWorkspace(workspaceRecord)
+
+	store.SaveObject(&models.ObjectMeta{
+		ID:             "obj_active",
+		WorkspaceID:    sessionRecord.WorkspaceID,
+		SessionID:      sessionRecord.ID,
+		DatasetID:      workspaceRecord.DatasetID,
+		Label:          "pbmc3k",
+		BackendRef:     "py:test:adata_1",
+		Kind:           models.ObjectRawDataset,
+		NObs:           2638,
+		NVars:          1838,
+		State:          models.ObjectResident,
+		InMemory:       true,
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	})
+
+	job, _, err := service.SubmitMessage(context.Background(), sessionRecord.ID, "查看当前数据集")
+	if err != nil {
+		t.Fatalf("submit message: %v", err)
+	}
+
+	select {
+	case <-runtime.started:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for runtime execution to start")
+	}
+
+	if _, _, err := service.CancelJob(context.Background(), job.ID); err != nil {
+		t.Fatalf("cancel job: %v", err)
+	}
+
+	for range 100 {
+		snapshot, err := store.Snapshot(sessionRecord.ID)
+		if err != nil {
+			t.Fatalf("snapshot: %v", err)
+		}
+		if len(snapshot.Messages) > 0 {
+			lastMessage := snapshot.Messages[len(snapshot.Messages)-1]
+			if lastMessage.JobID == job.ID && lastMessage.Role == models.MessageAssistant && lastMessage.Content == "当前任务已停止。" {
+				if snapshot.Jobs[len(snapshot.Jobs)-1].Status != models.JobCanceled {
+					t.Fatalf("expected canceled job status, got %+v", snapshot.Jobs[len(snapshot.Jobs)-1])
+				}
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	snapshot, _ := store.Snapshot(sessionRecord.ID)
+	t.Fatalf("expected canceled assistant message, got %+v", snapshot.Messages)
 }
 
 func TestBuildExecutablePlanInheritsMissingLegendFromRecentPlotContext(t *testing.T) {

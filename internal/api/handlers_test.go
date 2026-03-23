@@ -28,6 +28,18 @@ type stubAnswerer struct {
 	response     *orchestrator.ResponseComposeResult
 }
 
+type singleStepPlanner struct {
+	plan models.Plan
+}
+
+func (p singleStepPlanner) Plan(context.Context, orchestrator.PlanningRequest) (models.Plan, error) {
+	return p.plan, nil
+}
+
+func (p singleStepPlanner) Mode() string {
+	return "llm"
+}
+
 func (a *stubAnswerer) BuildDirectAnswer(_ context.Context, _ orchestrator.PlanningRequest) (string, bool, error) {
 	if a.directErr != nil {
 		return "", false, a.directErr
@@ -146,6 +158,107 @@ func TestMessageExecutionFlow(t *testing.T) {
 	}
 	if finalSnapshot.Messages[len(finalSnapshot.Messages)-1].Role != models.MessageAssistant {
 		t.Fatalf("expected final message to be assistant")
+	}
+}
+
+func TestCancelJobEndpoint(t *testing.T) {
+	runtimeService := &cancelableFakeRuntime{
+		fakeRuntime: fakeRuntime{},
+		started:     make(chan struct{}),
+	}
+	service := newTestService(t, singleStepPlanner{
+		plan: models.Plan{
+			Steps: []models.PlanStep{
+				{
+					ID:             "step_1",
+					Skill:          "inspect_dataset",
+					TargetObjectID: "$active",
+				},
+			},
+		},
+	}, runtimeService)
+	handler := NewHandler(service, docsPath())
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	createSessionRecorder := httptest.NewRecorder()
+	createSessionRequest := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewBufferString(`{"label":"cancel test"}`))
+	createSessionRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(createSessionRecorder, createSessionRequest)
+
+	if createSessionRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", createSessionRecorder.Code, createSessionRecorder.Body.String())
+	}
+
+	var sessionSnapshot models.SessionSnapshot
+	if err := json.Unmarshal(createSessionRecorder.Body.Bytes(), &sessionSnapshot); err != nil {
+		t.Fatalf("decode session snapshot: %v", err)
+	}
+	sessionID := sessionSnapshot.Session.ID
+
+	messageRecorder := httptest.NewRecorder()
+	messageRequest := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewBufferString(`{"session_id":"`+sessionID+`","message":"查看当前数据集概览"}`))
+	messageRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(messageRecorder, messageRequest)
+
+	if messageRecorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", messageRecorder.Code, messageRecorder.Body.String())
+	}
+
+	var submitResponse struct {
+		Job      *models.Job            `json:"job"`
+		Snapshot models.SessionSnapshot `json:"snapshot"`
+	}
+	if err := json.Unmarshal(messageRecorder.Body.Bytes(), &submitResponse); err != nil {
+		t.Fatalf("decode submit response: %v", err)
+	}
+	if submitResponse.Job == nil {
+		t.Fatalf("expected submitted job in response")
+	}
+
+	select {
+	case <-runtimeService.started:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for runtime execution to start")
+	}
+
+	cancelRecorder := httptest.NewRecorder()
+	cancelRequest := httptest.NewRequest(http.MethodPost, "/api/jobs/"+submitResponse.Job.ID+"/cancel", nil)
+	mux.ServeHTTP(cancelRecorder, cancelRequest)
+
+	if cancelRecorder.Code != http.StatusAccepted && cancelRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 202 or 200, got %d: %s", cancelRecorder.Code, cancelRecorder.Body.String())
+	}
+
+	var finalSnapshot models.SessionSnapshot
+	var canceled bool
+	for range 100 {
+		time.Sleep(10 * time.Millisecond)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/sessions/"+sessionID, nil)
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected 200 on snapshot read, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+
+		if err := json.Unmarshal(recorder.Body.Bytes(), &finalSnapshot); err != nil {
+			t.Fatalf("decode final snapshot: %v", err)
+		}
+		if len(finalSnapshot.Jobs) > 0 && finalSnapshot.Jobs[0].Status == models.JobCanceled {
+			canceled = true
+			break
+		}
+	}
+
+	if !canceled {
+		t.Fatalf("job did not cancel: %+v", finalSnapshot.Jobs)
+	}
+	if len(finalSnapshot.Messages) == 0 {
+		t.Fatalf("expected assistant cancellation message")
+	}
+	lastMessage := finalSnapshot.Messages[len(finalSnapshot.Messages)-1]
+	if lastMessage.Role != models.MessageAssistant || lastMessage.Content != "当前任务已停止。" {
+		t.Fatalf("unexpected cancellation message: %+v", lastMessage)
 	}
 }
 
@@ -607,6 +720,11 @@ func skillsRegistryPath() string {
 
 type fakeRuntime struct{}
 
+type cancelableFakeRuntime struct {
+	fakeRuntime
+	started chan struct{}
+}
+
 func (f *fakeRuntime) Health(context.Context) error {
 	return nil
 }
@@ -732,4 +850,16 @@ func (f *fakeRuntime) Execute(_ context.Context, payload runtimeclient.ExecuteRe
 			Summary: "No-op",
 		}, nil
 	}
+}
+
+func (f *cancelableFakeRuntime) Execute(ctx context.Context, payload runtimeclient.ExecuteRequest) (*runtimeclient.ExecuteResponse, error) {
+	if f.started != nil {
+		select {
+		case <-f.started:
+		default:
+			close(f.started)
+		}
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
 }

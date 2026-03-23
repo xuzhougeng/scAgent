@@ -232,6 +232,11 @@
   border-color: rgba(197, 136, 49, 0.2);
 }
 
+.message-job-card.canceled {
+  background: rgba(245, 247, 245, 0.86);
+  border-color: rgba(84, 96, 86, 0.16);
+}
+
 .message-job-head,
 .message-step-head,
 .message-artifact-head {
@@ -502,6 +507,15 @@
   color: white;
   font: inherit;
   cursor: pointer;
+}
+
+.composer button[disabled] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.composer button.is-stop {
+  background: linear-gradient(135deg, #b45a44, #8d3522);
 }
 
 .artifact-card {

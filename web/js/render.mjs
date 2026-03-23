@@ -868,7 +868,14 @@ async function buildJobResultMarkup(job, assistantMessage) {
   const artifactCards = await Promise.all(
     relatedArtifacts.map((artifact) => buildArtifactCardMarkup(artifact, "chat")),
   );
-  const cardClass = job.status === "failed" ? "failed" : job.status === "incomplete" ? "incomplete" : "done";
+  const cardClass =
+    job.status === "failed"
+      ? "failed"
+      : job.status === "incomplete"
+        ? "incomplete"
+        : job.status === "canceled"
+          ? "canceled"
+          : "done";
   const phaseMarkup = buildJobPhasesMarkup(job);
   const showInlinePhases = job.status === "failed";
   const detailMarkup = buildJobExecutionDetailsMarkup(job, {

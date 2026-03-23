@@ -121,6 +121,15 @@ func (a *NoopAnswerer) BuildInvestigationResponse(_ context.Context, request Res
 			Answer:  message,
 			Summary: strings.TrimSpace(job.Summary),
 		}, nil
+	case models.JobCanceled:
+		message := bestResponseSummary(job)
+		if message == "" {
+			message = "当前任务已停止。"
+		}
+		return &ResponseComposeResult{
+			Answer:  message,
+			Summary: strings.TrimSpace(job.Summary),
+		}, nil
 	default:
 		answer := composeAnswerFromEvidence(request.Message, job)
 		if answer == "" {
