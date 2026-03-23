@@ -14,6 +14,7 @@ from .diagnostics import (
     dedupe_list,
     default_custom_analysis_summary,
     describe_annotation_summary,
+    failing_package_checks,
     format_list_zh,
     format_object_state_zh,
     inspect_h5ad_metadata,
@@ -131,3 +132,6 @@ class RuntimeState(RuntimeObjectStore, SkillRuntimeSupport):
     @staticmethod
     def inspect_h5ad_metadata(path: Path) -> dict[str, Any]:
         return inspect_h5ad_metadata(path)
+
+    def failing_package_checks(self) -> list[dict[str, Any]]:
+        return failing_package_checks(self.environment_report)

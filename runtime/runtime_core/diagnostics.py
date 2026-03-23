@@ -104,6 +104,25 @@ def build_environment_report(sample_path: Path) -> dict[str, Any]:
     }
 
 
+def failing_package_checks(report: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = report.get("environment_checks") or []
+    if not isinstance(checks, list):
+        return []
+
+    package_names = {label for label, _, _ in ENVIRONMENT_PACKAGES}
+    failures: list[dict[str, Any]] = []
+    for item in checks:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if name not in package_names:
+            continue
+        if bool(item.get("ok")):
+            continue
+        failures.append(item)
+    return failures
+
+
 def inspect_sample_h5ad(path: Path) -> dict[str, Any]:
     metadata = inspect_h5ad_metadata(path)
     n_obs, n_vars = inspect_h5ad_shape(path)

@@ -28,7 +28,26 @@ STATE = ManagedRuntimeState(LOGGER)
 RequestHandler = build_request_handler(STATE, LOGGER)
 
 
+def ensure_runtime_environment() -> None:
+    if os.environ.get("SCAGENT_ALLOW_UNHEALTHY_ENV", "") == "1":
+        return
+
+    failures = STATE.failing_package_checks()
+    if not failures:
+        return
+
+    details = "; ".join(f"{item['name']}: {item.get('detail', '')}" for item in failures)
+    raise RuntimeError(
+        "运行时依赖环境不完整，无法安全启动。"
+        f" 当前失败项：{details}。"
+        " 请优先使用 `pixi install && pixi run doctor` 修复环境，"
+        "并通过 `./start.sh` 或 `pixi run runtime` 启动。"
+        " 若确需跳过该检查，可设置 SCAGENT_ALLOW_UNHEALTHY_ENV=1。"
+    )
+
+
 def main() -> None:
+    ensure_runtime_environment()
     host = os.environ.get("SCAGENT_RUNTIME_HOST", "127.0.0.1")
     port = int(os.environ.get("SCAGENT_RUNTIME_PORT", "8081"))
     server = ThreadingHTTPServer((host, port), RequestHandler)
