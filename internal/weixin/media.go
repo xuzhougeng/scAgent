@@ -156,7 +156,7 @@ func (c *Client) SendUploadedImage(ctx context.Context, toUserID string, uploade
 					ImageItem: &ImageItem{
 						Media: &CDNMedia{
 							EncryptQueryParam: uploaded.DownloadEncryptedQueryParam,
-							AESKey:            base64.StdEncoding.EncodeToString(uploaded.AESKey),
+							AESKey:            base64.StdEncoding.EncodeToString([]byte(hex.EncodeToString(uploaded.AESKey))),
 							EncryptType:       mediaEncryptTypeBundle,
 						},
 						MidSize: uploaded.FileSizeCiphertext,
