@@ -44,7 +44,7 @@ export const quickActions = [
   { label: "查看数据集", prompt: "查看当前数据集概览" },
   { label: "常规预处理", prompt: "完成常规的数据预处理" },
   { label: "绘制 UMAP", prompt: "绘制当前对象的 UMAP 图" },
-  { label: "筛选 cortex 细胞", prompt: "把 cortex 细胞筛选出来" },
+  { label: "筛选 T 细胞", prompt: "把 T 细胞筛选出来" },
   { label: "重新聚类", prompt: "对当前对象重新聚类" },
   { label: "查找 marker", prompt: "查找当前对象的 marker 基因" },
   { label: "导出 h5ad", prompt: "导出当前对象为 h5ad" },

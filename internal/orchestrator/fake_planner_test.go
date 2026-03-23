@@ -73,7 +73,7 @@ func TestFakePlannerSubsetChainsFromPreviousStep(t *testing.T) {
 	planner := NewFakePlanner()
 
 	plan, err := planner.Plan(context.Background(), PlanningRequest{
-		Message: "完成常规的数据预处理后把 cortex 细胞筛出来",
+		Message: "完成常规的数据预处理后把 T 细胞筛出来",
 	})
 	if err != nil {
 		t.Fatalf("run fake planner: %v", err)
@@ -91,6 +91,29 @@ func TestFakePlannerSubsetChainsFromPreviousStep(t *testing.T) {
 	}
 	if last.ID != stepID(len(plan.Steps)) {
 		t.Fatalf("unexpected subset step id: got %q want %q", last.ID, stepID(len(plan.Steps)))
+	}
+	if last.Params["value"] != defaultSubsetCellType {
+		t.Fatalf("expected default subset value %q, got %+v", defaultSubsetCellType, last.Params)
+	}
+}
+
+func TestFakePlannerPreservesExplicitCortexSubsetRequests(t *testing.T) {
+	planner := NewFakePlanner()
+
+	plan, err := planner.Plan(context.Background(), PlanningRequest{
+		Message: "把 cortex 细胞筛出来",
+	})
+	if err != nil {
+		t.Fatalf("run fake planner: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("unexpected steps: %+v", plan.Steps)
+	}
+	if plan.Steps[0].Skill != "subset_cells" {
+		t.Fatalf("expected subset_cells, got %+v", plan.Steps)
+	}
+	if plan.Steps[0].Params["value"] != "cortex" {
+		t.Fatalf("expected explicit cortex request to be preserved, got %+v", plan.Steps[0].Params)
 	}
 }
 

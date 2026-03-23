@@ -79,7 +79,7 @@ func TestFakePlanEndpoint(t *testing.T) {
 	handler.Register(mux)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/fake/plan", bytes.NewBufferString(`{"message":"把 cortex 细胞拿出来重新聚类，然后画一下 marker"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/fake/plan", bytes.NewBufferString(`{"message":"把 T 细胞拿出来重新聚类，然后画一下 marker"}`))
 	request.Header.Set("Content-Type", "application/json")
 
 	mux.ServeHTTP(recorder, request)
@@ -129,7 +129,7 @@ func TestMessageExecutionFlow(t *testing.T) {
 	sessionID := sessionSnapshot.Session.ID
 
 	messageRecorder := httptest.NewRecorder()
-	messageRequest := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewBufferString(`{"session_id":"`+sessionID+`","message":"把 cortex 细胞拿出来重新聚类，然后画一下 marker"}`))
+	messageRequest := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewBufferString(`{"session_id":"`+sessionID+`","message":"把 T 细胞拿出来重新聚类，然后画一下 marker"}`))
 	messageRequest.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(messageRecorder, messageRequest)
 
@@ -466,7 +466,7 @@ func TestWorkspaceConversationSeesSharedObjectsAndArtifacts(t *testing.T) {
 	messageRequest := httptest.NewRequest(
 		http.MethodPost,
 		"/api/messages",
-		bytes.NewBufferString(`{"session_id":"`+firstSnapshot.Session.ID+`","message":"把 cortex 细胞拿出来重新聚类，然后画一下 marker"}`),
+		bytes.NewBufferString(`{"session_id":"`+firstSnapshot.Session.ID+`","message":"把 T 细胞拿出来重新聚类，然后画一下 marker"}`),
 	)
 	messageRequest.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(messageRecorder, messageRequest)
@@ -947,40 +947,40 @@ func (f *fakeRuntime) Execute(_ context.Context, payload runtimeclient.ExecuteRe
 	switch payload.Skill {
 	case "subset_cells":
 		return &runtimeclient.ExecuteResponse{
-			Summary: "Created subset_cortex from pbmc3k with 1160 cells.",
+			Summary: "Created subset_t_cells from pbmc3k with 1160 cells.",
 			Object: &runtimeclient.ObjectDescriptor{
 				BackendRef:       "py:" + payload.SessionID + ":adata_2",
 				Kind:             models.ObjectSubset,
-				Label:            "subset_cortex",
+				Label:            "subset_t_cells",
 				NObs:             1160,
 				NVars:            1838,
 				State:            models.ObjectResident,
 				InMemory:         true,
-				MaterializedPath: filepath.Join(payload.WorkspaceRoot, "objects", "subset_cortex.h5ad"),
+				MaterializedPath: filepath.Join(payload.WorkspaceRoot, "objects", "subset_t_cells.h5ad"),
 			},
 		}, nil
 	case "recluster":
 		return &runtimeclient.ExecuteResponse{
-			Summary: "Reclustered subset_cortex at resolution 0.6.",
+			Summary: "Reclustered subset_t_cells at resolution 0.6.",
 			Object: &runtimeclient.ObjectDescriptor{
 				BackendRef:       "py:" + payload.SessionID + ":adata_3",
 				Kind:             models.ObjectReclustered,
-				Label:            "reclustered_subset_cortex",
+				Label:            "reclustered_subset_t_cells",
 				NObs:             1160,
 				NVars:            1838,
 				State:            models.ObjectResident,
 				InMemory:         true,
-				MaterializedPath: filepath.Join(payload.WorkspaceRoot, "objects", "reclustered_subset_cortex.h5ad"),
+				MaterializedPath: filepath.Join(payload.WorkspaceRoot, "objects", "reclustered_subset_t_cells.h5ad"),
 			},
 		}, nil
 	case "find_markers":
 		return &runtimeclient.ExecuteResponse{
-			Summary: "Marker table generated for reclustered_subset_cortex.",
+			Summary: "Marker table generated for reclustered_subset_t_cells.",
 			Artifacts: []runtimeclient.ArtifactDescriptor{
 				{
 					Kind:        models.ArtifactTable,
-					Title:       "Markers for reclustered_subset_cortex",
-					Path:        filepath.Join(payload.WorkspaceRoot, "artifacts", "markers_reclustered_subset_cortex.csv"),
+					Title:       "Markers for reclustered_subset_t_cells",
+					Path:        filepath.Join(payload.WorkspaceRoot, "artifacts", "markers_reclustered_subset_t_cells.csv"),
 					ContentType: "text/csv",
 					Summary:     "Top marker genes grouped by leiden cluster.",
 				},

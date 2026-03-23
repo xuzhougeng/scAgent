@@ -29,6 +29,8 @@ var englishCellTypePattern = regexp.MustCompile(`(?i)\b([a-z0-9][a-z0-9_+\- ]*ce
 var chineseCellTypePattern = regexp.MustCompile(`提取\s*([^\s,，。；;]+?)\s*细胞`)
 var geneTokenPattern = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9._-]{2,}\b`)
 
+const defaultSubsetCellType = "T cells"
+
 func NewFakePlanner() *FakePlanner {
 	return &FakePlanner{}
 }
@@ -87,11 +89,9 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 	}
 
 	if !wantsSubcluster && (strings.Contains(lower, "subset") || strings.Contains(request.Message, "提取") || strings.Contains(request.Message, "拿出来") || strings.Contains(request.Message, "筛") || strings.Contains(request.Message, "cortex") || cellTypeValue != "") {
-		value := "cortex"
+		value := defaultSubsetCellType
 		if cellTypeValue != "" {
 			value = cellTypeValue
-		} else if !strings.Contains(lower, "cortex") && !strings.Contains(request.Message, "cortex") {
-			value = "selected_group"
 		}
 		steps = append(steps, models.PlanStep{
 			ID:             stepID(len(steps) + 1),
@@ -288,6 +288,9 @@ func inferCellTypeValue(request PlanningRequest, message string) string {
 		if strings.Contains(strings.ToLower(message), strings.ToLower(candidate)) {
 			return candidate
 		}
+	}
+	if strings.Contains(strings.ToLower(message), "cortex") {
+		return "cortex"
 	}
 
 	if match := chineseCellTypePattern.FindStringSubmatch(message); len(match) > 1 {
