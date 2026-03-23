@@ -34,6 +34,7 @@ type PlanningRequest struct {
 	Workspace       *models.Workspace     `json:"workspace,omitempty"`
 	ActiveObject    *models.ObjectMeta    `json:"active_object,omitempty"`
 	Objects         []*models.ObjectMeta  `json:"objects,omitempty"`
+	InputArtifacts  []*models.Artifact    `json:"input_artifacts,omitempty"`
 	RecentMessages  []*models.Message     `json:"recent_messages,omitempty"`
 	RecentJobs      []*models.Job         `json:"recent_jobs,omitempty"`
 	RecentArtifacts []*models.Artifact    `json:"recent_artifacts,omitempty"`
@@ -458,7 +459,79 @@ func (s *Service) UploadH5AD(ctx context.Context, sessionID, filename string, co
 	return objectRecord, snapshot, nil
 }
 
+func (s *Service) RegisterExternalArtifact(ctx context.Context, sessionID string, kind models.ArtifactKind, filename, contentType, title, summary string, content io.Reader) (*models.Artifact, *models.SessionSnapshot, error) {
+	sessionRecord, ok := s.store.GetSession(sessionID)
+	if !ok {
+		return nil, nil, fmt.Errorf("未找到会话 %q", sessionID)
+	}
+	workspaceRecord, ok := s.store.GetWorkspace(sessionRecord.WorkspaceID)
+	if !ok {
+		return nil, nil, fmt.Errorf("未找到 workspace %q", sessionRecord.WorkspaceID)
+	}
+
+	safeName, err := sanitizeArtifactName(filename)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	workspaceRoot := s.workspaceRoot(sessionRecord.WorkspaceID)
+	artifactPath := filepath.Join(workspaceRoot, "artifacts", safeName)
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		return nil, nil, fmt.Errorf("create artifact directory: %w", err)
+	}
+
+	fileHandle, err := os.Create(artifactPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create artifact target: %w", err)
+	}
+	if _, err := io.Copy(fileHandle, content); err != nil {
+		_ = fileHandle.Close()
+		return nil, nil, fmt.Errorf("write artifact target: %w", err)
+	}
+	if err := fileHandle.Close(); err != nil {
+		return nil, nil, fmt.Errorf("close artifact target: %w", err)
+	}
+
+	now := time.Now().UTC()
+	record := &models.Artifact{
+		ID:          s.store.NextID("artifact"),
+		WorkspaceID: workspaceRecord.ID,
+		SessionID:   sessionRecord.ID,
+		ObjectID:    sessionRecord.ActiveObjectID,
+		Kind:        kind,
+		Title:       strings.TrimSpace(title),
+		Path:        artifactPath,
+		URL:         s.pathToURL(artifactPath),
+		ContentType: strings.TrimSpace(contentType),
+		Summary:     strings.TrimSpace(summary),
+		CreatedAt:   now,
+	}
+	if record.Title == "" {
+		record.Title = strings.TrimSuffix(filepath.Base(safeName), filepath.Ext(safeName))
+	}
+	s.store.SaveArtifact(record)
+
+	sessionRecord.UpdatedAt = now
+	sessionRecord.LastAccessedAt = now
+	s.store.SaveSession(sessionRecord)
+
+	workspaceRecord.UpdatedAt = now
+	workspaceRecord.LastAccessedAt = now
+	s.store.SaveWorkspace(workspaceRecord)
+
+	s.publishSnapshot(sessionID)
+	snapshot, err := s.store.Snapshot(sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return record, snapshot, nil
+}
+
 func (s *Service) SubmitMessage(ctx context.Context, sessionID, content string) (*models.Job, *models.SessionSnapshot, error) {
+	return s.SubmitMessageWithArtifacts(ctx, sessionID, content, nil)
+}
+
+func (s *Service) SubmitMessageWithArtifacts(ctx context.Context, sessionID, content string, inputArtifacts []*models.Artifact) (*models.Job, *models.SessionSnapshot, error) {
 	sessionRecord, ok := s.store.GetSession(sessionID)
 	if !ok {
 		return nil, nil, fmt.Errorf("未找到会话 %q", sessionID)
@@ -479,7 +552,7 @@ func (s *Service) SubmitMessage(ctx context.Context, sessionID, content string) 
 	sessionRecord.LastAccessedAt = now
 	s.store.SaveSession(sessionRecord)
 
-	planningRequest, err := s.buildPlanningRequest(sessionRecord, trimmedContent)
+	planningRequest, err := s.buildPlanningRequestWithInputs(sessionRecord, trimmedContent, inputArtifacts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -516,7 +589,7 @@ func (s *Service) SubmitMessage(ctx context.Context, sessionID, content string) 
 	s.publishJob(sessionID, job.ID)
 	s.publishSnapshot(sessionID)
 
-	go s.runJob(context.Background(), sessionID, job.ID, trimmedContent)
+	go s.runJob(context.Background(), sessionID, job.ID, trimmedContent, inputArtifacts)
 
 	snapshot, err := s.store.Snapshot(sessionID)
 	if err != nil {
@@ -525,7 +598,7 @@ func (s *Service) SubmitMessage(ctx context.Context, sessionID, content string) 
 	return job, snapshot, nil
 }
 
-func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) {
+func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, inputArtifacts []*models.Artifact) {
 	job, ok := s.store.GetJob(jobID)
 	if !ok {
 		return
@@ -547,7 +620,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 	s.store.SaveJob(job)
 	s.publishJob(sessionID, jobID)
 
-	planningRequest, err := s.buildPlanningRequest(sessionRecord, message)
+	planningRequest, err := s.buildPlanningRequestWithInputs(sessionRecord, message, inputArtifacts)
 	if err != nil {
 		s.failJob(sessionID, jobID, fmt.Errorf("规划上下文构建失败：%w", err))
 		return
@@ -708,7 +781,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		workspaceRecord.LastAccessedAt = finishedAt
 		s.store.SaveWorkspace(workspaceRecord)
 
-		evaluation, evalErr := s.evaluateCompletion(ctx, sessionRecord, job, message)
+		evaluation, evalErr := s.evaluateCompletion(ctx, sessionRecord, job, message, inputArtifacts)
 		switch {
 		case evalErr != nil:
 			lastIncompleteReason = ""
@@ -756,7 +829,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 		}
 
 		remainingPlan := clonePlanWithSteps(pendingPlan.Steps[1:])
-		replannedPlan, replanErr := s.replanRemainingSteps(ctx, sessionRecord, job, message)
+		replannedPlan, replanErr := s.replanRemainingSteps(ctx, sessionRecord, job, message, inputArtifacts)
 		switch {
 		case replanErr == nil && len(replannedPlan.Steps) > 0:
 			pendingPlan = replannedPlan
@@ -828,7 +901,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 	completeJobPhase(job, models.JobPhaseInvestigate, defaultPhaseCompletionSummary(job))
 	startJobPhase(job, models.JobPhaseRespond, "正在确认收集结果并生成最终回答。", nil)
 
-	responseRequest, responseErr := s.buildResponseComposeRequest(sessionRecord, message, job)
+	responseRequest, responseErr := s.buildResponseComposeRequest(sessionRecord, message, job, inputArtifacts)
 	var composed *ResponseComposeResult
 	if responseErr == nil && s.answerer != nil {
 		composed, responseErr = s.answerer.BuildInvestigationResponse(ctx, responseRequest)
@@ -865,19 +938,19 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string) 
 	s.publishSnapshot(sessionID)
 }
 
-func (s *Service) evaluateCompletion(ctx context.Context, sessionRecord *models.Session, job *models.Job, message string) (*CompletionEvaluation, error) {
+func (s *Service) evaluateCompletion(ctx context.Context, sessionRecord *models.Session, job *models.Job, message string, inputArtifacts []*models.Artifact) (*CompletionEvaluation, error) {
 	if s == nil || s.evaluator == nil {
 		return nil, nil
 	}
-	request, err := s.buildEvaluationRequest(sessionRecord, message, job)
+	request, err := s.buildEvaluationRequest(sessionRecord, message, job, inputArtifacts)
 	if err != nil {
 		return nil, err
 	}
 	return s.evaluator.Evaluate(ctx, request)
 }
 
-func (s *Service) replanRemainingSteps(ctx context.Context, sessionRecord *models.Session, job *models.Job, message string) (models.Plan, error) {
-	request, err := s.buildExecutionPlanningRequest(sessionRecord, message, job)
+func (s *Service) replanRemainingSteps(ctx context.Context, sessionRecord *models.Session, job *models.Job, message string, inputArtifacts []*models.Artifact) (models.Plan, error) {
+	request, err := s.buildExecutionPlanningRequest(sessionRecord, message, job, inputArtifacts)
 	if err != nil {
 		return models.Plan{}, err
 	}
@@ -1255,6 +1328,10 @@ func objectID(object *models.ObjectMeta) string {
 }
 
 func (s *Service) buildPlanningRequest(sessionRecord *models.Session, message string) (PlanningRequest, error) {
+	return s.buildPlanningRequestWithInputs(sessionRecord, message, nil)
+}
+
+func (s *Service) buildPlanningRequestWithInputs(sessionRecord *models.Session, message string, inputArtifacts []*models.Artifact) (PlanningRequest, error) {
 	snapshot, err := s.store.Snapshot(sessionRecord.ID)
 	if err != nil {
 		return PlanningRequest{}, err
@@ -1274,6 +1351,7 @@ func (s *Service) buildPlanningRequest(sessionRecord *models.Session, message st
 		Workspace:       snapshot.Workspace,
 		ActiveObject:    activeObject,
 		Objects:         snapshot.Objects,
+		InputArtifacts:  inputArtifacts,
 		RecentMessages:  trimRecentMessages(snapshot.Messages, message, 6),
 		RecentJobs:      trimRecentJobs(snapshot.Jobs, 3),
 		RecentArtifacts: trimRecentArtifacts(snapshot.Artifacts, 4),
@@ -1281,8 +1359,8 @@ func (s *Service) buildPlanningRequest(sessionRecord *models.Session, message st
 	}, nil
 }
 
-func (s *Service) buildExecutionPlanningRequest(sessionRecord *models.Session, message string, currentJob *models.Job) (PlanningRequest, error) {
-	request, err := s.buildPlanningRequest(sessionRecord, message)
+func (s *Service) buildExecutionPlanningRequest(sessionRecord *models.Session, message string, currentJob *models.Job, inputArtifacts []*models.Artifact) (PlanningRequest, error) {
+	request, err := s.buildPlanningRequestWithInputs(sessionRecord, message, inputArtifacts)
 	if err != nil {
 		return PlanningRequest{}, err
 	}
@@ -1293,8 +1371,8 @@ func (s *Service) buildExecutionPlanningRequest(sessionRecord *models.Session, m
 	return request, nil
 }
 
-func (s *Service) buildEvaluationRequest(sessionRecord *models.Session, message string, currentJob *models.Job) (EvaluationRequest, error) {
-	request, err := s.buildExecutionPlanningRequest(sessionRecord, message, currentJob)
+func (s *Service) buildEvaluationRequest(sessionRecord *models.Session, message string, currentJob *models.Job, inputArtifacts []*models.Artifact) (EvaluationRequest, error) {
+	request, err := s.buildExecutionPlanningRequest(sessionRecord, message, currentJob, inputArtifacts)
 	if err != nil {
 		return EvaluationRequest{}, err
 	}
@@ -1304,6 +1382,7 @@ func (s *Service) buildEvaluationRequest(sessionRecord *models.Session, message 
 		Workspace:       request.Workspace,
 		ActiveObject:    request.ActiveObject,
 		Objects:         request.Objects,
+		InputArtifacts:  request.InputArtifacts,
 		RecentMessages:  request.RecentMessages,
 		RecentJobs:      request.RecentJobs,
 		RecentArtifacts: request.RecentArtifacts,
@@ -1312,8 +1391,8 @@ func (s *Service) buildEvaluationRequest(sessionRecord *models.Session, message 
 	}, nil
 }
 
-func (s *Service) buildResponseComposeRequest(sessionRecord *models.Session, message string, currentJob *models.Job) (ResponseComposeRequest, error) {
-	request, err := s.buildExecutionPlanningRequest(sessionRecord, message, currentJob)
+func (s *Service) buildResponseComposeRequest(sessionRecord *models.Session, message string, currentJob *models.Job, inputArtifacts []*models.Artifact) (ResponseComposeRequest, error) {
+	request, err := s.buildExecutionPlanningRequest(sessionRecord, message, currentJob, inputArtifacts)
 	if err != nil {
 		return ResponseComposeRequest{}, err
 	}
@@ -1323,6 +1402,7 @@ func (s *Service) buildResponseComposeRequest(sessionRecord *models.Session, mes
 		Workspace:       request.Workspace,
 		ActiveObject:    request.ActiveObject,
 		Objects:         request.Objects,
+		InputArtifacts:  request.InputArtifacts,
 		RecentMessages:  request.RecentMessages,
 		RecentJobs:      request.RecentJobs,
 		RecentArtifacts: request.RecentArtifacts,
@@ -1347,6 +1427,19 @@ func sanitizeUploadName(name string) (string, error) {
 	safe := uploadNamePattern.ReplaceAllString(base, "_")
 	if safe == "" {
 		return "", fmt.Errorf("上传文件名不合法")
+	}
+	return safe, nil
+}
+
+func sanitizeArtifactName(name string) (string, error) {
+	base := filepath.Base(strings.TrimSpace(name))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return "", fmt.Errorf("artifact 文件名不合法")
+	}
+
+	safe := uploadNamePattern.ReplaceAllString(base, "_")
+	if safe == "" {
+		return "", fmt.Errorf("artifact 文件名不合法")
 	}
 	return safe, nil
 }

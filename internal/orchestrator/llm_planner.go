@@ -176,8 +176,12 @@ func (p *LLMPlanner) buildRequest(requestPayload PlanningRequest) map[string]any
 				"content": p.instructions(requestPayload),
 			},
 			{
-				"role":    "user",
-				"content": requestPayload.Message,
+				"role": "user",
+				"content": buildUserInputContent(
+					requestPayload.Message,
+					requestPayload.InputArtifacts,
+					requestPayload.RecentArtifacts,
+				),
 			},
 		},
 		"text": map[string]any{
@@ -209,6 +213,7 @@ func (p *LLMPlanner) instructions(requestPayload PlanningRequest) string {
 		"If the user provides explicit plotting kwargs such as legend_loc='on data' or point_size=12, copy them into params when the selected skill supports them.",
 		"If the user asks to isolate a cell type or annotation group and then visualize it, prefer subset_cells followed by plot_umap instead of run_python_analysis whenever the request can be expressed with obs_field/op/value.",
 		"Treat recent_messages, recent_jobs, and recent_artifacts as conversation context for follow-up requests such as '把这个图改一下' or '把图例加上'.",
+		"The current user turn may include attached images; use them as part of the user's request when relevant.",
 		"Use working_memory as the compact source of ongoing session context when recent history is truncated.",
 		"For follow-up edits to an existing plot or artifact, preserve the most recent matching step params and metadata unless the user explicitly asks to change them.",
 		"When a step relies on working_memory, record the specific memory keys or items it used in memory_refs.",
@@ -441,6 +446,15 @@ func formatPlanningContext(request PlanningRequest) []string {
 		lines = append(lines, "- objects:")
 		for _, object := range request.Objects {
 			lines = append(lines, "  "+formatObjectContext(object))
+		}
+	}
+
+	if len(request.InputArtifacts) == 0 {
+		lines = append(lines, "- input_artifacts=none")
+	} else {
+		lines = append(lines, "- input_artifacts:")
+		for _, artifact := range request.InputArtifacts {
+			lines = append(lines, "  "+formatArtifactContext(artifact))
 		}
 	}
 

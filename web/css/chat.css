@@ -145,6 +145,57 @@
   line-height: 1.5;
 }
 
+.message-table-block {
+  display: grid;
+  gap: 8px;
+}
+
+.message-table-wrap {
+  overflow: auto;
+  border: 1px solid rgba(61, 107, 75, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.message-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.message-table th,
+.message-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(61, 107, 75, 0.1);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.message-table th {
+  background: rgba(223, 233, 216, 0.56);
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+.message-table tbody tr:nth-child(even) td {
+  background: rgba(246, 250, 242, 0.72);
+}
+
+.message-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.message-table-empty {
+  color: var(--muted);
+}
+
+.message-table-note {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
 .message-detail {
   margin-top: 12px;
 }
@@ -422,6 +473,11 @@
   color: #eff8f0;
   font-family: var(--font-mono);
   font-size: 0.83rem;
+}
+
+.artifact-text-preview {
+  display: grid;
+  gap: 12px;
 }
 
 .artifact-head {

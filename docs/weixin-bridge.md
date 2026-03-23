@@ -2,7 +2,7 @@
 
 ## 概述
 
-scAgent 内置微信桥接功能，基于腾讯 iLink Bot 协议（纯 Go 实现，无 Node.js 依赖），用户在微信中发送分析请求，系统返回文字结果。
+scAgent 内置微信桥接功能，基于腾讯 iLink Bot 协议（纯 Go 实现，无 Node.js 依赖），用户在微信中发送分析请求，系统返回文字结果；若分析生成了 plot artifact，还会直接回传图片。
 
 iLink 是腾讯通过 [OpenClaw](https://docs.openclaw.ai) 框架正式开放的微信个人 Bot API，接入域名 `ilinkai.weixin.qq.com`，有《微信ClawBot功能使用条款》法律文件背书，非灰色协议。
 
@@ -98,8 +98,16 @@ Go 版本直接嵌入控制平面进程：
 2. 新用户自动加入最近访问的 workspace（复用已有数据）
 3. 用户发送文字 → 桥接调用 `SubmitMessage`
 4. 桥接通过 `Subscribe` 监听 job 事件
-5. job 完成后，提取 assistant 回复发回微信
-6. 回复时携带 `context_token`，确保消息关联到正确的对话窗口
+5. 若消息里带文件，桥接会先从 CDN 下载并解密，再按文件类型分类处理
+6. `h5ad` 文件会保存为会话 artifact，作为后续主流程里“转换 / 导入”任务的锚点；桥接层本身不会直接载入运行时
+7. `csv/tsv` 文件会保存为会话 artifact，并生成轻量表格摘要（行数、列数、前 10 行、前 5 列、列名识别）提供给模型
+8. job 完成后，提取 assistant 回复；若有 plot artifact，则继续上传 CDN 并回传图片
+9. 回复时携带 `context_token`，确保消息关联到正确的对话窗口
+
+当前实现中：
+- 收到 `h5ad` 文件时，会将文件保存到当前 workspace 的 artifact 目录，并把它作为后续数据转换 / 导入步骤的锚点提供给模型，不会在桥接层直接改写当前会话状态。
+- 收到 `csv/tsv` 文件时，会将文件保存到当前 workspace 的 artifact 目录，并抽取轻量摘要给模型，默认只看前 10 行、前 5 列，并尽量识别首行列名，适合 marker 基因列表、表格筛选等交互。
+- 回复时会先发送文字摘要，再按生成顺序发送该 job 的 plot PNG 图片。
 
 ## 会话与数据持久化
 
@@ -209,7 +217,7 @@ POST /ilink/bot/getupdates
 
 ### 媒体文件
 
-CDN 域名 `novac2c.cdn.weixin.qq.com/c2c`，所有媒体经 AES-128-ECB 加密。发送图片流程：生成随机 AES key → 加密文件 → `getuploadurl` 获取预签名 URL → PUT 到 CDN → `sendmessage` 带上 `aes_key`。
+CDN 域名 `novac2c.cdn.weixin.qq.com/c2c`，所有媒体经 AES-128-ECB 加密。发送图片流程：生成随机 AES key → 加密文件 → `getuploadurl` 获取预签名 URL → `POST` 到 CDN → `sendmessage` 带上 `aes_key`。
 
 ### 参考实现
 
@@ -239,8 +247,11 @@ scAgent 的 Go 实现参考了 [weixin-agent-sdk](https://github.com/wong2/weixi
 
 ## TODO
 
-- [ ] **图片发送**：将分析生成的 plot 图片发回微信（AES-128-ECB 加密 → `getuploadurl` → PUT CDN → `sendmessage`），参考 `cdn/aes-ecb.ts`
-- [ ] **图片接收**：解析用户发来的图片消息（CDN 下载 + AES 解密），支持以图片作为分析输入
+- [x] **图片发送**：分析生成的 plot 图片会发回微信（AES-128-ECB 加密 → `getuploadurl` → `POST` CDN → `sendmessage`），实现参考 `cdn/aes-ecb.ts`
+- [x] **h5ad 文件接收**：解析用户发来的 `.h5ad` 文件（CDN 下载 + AES 解密），并导入当前会话作为输入数据
+- [x] **CSV/TSV 文件接收**：解析用户发来的 `.csv` / `.tsv` 文件（CDN 下载 + AES 解密），保存为会话 artifact，并向模型提供行列规模和预览摘要
+- [ ] **图片接收**：暂缓。若后续恢复，将作为低优先级能力处理，不作为当前默认接口
+- [ ] **RDS/QS 文件支持**：后续考虑支持 `.rds` / `.qs` 的识别、转换和导入流程
 
 ---
 

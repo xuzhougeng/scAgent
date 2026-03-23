@@ -51,6 +51,7 @@ type ResponseComposeRequest struct {
 	Workspace       *models.Workspace     `json:"workspace,omitempty"`
 	ActiveObject    *models.ObjectMeta    `json:"active_object,omitempty"`
 	Objects         []*models.ObjectMeta  `json:"objects,omitempty"`
+	InputArtifacts  []*models.Artifact    `json:"input_artifacts,omitempty"`
 	RecentMessages  []*models.Message     `json:"recent_messages,omitempty"`
 	RecentJobs      []*models.Job         `json:"recent_jobs,omitempty"`
 	RecentArtifacts []*models.Artifact    `json:"recent_artifacts,omitempty"`
@@ -327,8 +328,12 @@ func (a *LLMAnswerer) buildRequest(requestPayload PlanningRequest) map[string]an
 				"content": a.instructions(requestPayload),
 			},
 			{
-				"role":    "user",
-				"content": requestPayload.Message,
+				"role": "user",
+				"content": buildUserInputContent(
+					requestPayload.Message,
+					requestPayload.InputArtifacts,
+					requestPayload.RecentArtifacts,
+				),
 			},
 		},
 		"text": map[string]any{
@@ -354,8 +359,12 @@ func (a *LLMAnswerer) buildResponseRequest(requestPayload ResponseComposeRequest
 				"content": a.responseInstructions(requestPayload),
 			},
 			{
-				"role":    "user",
-				"content": requestPayload.Message,
+				"role": "user",
+				"content": buildUserInputContent(
+					requestPayload.Message,
+					requestPayload.InputArtifacts,
+					requestPayload.RecentArtifacts,
+				),
 			},
 		},
 		"text": map[string]any{
@@ -376,6 +385,7 @@ func (a *LLMAnswerer) instructions(requestPayload PlanningRequest) string {
 		"Use full natural-language understanding. Do not rely on literal keyword matching or fixed templates.",
 		"Only choose decision=direct_answer when the answer is already grounded in the provided context and you are highly confident.",
 		"If the request requires new computation, data inspection not already reflected in context, or the intent is ambiguous, choose decision=needs_execution.",
+		"The current user turn may include attached images; use them when deciding whether a direct visual answer is possible.",
 		"When decision=direct_answer, answer concisely in the user's language and do not mention internal fields, planning, or hidden state.",
 		"When decision=needs_execution, leave answer as an empty string.",
 		"Return only valid JSON matching the supplied schema.",
@@ -390,6 +400,7 @@ func (a *LLMAnswerer) responseInstructions(requestPayload ResponseComposeRequest
 		"You are the scAgent responder.",
 		"Your task is to produce the final user-facing answer after the investigation phase has collected evidence.",
 		"Base the answer on current_job facts, metadata, artifacts, the active object, and recent context.",
+		"If the current request includes attached images, use them as additional evidence when they are relevant to the answer.",
 		"Prefer concrete collected evidence such as structured facts, scalar results, tables, generated objects, and artifacts over generic step summaries.",
 		"If the investigation is still incomplete, say clearly what is still missing instead of pretending the answer is known.",
 		"Do not mention internal step ids, job ids, or implementation details unless the user explicitly asked for them.",

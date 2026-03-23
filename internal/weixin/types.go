@@ -53,15 +53,36 @@ type WeixinMessage struct {
 type MessageItem struct {
 	Type      int        `json:"type"`
 	TextItem  *TextItem  `json:"text_item,omitempty"`
+	ImageItem *ImageItem `json:"image_item,omitempty"`
 	VoiceItem *VoiceItem `json:"voice_item,omitempty"`
+	FileItem  *FileItem  `json:"file_item,omitempty"`
 }
 
 type TextItem struct {
 	Text string `json:"text"`
 }
 
+type CDNMedia struct {
+	EncryptQueryParam string `json:"encrypt_query_param,omitempty"`
+	AESKey            string `json:"aes_key,omitempty"`
+	EncryptType       int    `json:"encrypt_type,omitempty"`
+}
+
+type ImageItem struct {
+	Media   *CDNMedia `json:"media,omitempty"`
+	AESKey  string    `json:"aeskey,omitempty"`
+	MidSize int       `json:"mid_size,omitempty"`
+}
+
 type VoiceItem struct {
 	Text string `json:"text,omitempty"` // 微信服务端语音转写结果
+}
+
+type FileItem struct {
+	Media    *CDNMedia `json:"media,omitempty"`
+	FileName string    `json:"file_name,omitempty"`
+	MD5      string    `json:"md5,omitempty"`
+	Len      string    `json:"len,omitempty"`
 }
 
 type SendMessageRequest struct {
@@ -91,4 +112,24 @@ type SendTypingRequest struct {
 	TypingTicket string   `json:"typing_ticket"`
 	Status       int      `json:"status"` // 1=typing, 2=cancel
 	BaseInfo     BaseInfo `json:"base_info"`
+}
+
+type GetUploadURLRequest struct {
+	FileKey     string   `json:"filekey"`
+	MediaType   int      `json:"media_type"`
+	ToUserID    string   `json:"to_user_id"`
+	RawSize     int      `json:"rawsize"`
+	RawFileMD5  string   `json:"rawfilemd5"`
+	FileSize    int      `json:"filesize"`
+	NoNeedThumb bool     `json:"no_need_thumb"`
+	AESKey      string   `json:"aeskey"`
+	BaseInfo    BaseInfo `json:"base_info"`
+}
+
+type GetUploadURLResponse struct {
+	Ret              int    `json:"ret"`
+	ErrCode          int    `json:"errcode"`
+	Message          string `json:"message"`
+	UploadParam      string `json:"upload_param"`
+	ThumbUploadParam string `json:"thumb_upload_param"`
 }

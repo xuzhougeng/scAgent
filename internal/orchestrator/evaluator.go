@@ -24,6 +24,7 @@ type EvaluationRequest struct {
 	Workspace       *models.Workspace     `json:"workspace,omitempty"`
 	ActiveObject    *models.ObjectMeta    `json:"active_object,omitempty"`
 	Objects         []*models.ObjectMeta  `json:"objects,omitempty"`
+	InputArtifacts  []*models.Artifact    `json:"input_artifacts,omitempty"`
 	RecentMessages  []*models.Message     `json:"recent_messages,omitempty"`
 	RecentJobs      []*models.Job         `json:"recent_jobs,omitempty"`
 	RecentArtifacts []*models.Artifact    `json:"recent_artifacts,omitempty"`
@@ -335,8 +336,12 @@ func (e *LLMEvaluator) buildRequest(requestPayload EvaluationRequest) map[string
 				"content": e.instructions(requestPayload),
 			},
 			{
-				"role":    "user",
-				"content": requestPayload.Message,
+				"role": "user",
+				"content": buildUserInputContent(
+					requestPayload.Message,
+					requestPayload.InputArtifacts,
+					requestPayload.RecentArtifacts,
+				),
 			},
 		},
 		"text": map[string]any{
@@ -357,6 +362,7 @@ func (e *LLMEvaluator) instructions(requestPayload EvaluationRequest) string {
 		"Return only valid JSON matching the supplied schema.",
 		"Be conservative: completed=true only when the request objective is already satisfied and no further execution is needed.",
 		"Treat current_job, working_memory, the active object metadata, recent jobs, and artifacts as the source of truth.",
+		"If the current request includes attached images, consider them part of the evidence when judging completion.",
 		"If the request is a long workflow and intermediate preprocessing has not yet reached the necessary state, return completed=false.",
 		"If the request asks for a concrete output such as a plot, marker table, subset object, export file, or assessment summary and that output already exists in the current job results, return completed=true.",
 		"Current execution context:",
@@ -383,6 +389,7 @@ func formatEvaluationContext(request EvaluationRequest) []string {
 		Session:         request.Session,
 		ActiveObject:    request.ActiveObject,
 		Objects:         request.Objects,
+		InputArtifacts:  request.InputArtifacts,
 		RecentMessages:  request.RecentMessages,
 		RecentJobs:      request.RecentJobs,
 		RecentArtifacts: request.RecentArtifacts,

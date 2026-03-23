@@ -434,6 +434,61 @@ func TestSubmitMessageAnswersSimpleDatasetQuestionWithoutJob(t *testing.T) {
 	}
 }
 
+func TestSubmitMessageWithArtifactsPassesInputArtifactsToAnswerer(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	answerer := &scriptedAnswerer{
+		directAnswer: "已根据图片生成直接回答。",
+		directOK:     true,
+	}
+	service := NewServiceWithComponents(store, registry, nil, emptyLLMPlanner{}, NewNoopEvaluator(), answerer, t.TempDir())
+
+	sessionRecord := store.CreateSession("vision")
+	if sessionRecord == nil {
+		t.Fatalf("expected session to be created")
+	}
+
+	artifact, _, err := service.RegisterExternalArtifact(
+		context.Background(),
+		sessionRecord.ID,
+		models.ArtifactFile,
+		"weixin_inbound.png",
+		"image/png",
+		"微信图片",
+		"用户上传的图片",
+		bytes.NewReader(tinyPNG()),
+	)
+	if err != nil {
+		t.Fatalf("register external artifact: %v", err)
+	}
+
+	job, snapshot, err := service.SubmitMessageWithArtifacts(
+		context.Background(),
+		sessionRecord.ID,
+		"请解释这张图",
+		[]*models.Artifact{artifact},
+	)
+	if err != nil {
+		t.Fatalf("submit message with artifacts: %v", err)
+	}
+	if job != nil {
+		t.Fatalf("expected direct answer without job, got %+v", job)
+	}
+	if snapshot == nil || len(snapshot.Messages) == 0 {
+		t.Fatalf("expected snapshot with reply message")
+	}
+	if len(answerer.requests) != 1 {
+		t.Fatalf("expected one answerer request, got %d", len(answerer.requests))
+	}
+	if len(answerer.requests[0].InputArtifacts) != 1 || answerer.requests[0].InputArtifacts[0].ID != artifact.ID {
+		t.Fatalf("unexpected input artifacts: %+v", answerer.requests[0].InputArtifacts)
+	}
+}
+
 func TestBuildExecutablePlanInheritsMissingLegendFromRecentPlotContext(t *testing.T) {
 	registry, err := skill.LoadRegistry(skillsRegistryPath())
 	if err != nil {
@@ -597,7 +652,7 @@ func TestRunJobReplansRemainingStepsFromCurrentState(t *testing.T) {
 	}
 	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, NewFakeEvaluator(), t.TempDir())
 
-	service.runJob(context.Background(), sessionRecord.ID, "job_replan", "完成常规的数据预处理")
+	service.runJob(context.Background(), sessionRecord.ID, "job_replan", "完成常规的数据预处理", nil)
 
 	job, ok := store.GetJob("job_replan")
 	if !ok {
@@ -686,7 +741,7 @@ func TestRunJobStopsWhenEvaluatorMarksRequestComplete(t *testing.T) {
 	}
 	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, evaluator, t.TempDir())
 
-	service.runJob(context.Background(), sessionRecord.ID, "job_eval_complete", "评估一下当前数据集")
+	service.runJob(context.Background(), sessionRecord.ID, "job_eval_complete", "评估一下当前数据集", nil)
 
 	job, ok := store.GetJob("job_eval_complete")
 	if !ok {
@@ -769,7 +824,7 @@ func TestRunJobRespondsFromStructuredEvidenceAfterInvestigation(t *testing.T) {
 	runtimeStub := &scalarResultRuntime{}
 	service := NewServiceWithEvaluator(store, registry, runtimeStub, planner, evaluator, t.TempDir())
 
-	service.runJob(context.Background(), sessionRecord.ID, "job_scalar_result", "细胞x基因=？")
+	service.runJob(context.Background(), sessionRecord.ID, "job_scalar_result", "细胞x基因=？", nil)
 
 	job, ok := store.GetJob("job_scalar_result")
 	if !ok {
@@ -857,7 +912,7 @@ func TestRunJobKeepsOriginalRemainingStepsWhenCheckpointReplanFails(t *testing.T
 	}
 	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, NewFakeEvaluator(), t.TempDir())
 
-	service.runJob(context.Background(), sessionRecord.ID, "job_keep_plan", "完成常规的数据预处理")
+	service.runJob(context.Background(), sessionRecord.ID, "job_keep_plan", "完成常规的数据预处理", nil)
 
 	job, ok := store.GetJob("job_keep_plan")
 	if !ok {
@@ -933,7 +988,7 @@ func TestRunJobRehydratesSharedActiveObjectBeforeExecution(t *testing.T) {
 	runtimeStub := &restoringRuntime{}
 	service := NewService(store, registry, runtimeStub, planner, t.TempDir())
 
-	service.runJob(context.Background(), followupSession.ID, "job_rehydrate", "检查数据")
+	service.runJob(context.Background(), followupSession.ID, "job_rehydrate", "检查数据", nil)
 
 	job, ok := store.GetJob("job_rehydrate")
 	if !ok {
@@ -990,7 +1045,7 @@ func TestRunJobFailsCleanlyWhenPlannerIsUnavailable(t *testing.T) {
 	}
 	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, failingLLMPlanner{}, evaluator, t.TempDir())
 
-	service.runJob(context.Background(), sessionRecord.ID, "job_fallback_incomplete", "接受louvain统计各个类型，画图")
+	service.runJob(context.Background(), sessionRecord.ID, "job_fallback_incomplete", "接受louvain统计各个类型，画图", nil)
 
 	job, ok := store.GetJob("job_fallback_incomplete")
 	if !ok {

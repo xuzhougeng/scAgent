@@ -1,10 +1,12 @@
 package weixin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,12 +34,22 @@ type pendingJob struct {
 	StartedAt time.Time
 }
 
+type replyPayload struct {
+	Text   string
+	Images []*models.Artifact
+}
+
+type inboundFileResult struct {
+	InputArtifacts []*models.Artifact
+	Messages       []string
+}
+
 // Bridge connects WeChat to the scAgent orchestrator.
 type Bridge struct {
 	client       *Client
 	service      *orchestrator.Service
 	config       BridgeConfig
-	sessions     map[string]string // wechat user id → scAgent session id
+	sessions     map[string]string      // wechat user id → scAgent session id
 	pendingJobs  map[string]*pendingJob // wechat user id → pending job
 	sessionsFile string
 	mu           sync.Mutex
@@ -200,24 +212,30 @@ func (b *Bridge) Run(ctx context.Context) error {
 			if msg.MessageType != MessageTypeUser {
 				continue
 			}
-			text := extractText(msg)
-			if text == "" {
+			if !hasProcessableInput(msg) {
 				continue
 			}
 
-			go b.handleMessage(ctx, msg.FromUserID, text, msg.ContextToken)
+			go b.handleMessage(ctx, msg)
 		}
 	}
 }
 
-func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextToken string) {
+func (b *Bridge) handleMessage(ctx context.Context, msg WeixinMessage) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[weixin] panic handling message from %s: %v", fromUserID, r)
+			log.Printf("[weixin] panic handling message from %s: %v", msg.FromUserID, r)
 		}
 	}()
 
-	log.Printf("[weixin] %s: %s", fromUserID, truncate(text, 80))
+	fromUserID := msg.FromUserID
+	contextToken := msg.ContextToken
+	text := extractText(msg)
+	logText := text
+	if strings.TrimSpace(logText) == "" && len(extractFileItems(msg)) > 0 {
+		logText = "[file]"
+	}
+	log.Printf("[weixin] %s: %s", fromUserID, truncate(logText, 80))
 
 	// Handle slash commands — normalize full-width "／" (Chinese IME) to ASCII "/"
 	if strings.HasPrefix(text, "／") {
@@ -243,8 +261,8 @@ func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextTok
 	}
 
 	// Check if user has a pending long-running job
-	if reply := b.checkPendingJob(ctx, fromUserID, text); reply != "" {
-		_ = b.client.SendTextMessage(ctx, fromUserID, reply, contextToken)
+	if reply, handled := b.checkPendingJob(fromUserID); handled {
+		_ = b.sendReply(ctx, fromUserID, contextToken, reply)
 		return
 	}
 
@@ -266,8 +284,27 @@ func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextTok
 		return
 	}
 
+	fileResult, err := b.processInboundFiles(ctx, sessionID, msg)
+	if err != nil {
+		log.Printf("[weixin] inbound file handling failed: %v", err)
+		if strings.TrimSpace(text) == "" {
+			_ = b.client.SendTextMessage(ctx, fromUserID, "文件接收失败，请稍后重试。", contextToken)
+			return
+		}
+	}
+	inputArtifacts := fileResult.InputArtifacts
+	if strings.TrimSpace(text) == "" {
+		replyText := strings.Join(fileResult.Messages, "\n")
+		replyText = strings.TrimSpace(replyText)
+		if replyText == "" {
+			replyText = "已收到文件。请告诉我如何使用它。"
+		}
+		_ = b.client.SendTextMessage(ctx, fromUserID, replyText, contextToken)
+		return
+	}
+
 	// Submit message
-	job, snapshot, err := b.service.SubmitMessage(ctx, sessionID, text)
+	job, snapshot, err := b.service.SubmitMessageWithArtifacts(ctx, sessionID, text, inputArtifacts)
 	if err != nil {
 		// Session may be stale — retry with new session
 		log.Printf("[weixin] submit failed for %s, recreating: %v", sessionID, err)
@@ -277,7 +314,9 @@ func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextTok
 			_ = b.client.SendTextMessage(ctx, fromUserID, "系统错误，请稍后重试", contextToken)
 			return
 		}
-		job, snapshot, err = b.service.SubmitMessage(ctx, sessionID, text)
+		fileResult, _ = b.processInboundFiles(ctx, sessionID, msg)
+		inputArtifacts = fileResult.InputArtifacts
+		job, snapshot, err = b.service.SubmitMessageWithArtifacts(ctx, sessionID, text, inputArtifacts)
 		if err != nil {
 			log.Printf("[weixin] submit retry failed: %v", err)
 			_ = b.client.SendTextMessage(ctx, fromUserID, fmt.Sprintf("提交失败: %v", err), contextToken)
@@ -286,11 +325,11 @@ func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextTok
 	}
 
 	if job == nil {
-		reply := latestAssistantMessage(snapshot)
-		if reply == "" {
-			reply = "已收到请求。"
+		reply := replyPayload{Text: latestAssistantMessage(snapshot)}
+		if reply.Text == "" {
+			reply.Text = "已收到请求。"
 		}
-		if err := b.client.SendTextMessage(ctx, fromUserID, reply, contextToken); err != nil {
+		if err := b.sendReply(ctx, fromUserID, contextToken, reply); err != nil {
 			log.Printf("[weixin] send direct reply error to %s: %v", fromUserID, err)
 		}
 		return
@@ -307,12 +346,12 @@ func (b *Bridge) handleMessage(ctx context.Context, fromUserID, text, contextTok
 			StartedAt: time.Now(),
 		}
 		b.mu.Unlock()
-		reply = "任务运行时间较长，请过一分钟后发消息查看结果。"
+		reply = replyPayload{Text: "任务运行时间较长，请过一分钟后发消息查看结果。"}
 	}
-	if err := b.client.SendTextMessage(ctx, fromUserID, reply, contextToken); err != nil {
+	if err := b.sendReply(ctx, fromUserID, contextToken, reply); err != nil {
 		log.Printf("[weixin] send reply error to %s: %v", fromUserID, err)
 	} else {
-		log.Printf("[weixin] replied to %s (%d chars)", fromUserID, len(reply))
+		log.Printf("[weixin] replied to %s (%d chars, %d images)", fromUserID, len(reply.Text), len(reply.Images))
 	}
 }
 
@@ -519,7 +558,7 @@ func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string
 // waitForJobWithTimeout waits for a job to complete. If the job finishes within
 // the given timeout, it returns the result and done=true. If the timeout fires
 // first, it returns ("", false) so the caller can track it as a pending job.
-func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID string, timeout time.Duration) (string, bool) {
+func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID string, timeout time.Duration) (replyPayload, bool) {
 	events, cancel := b.service.Subscribe(sessionID)
 	defer cancel()
 
@@ -529,14 +568,14 @@ func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID str
 	for {
 		select {
 		case <-ctx.Done():
-			return "系统已停止", true
+			return replyPayload{Text: "系统已停止"}, true
 		case <-hardTimeout:
-			return "分析超时，请稍后重试", true
+			return replyPayload{Text: "分析超时，请稍后重试"}, true
 		case <-timer:
-			return "", false
+			return replyPayload{}, false
 		case event, ok := <-events:
 			if !ok {
-				return "事件流中断", true
+				return replyPayload{Text: "事件流中断"}, true
 			}
 			if event.Type != "session_updated" {
 				continue
@@ -552,13 +591,13 @@ func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID str
 					continue
 				}
 				if job.Status == models.JobSucceeded {
-					return b.formatReply(snapshot, jobID), true
+					return b.buildJobReply(snapshot, jobID), true
 				}
 				if job.Status == models.JobFailed {
 					if job.Error != "" {
-						return fmt.Sprintf("分析失败: %s", job.Error), true
+						return replyPayload{Text: fmt.Sprintf("分析失败: %s", job.Error)}, true
 					}
-					return "分析失败", true
+					return replyPayload{Text: "分析失败"}, true
 				}
 			}
 		}
@@ -569,12 +608,12 @@ func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID str
 // If the job is finished, it returns the result and clears the pending state.
 // If the job is still running, it tells the user to wait.
 // Returns "" if there is no pending job (normal message flow should continue).
-func (b *Bridge) checkPendingJob(ctx context.Context, fromUserID, text string) string {
+func (b *Bridge) checkPendingJob(fromUserID string) (replyPayload, bool) {
 	b.mu.Lock()
 	pj := b.pendingJobs[fromUserID]
 	b.mu.Unlock()
 	if pj == nil {
-		return ""
+		return replyPayload{}, false
 	}
 
 	// Check job status from current snapshot
@@ -584,7 +623,7 @@ func (b *Bridge) checkPendingJob(ctx context.Context, fromUserID, text string) s
 		b.mu.Lock()
 		delete(b.pendingJobs, fromUserID)
 		b.mu.Unlock()
-		return ""
+		return replyPayload{}, false
 	}
 
 	for _, job := range snapshot.Jobs {
@@ -595,56 +634,134 @@ func (b *Bridge) checkPendingJob(ctx context.Context, fromUserID, text string) s
 			b.mu.Lock()
 			delete(b.pendingJobs, fromUserID)
 			b.mu.Unlock()
-			return b.formatReply(snapshot, pj.JobID)
+			return b.buildJobReply(snapshot, pj.JobID), true
 		}
 		if job.Status == models.JobFailed {
 			b.mu.Lock()
 			delete(b.pendingJobs, fromUserID)
 			b.mu.Unlock()
 			if job.Error != "" {
-				return fmt.Sprintf("分析失败: %s", job.Error)
+				return replyPayload{Text: fmt.Sprintf("分析失败: %s", job.Error)}, true
 			}
-			return "分析失败"
+			return replyPayload{Text: "分析失败"}, true
 		}
 		// Still running
 		elapsed := time.Since(pj.StartedAt).Truncate(time.Second)
-		return fmt.Sprintf("任务仍在运行中（已耗时 %s），请再等一分钟后发消息查看。", elapsed)
+		return replyPayload{
+			Text: fmt.Sprintf("任务仍在运行中（已耗时 %s），请再等一分钟后发消息查看。", elapsed),
+		}, true
 	}
 
 	// Job not found in snapshot — clear pending
 	b.mu.Lock()
 	delete(b.pendingJobs, fromUserID)
 	b.mu.Unlock()
-	return ""
+	return replyPayload{}, false
 }
 
-func (b *Bridge) formatReply(snapshot *models.SessionSnapshot, jobID string) string {
+func (b *Bridge) buildJobReply(snapshot *models.SessionSnapshot, jobID string) replyPayload {
+	reply := replyPayload{
+		Images: jobImageArtifacts(snapshot, jobID),
+	}
+
 	// Find assistant message for this job
 	for i := len(snapshot.Messages) - 1; i >= 0; i-- {
 		msg := snapshot.Messages[i]
 		if msg.JobID == jobID && msg.Role == models.MessageAssistant {
-			text := msg.Content
-			// Append artifact info
-			var plots []string
-			for _, a := range snapshot.Artifacts {
-				if a.JobID == jobID && a.Kind == models.ArtifactPlot {
-					plots = append(plots, a.Title)
-				}
-			}
-			if len(plots) > 0 {
-				text += fmt.Sprintf("\n\n[图表: %s]", strings.Join(plots, ", "))
-			}
-			return text
+			reply.Text = strings.TrimSpace(msg.Content)
+			return finalizeReplyPayload(reply)
 		}
 	}
 
 	// Fallback: find job summary
 	for _, job := range snapshot.Jobs {
 		if job.ID == jobID && job.Summary != "" {
-			return job.Summary
+			reply.Text = strings.TrimSpace(job.Summary)
+			return finalizeReplyPayload(reply)
 		}
 	}
-	return "完成"
+	reply.Text = "完成"
+	return finalizeReplyPayload(reply)
+}
+
+func finalizeReplyPayload(reply replyPayload) replyPayload {
+	reply.Text = strings.TrimSpace(reply.Text)
+	if len(reply.Images) > 0 {
+		if reply.Text == "" {
+			reply.Text = "已生成图表。"
+		}
+		reply.Text = strings.TrimSpace(reply.Text + fmt.Sprintf("\n\n已附上 %d 张图。", len(reply.Images)))
+	}
+	if reply.Text == "" {
+		reply.Text = "已收到请求。"
+	}
+	return reply
+}
+
+func jobImageArtifacts(snapshot *models.SessionSnapshot, jobID string) []*models.Artifact {
+	if snapshot == nil {
+		return nil
+	}
+
+	var images []*models.Artifact
+	for _, artifact := range snapshot.Artifacts {
+		if artifact == nil || artifact.JobID != jobID || artifact.Kind != models.ArtifactPlot {
+			continue
+		}
+		if !isImageArtifact(artifact) {
+			continue
+		}
+		images = append(images, artifact)
+	}
+	return images
+}
+
+func isImageArtifact(artifact *models.Artifact) bool {
+	if artifact == nil || strings.TrimSpace(artifact.Path) == "" {
+		return false
+	}
+	contentType := strings.ToLower(strings.TrimSpace(artifact.ContentType))
+	if strings.HasPrefix(contentType, "image/") {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(artifact.Path)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp":
+		return true
+	default:
+		return false
+	}
+}
+
+func (b *Bridge) sendReply(ctx context.Context, toUserID, contextToken string, reply replyPayload) error {
+	reply = finalizeReplyPayload(reply)
+	if reply.Text != "" {
+		if err := b.client.SendTextMessage(ctx, toUserID, reply.Text, contextToken); err != nil {
+			return err
+		}
+	}
+
+	var failed []string
+	for _, artifact := range reply.Images {
+		if artifact == nil || !isImageArtifact(artifact) {
+			continue
+		}
+		if err := b.client.SendImageFile(ctx, toUserID, artifact.Path, contextToken); err != nil {
+			title := strings.TrimSpace(artifact.Title)
+			if title == "" {
+				title = filepath.Base(artifact.Path)
+			}
+			failed = append(failed, title)
+			log.Printf("[weixin] image send failed for %s: %v", artifact.Path, err)
+		}
+	}
+
+	if len(failed) > 0 {
+		notice := fmt.Sprintf("以下图片发送失败：%s", strings.Join(failed, "、"))
+		if err := b.client.SendTextMessage(ctx, toUserID, notice, contextToken); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *Bridge) resolveSession(ctx context.Context, weixinUserID string) (string, error) {
@@ -734,6 +851,168 @@ func (b *Bridge) saveAccount(account map[string]string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "account.json"), data, 0o644)
+}
+
+func hasProcessableInput(msg WeixinMessage) bool {
+	return strings.TrimSpace(extractText(msg)) != "" || len(extractFileItems(msg)) > 0
+}
+
+func extractImageItems(msg WeixinMessage) []MessageItem {
+	var items []MessageItem
+	for _, item := range msg.ItemList {
+		if item.Type == ItemTypeImage && item.ImageItem != nil && item.ImageItem.Media != nil && strings.TrimSpace(item.ImageItem.Media.EncryptQueryParam) != "" {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func extractFileItems(msg WeixinMessage) []MessageItem {
+	var items []MessageItem
+	for _, item := range msg.ItemList {
+		if item.Type == 4 && item.FileItem != nil && item.FileItem.Media != nil && strings.TrimSpace(item.FileItem.Media.EncryptQueryParam) != "" {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func (b *Bridge) processInboundFiles(ctx context.Context, sessionID string, msg WeixinMessage) (*inboundFileResult, error) {
+	fileItems := extractFileItems(msg)
+	if len(fileItems) == 0 {
+		return &inboundFileResult{}, nil
+	}
+
+	result := &inboundFileResult{
+		InputArtifacts: make([]*models.Artifact, 0, len(fileItems)),
+		Messages:       make([]string, 0, len(fileItems)),
+	}
+
+	for _, item := range fileItems {
+		payload, filename, contentType, err := b.downloadInboundFile(ctx, item)
+		if err != nil {
+			return result, err
+		}
+		switch inboundFileKind(filename) {
+		case "h5ad":
+			summary := fmt.Sprintf("h5ad 文件 %s 已登记为后续数据转换/导入锚点；当前不会直接载入会话，需要在后续主流程中显式转换或导入。", filename)
+			artifact, _, err := b.service.RegisterExternalArtifact(
+				ctx,
+				sessionID,
+				models.ArtifactFile,
+				filename,
+				normalizedInboundContentType(filename, contentType),
+				"微信文件："+filename,
+				summary,
+				bytes.NewReader(payload),
+			)
+			if err != nil {
+				return result, err
+			}
+			result.InputArtifacts = append(result.InputArtifacts, artifact)
+			result.Messages = append(result.Messages, fmt.Sprintf("已收到 h5ad 文件 %s。已登记为后续数据转换/导入锚点，当前不会直接载入会话。", filename))
+		case "csv", "tsv":
+			summary := summarizeDelimitedFile(filename, payload)
+			artifact, _, err := b.service.RegisterExternalArtifact(
+				ctx,
+				sessionID,
+				models.ArtifactFile,
+				filename,
+				normalizedInboundContentType(filename, contentType),
+				"微信文件："+filename,
+				summary,
+				bytes.NewReader(payload),
+			)
+			if err != nil {
+				return result, err
+			}
+			result.InputArtifacts = append(result.InputArtifacts, artifact)
+			result.Messages = append(result.Messages, fmt.Sprintf("已收到表格文件 %s。%s", filename, summary))
+		default:
+			result.Messages = append(result.Messages, fmt.Sprintf("暂不支持文件 %s。当前微信文件接收仅支持 h5ad、csv、tsv。", filename))
+		}
+	}
+	return result, nil
+}
+
+func (b *Bridge) downloadInboundFile(ctx context.Context, item MessageItem) ([]byte, string, string, error) {
+	if item.FileItem == nil || item.FileItem.Media == nil {
+		return nil, "", "", fmt.Errorf("missing file item media")
+	}
+	aesKey := strings.TrimSpace(item.FileItem.Media.AESKey)
+	if aesKey == "" {
+		return nil, "", "", fmt.Errorf("missing file aes key")
+	}
+	payload, err := b.client.DownloadAndDecryptCDNBuffer(ctx, item.FileItem.Media.EncryptQueryParam, aesKey)
+	if err != nil {
+		return nil, "", "", err
+	}
+	filename := strings.TrimSpace(item.FileItem.FileName)
+	if filename == "" {
+		filename = fmt.Sprintf("weixin_file_%d.bin", time.Now().UnixMilli())
+	}
+	contentType := http.DetectContentType(payload)
+	return payload, filename, contentType, nil
+}
+
+func imageExtension(contentType string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ".bin"
+	}
+}
+
+func inboundFileKind(filename string) string {
+	switch strings.ToLower(filepath.Ext(strings.TrimSpace(filename))) {
+	case ".h5ad", ".ha5d":
+		return "h5ad"
+	case ".csv":
+		return "csv"
+	case ".tsv":
+		return "tsv"
+	default:
+		return ""
+	}
+}
+
+func normalizedInboundContentType(filename, detected string) string {
+	switch inboundFileKind(filename) {
+	case "h5ad":
+		return "application/x-h5ad"
+	case "csv":
+		return "text/csv"
+	case "tsv":
+		return "text/tab-separated-values"
+	default:
+		return detected
+	}
+}
+
+func latestSystemOrAssistantMessage(snapshot *models.SessionSnapshot, fallback string) string {
+	if snapshot == nil {
+		return fallback
+	}
+	for index := len(snapshot.Messages) - 1; index >= 0; index-- {
+		message := snapshot.Messages[index]
+		if message == nil {
+			continue
+		}
+		if message.Role == models.MessageSystem || message.Role == models.MessageAssistant {
+			content := strings.TrimSpace(message.Content)
+			if content != "" {
+				return content
+			}
+		}
+	}
+	return fallback
 }
 
 func extractText(msg WeixinMessage) string {

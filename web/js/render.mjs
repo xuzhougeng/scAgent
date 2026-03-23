@@ -40,6 +40,11 @@ const renderActions = {
   async switchWorkspace() {},
 };
 
+const artifactTablePreviewOptions = {
+  maxTableRows: 12,
+  maxTableCols: 8,
+};
+
 export function configureRenderActions(actions) {
   Object.assign(renderActions, actions);
 }
@@ -623,6 +628,131 @@ async function buildMessageNode(message, template) {
   return node;
 }
 
+function parseDelimitedTableBlock(text, formatHint = "") {
+  const lines = splitNonEmptyLines(text);
+  if (lines.length < 2) {
+    return null;
+  }
+
+  const candidates =
+    formatHint === "csv"
+      ? [","]
+      : formatHint === "tsv"
+        ? ["\t"]
+        : ["\t", ","];
+
+  for (const delimiter of candidates) {
+    const rows = lines.map((line) => parseDelimitedLine(line, delimiter));
+    if (rows[0].length < 2) {
+      continue;
+    }
+    if (!rows.every((row) => row.length === rows[0].length && rowHasContent(row))) {
+      continue;
+    }
+    return {
+      headers: rows[0],
+      rows: rows.slice(1),
+    };
+  }
+  return null;
+}
+
+function rowHasContent(row) {
+  return row.some((cell) => String(cell || "").trim() !== "");
+}
+
+function parseDelimitedLine(line, delimiter) {
+  const value = String(line || "").trim();
+  const cells = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === '"') {
+      if (inQuotes && value[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (char === delimiter && !inQuotes) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  cells.push(current.trim());
+  return cells;
+}
+
+function splitNonEmptyLines(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function renderStructuredTableMarkup(table, options) {
+  const totalCols = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0);
+  const totalRows = table.rows.length;
+  const visibleCols = Math.min(totalCols, options.maxTableCols || totalCols);
+  const visibleRows = Math.min(totalRows, options.maxTableRows || totalRows);
+  const headers = normalizeTableRow(table.headers, totalCols).slice(0, visibleCols);
+  const rows = table.rows
+    .slice(0, visibleRows)
+    .map((row) => normalizeTableRow(row, totalCols).slice(0, visibleCols));
+
+  const truncation = [];
+  if (totalRows > visibleRows) {
+    truncation.push(`前 ${visibleRows} 行 / 共 ${totalRows} 行`);
+  }
+  if (totalCols > visibleCols) {
+    truncation.push(`前 ${visibleCols} 列 / 共 ${totalCols} 列`);
+  }
+
+  return `
+    <div class="message-table-block">
+      <div class="message-table-wrap">
+        <table class="message-table">
+          <thead>
+            <tr>${headers.map((cell) => `<th>${escapeHTML(cell || "")}</th>`).join("")}</tr>
+          </thead>
+          <tbody>
+            ${
+              rows.length
+                ? rows
+                    .map(
+                      (row) =>
+                        `<tr>${row.map((cell) => `<td>${escapeHTML(cell || "")}</td>`).join("")}</tr>`,
+                    )
+                    .join("")
+                : `<tr><td colspan="${visibleCols || 1}" class="message-table-empty">暂无数据行</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+      ${
+        truncation.length
+          ? `<div class="message-table-note">${escapeHTML(truncation.join("，"))}</div>`
+          : ""
+      }
+    </div>
+  `;
+}
+
+function normalizeTableRow(row, width) {
+  const values = Array.isArray(row) ? [...row] : [];
+  while (values.length < width) {
+    values.push("");
+  }
+  return values;
+}
+
 async function buildMessageDetailMarkup(message) {
   if (!appState.snapshot) {
     return "";
@@ -1123,9 +1253,16 @@ async function buildArtifactCardMarkup(artifact, variant = "chat") {
         <img src="${artifactURL}" alt="${escapeAttribute(artifact.title)}" />
       </button>
     `;
-  } else if (artifact.kind === "table" || artifact.kind === "file") {
+  } else if (isPreviewableDelimitedArtifact(artifact)) {
     const text = await getArtifactTextPreview(artifact);
-    body += `<pre>${escapeHTML(text.slice(0, 1200))}</pre>`;
+    const previewMarkup = renderDelimitedArtifactPreviewMarkup(artifact, text);
+    if (previewMarkup) {
+    body += `
+      <div class="artifact-text-preview">
+        ${previewMarkup}
+      </div>
+    `;
+    }
   }
 
   return `
@@ -1140,6 +1277,41 @@ async function buildArtifactCardMarkup(artifact, variant = "chat") {
       ${body}
     </section>
   `;
+}
+
+function renderDelimitedArtifactPreviewMarkup(artifact, text) {
+  const table = parseDelimitedTableBlock(text, artifactDelimiterHint(artifact));
+  if (!table) {
+    return "<p class='muted'>无法生成表格预览，请下载查看。</p>";
+  }
+  return renderStructuredTableMarkup(table, artifactTablePreviewOptions);
+}
+
+function isPreviewableDelimitedArtifact(artifact) {
+  if (!artifact) {
+    return false;
+  }
+  const contentType = String(artifact.content_type || "").toLowerCase();
+  if (contentType === "text/csv" || contentType === "text/tab-separated-values") {
+    return true;
+  }
+  const path = String(artifact.path || artifact.url || artifact.title || "").toLowerCase();
+  return path.endsWith(".csv") || path.endsWith(".tsv");
+}
+
+function artifactDelimiterHint(artifact) {
+  const contentType = String(artifact?.content_type || "").toLowerCase();
+  if (contentType === "text/tab-separated-values") {
+    return "tsv";
+  }
+  if (contentType === "text/csv") {
+    return "csv";
+  }
+  const path = String(artifact?.path || artifact?.url || artifact?.title || "").toLowerCase();
+  if (path.endsWith(".tsv")) {
+    return "tsv";
+  }
+  return "csv";
 }
 
 async function getArtifactTextPreview(artifact) {
