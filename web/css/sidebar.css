@@ -240,6 +240,28 @@
   font-size: 0.76rem;
 }
 
+.inline-edit-input {
+  width: 100%;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  border: 1px solid rgba(61, 107, 75, 0.35);
+  border-radius: 6px;
+  outline: none;
+  background: #fff;
+}
+
+.workspace-title {
+  cursor: default;
+}
+
+.workspace-title[data-workspace-id],
+.workspace-chip-label,
+.conversation-chip-label {
+  cursor: text;
+}
+
 .skill-hub {
   margin-top: 12px;
   flex-shrink: 0;

@@ -293,6 +293,8 @@ func (h *Handler) handleWorkspaceRoutes(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		writeJSON(w, http.StatusOK, workspaceSnapshot)
+	case http.MethodPatch:
+		h.handleRenameWorkspace(w, r, workspaceID)
 	case http.MethodDelete:
 		if err := h.service.DeleteWorkspace(r.Context(), workspaceID); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -300,7 +302,7 @@ func (h *Handler) handleWorkspaceRoutes(w http.ResponseWriter, r *http.Request) 
 		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
-		writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodDelete)
+		writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPatch+", "+http.MethodDelete)
 	}
 }
 
@@ -334,6 +336,8 @@ func (h *Handler) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, snapshot)
+	case http.MethodPatch:
+		h.handleRenameConversation(w, r, sessionID)
 	case http.MethodDelete:
 		if err := h.service.DeleteConversation(r.Context(), sessionID); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -341,8 +345,50 @@ func (h *Handler) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
-		writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodDelete)
+		writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPatch+", "+http.MethodDelete)
 	}
+}
+
+func (h *Handler) handleRenameWorkspace(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	var payload struct {
+		Label string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	label := strings.TrimSpace(payload.Label)
+	if label == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "label must not be empty"})
+		return
+	}
+	snapshot, err := h.service.RenameWorkspace(r.Context(), workspaceID, label)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (h *Handler) handleRenameConversation(w http.ResponseWriter, r *http.Request, sessionID string) {
+	var payload struct {
+		Label string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	label := strings.TrimSpace(payload.Label)
+	if label == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "label must not be empty"})
+		return
+	}
+	snapshot, err := h.service.RenameConversation(r.Context(), sessionID, label)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (h *Handler) handleCreateConversation(w http.ResponseWriter, r *http.Request, workspaceID string) {

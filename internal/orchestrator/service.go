@@ -257,6 +257,33 @@ func (s *Service) DeleteWorkspace(_ context.Context, workspaceID string) error {
 	return s.store.DeleteWorkspace(workspaceID)
 }
 
+func (s *Service) RenameWorkspace(_ context.Context, workspaceID, label string) (*models.WorkspaceSnapshot, error) {
+	record, ok := s.store.GetWorkspace(workspaceID)
+	if !ok {
+		return nil, fmt.Errorf("未找到 workspace %q", workspaceID)
+	}
+	record.Label = label
+	record.UpdatedAt = time.Now().UTC()
+	s.store.SaveWorkspace(record)
+	return s.store.WorkspaceSnapshot(workspaceID)
+}
+
+func (s *Service) RenameConversation(_ context.Context, sessionID, label string) (*models.SessionSnapshot, error) {
+	record, ok := s.store.GetSession(sessionID)
+	if !ok {
+		return nil, fmt.Errorf("未找到会话 %q", sessionID)
+	}
+	record.Label = label
+	record.UpdatedAt = time.Now().UTC()
+	s.store.SaveSession(record)
+	snapshot, err := s.store.Snapshot(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	s.publishSnapshot(sessionID)
+	return snapshot, nil
+}
+
 func (s *Service) CreateConversation(_ context.Context, workspaceID, label string) (*models.SessionSnapshot, error) {
 	workspaceRecord, ok := s.store.GetWorkspace(workspaceID)
 	if !ok {

@@ -28,6 +28,8 @@ async function startApp() {
     switchWorkspace,
     retryJob,
     regenerateResponse,
+    renameWorkspace,
+    renameConversation,
   });
 
   bindSidebarResize();
@@ -328,6 +330,37 @@ async function startApp() {
     } catch (error) {
       appState.workspaceStatus = error.message;
       render();
+    }
+  }
+
+  async function renameWorkspace(workspaceId, label) {
+    try {
+      await fetchJSON(`/api/workspaces/${workspaceId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
+      renderSessionMeta();
+    } catch (error) {
+      appState.workspaceStatus = error.message;
+      renderSessionMeta();
+    }
+  }
+
+  async function renameConversation(sessionId, label) {
+    try {
+      const snapshot = await fetchJSON(`/api/sessions/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      syncSnapshot(snapshot);
+      await refreshWorkspaceSnapshot();
+      renderSessionMeta();
+    } catch (error) {
+      appState.workspaceStatus = error.message;
+      renderSessionMeta();
     }
   }
 

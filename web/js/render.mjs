@@ -40,6 +40,8 @@ const renderActions = {
   async switchWorkspace() {},
   async retryJob() {},
   async regenerateResponse() {},
+  async renameWorkspace() {},
+  async renameConversation() {},
 };
 
 const artifactTablePreviewOptions = {
@@ -122,7 +124,7 @@ export function renderSessionMeta() {
     <div class="workspace-meta-head">
       <div>
         <div class="workspace-title-row">
-          <div class="workspace-title">${escapeHTML(workspaceLabel)}</div>
+          <div class="workspace-title" data-workspace-id="${escapeAttribute(currentWorkspace?.id || "")}" title="双击重命名">${escapeHTML(workspaceLabel)}</div>
           <details class="workspace-help-popover">
             <summary aria-label="查看工作区与对话说明">?</summary>
             <div class="workspace-help-body">
@@ -495,6 +497,16 @@ function bindWorkspaceNavigator(container) {
     button.addEventListener("click", async () => {
       await renderActions.switchWorkspace(button.dataset.workspaceId);
     });
+    const label = button.querySelector(".workspace-chip-label");
+    if (label) {
+      label.addEventListener("dblclick", (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        startInlineEdit(label, label.textContent.trim(), async (newLabel) => {
+          await renderActions.renameWorkspace(button.dataset.workspaceId, newLabel);
+        });
+      });
+    }
   }
 }
 
@@ -506,10 +518,30 @@ function bindWorkspaceMeta(container) {
     });
   }
 
+  const workspaceTitle = container.querySelector(".workspace-title[data-workspace-id]");
+  if (workspaceTitle) {
+    workspaceTitle.addEventListener("dblclick", (event) => {
+      event.stopPropagation();
+      startInlineEdit(workspaceTitle, workspaceTitle.textContent.trim(), async (newLabel) => {
+        await renderActions.renameWorkspace(workspaceTitle.dataset.workspaceId, newLabel);
+      });
+    });
+  }
+
   for (const button of container.querySelectorAll("[data-conversation-id]")) {
     button.addEventListener("click", async () => {
       await renderActions.switchConversation(button.dataset.conversationId);
     });
+    const label = button.querySelector(".conversation-chip-label");
+    if (label) {
+      label.addEventListener("dblclick", (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        startInlineEdit(label, label.textContent.trim(), async (newLabel) => {
+          await renderActions.renameConversation(button.dataset.conversationId, newLabel);
+        });
+      });
+    }
   }
 }
 
@@ -1387,6 +1419,47 @@ function bindRegenerateButtons(container) {
       }
     });
   }
+}
+
+function startInlineEdit(element, currentValue, onSave) {
+  if (element.querySelector(".inline-edit-input")) {
+    return;
+  }
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "inline-edit-input";
+  input.value = currentValue;
+
+  const originalHTML = element.innerHTML;
+  element.innerHTML = "";
+  element.appendChild(input);
+  input.focus();
+  input.select();
+
+  let committed = false;
+
+  function commit() {
+    if (committed) return;
+    committed = true;
+    const newValue = input.value.trim();
+    if (newValue && newValue !== currentValue) {
+      element.textContent = newValue;
+      onSave(newValue);
+    } else {
+      element.innerHTML = originalHTML;
+    }
+  }
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commit();
+    } else if (event.key === "Escape") {
+      committed = true;
+      element.innerHTML = originalHTML;
+    }
+  });
+  input.addEventListener("blur", commit);
 }
 
 function bindLoadedSkillButtons(container) {
