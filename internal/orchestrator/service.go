@@ -570,6 +570,14 @@ func (s *Service) RetryJob(ctx context.Context, jobID string) (*models.Job, *mod
 	if !ok {
 		return nil, nil, fmt.Errorf("未找到原始消息 %q", job.MessageID)
 	}
+
+	// Delete the old assistant messages, job, and user message to avoid
+	// duplicates — SubmitMessage will re-create the user message.
+	s.store.DeleteMessagesByJobID(job.SessionID, jobID)
+	s.store.DeleteMessage(job.SessionID, job.MessageID)
+	s.store.DeleteJob(jobID)
+	s.publishSnapshot(job.SessionID)
+
 	return s.SubmitMessage(ctx, job.SessionID, msg.Content)
 }
 
@@ -586,8 +594,10 @@ func (s *Service) RegenerateResponse(ctx context.Context, jobID string) (*models
 		return nil, nil, fmt.Errorf("未找到原始消息 %q", job.MessageID)
 	}
 
-	// Remove the old assistant message(s) and job.
+	// Remove the old assistant messages, job, and the original user message
+	// to avoid duplicates — SubmitMessage will re-create the user message.
 	s.store.DeleteMessagesByJobID(job.SessionID, jobID)
+	s.store.DeleteMessage(job.SessionID, job.MessageID)
 	s.store.DeleteJob(jobID)
 	s.publishSnapshot(job.SessionID)
 

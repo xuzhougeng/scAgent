@@ -354,8 +354,11 @@ func (b *Bridge) handleMessage(ctx context.Context, msg WeixinMessage) {
 		return
 	}
 
-	// Wait for job completion — if it takes >30s, notify user and track as pending
-	reply, done := b.waitForJobWithTimeout(ctx, sessionID, job.ID, 30*time.Second)
+	// Wait for job completion — notify user after 5s, give up after 10s
+	earlyNotify := func() {
+		_ = b.client.SendTextMessage(ctx, fromUserID, "处理中，请稍等…", contextToken)
+	}
+	reply, done := b.waitForJobWithTimeout(ctx, sessionID, job.ID, 10*time.Second, earlyNotify)
 	if !done {
 		// Job still running — save as pending and start background watcher
 		pj := &pendingJob{
@@ -580,12 +583,19 @@ func (b *Bridge) handleSlashCommand(ctx context.Context, fromUserID, text string
 // waitForJobWithTimeout waits for a job to complete. If the job finishes within
 // the given timeout, it returns the result and done=true. If the timeout fires
 // first, it returns ("", false) so the caller can track it as a pending job.
-func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID string, timeout time.Duration) (replyPayload, bool) {
+// An optional earlyNotify callback is called once after 10 seconds if the job
+// is still running, to let the user know processing is ongoing.
+func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID string, timeout time.Duration, earlyNotify func()) (replyPayload, bool) {
 	events, cancel := b.service.Subscribe(sessionID)
 	defer cancel()
 
 	timer := time.After(timeout)
 	hardTimeout := time.After(b.config.JobTimeout)
+
+	var earlyTimer <-chan time.Time
+	if earlyNotify != nil {
+		earlyTimer = time.After(5 * time.Second)
+	}
 
 	for {
 		select {
@@ -595,6 +605,9 @@ func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID str
 			return replyPayload{Text: "分析超时，请稍后重试"}, true
 		case <-timer:
 			return replyPayload{}, false
+		case <-earlyTimer:
+			earlyNotify()
+			earlyTimer = nil // fire only once
 		case event, ok := <-events:
 			if !ok {
 				return replyPayload{Text: "事件流中断"}, true
