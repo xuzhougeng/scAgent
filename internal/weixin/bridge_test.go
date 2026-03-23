@@ -1,10 +1,18 @@
 package weixin
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"scagent/internal/models"
+	"scagent/internal/orchestrator"
+	"scagent/internal/session"
 )
 
 func TestBuildJobReplyIncludesImageArtifacts(t *testing.T) {
@@ -89,4 +97,114 @@ func TestIsImageArtifactFallsBackToExtension(t *testing.T) {
 	if !isImageArtifact(artifact) {
 		t.Fatalf("expected jpeg path to be treated as image artifact")
 	}
+}
+
+func TestWaitForJobWithTimeoutReturnsTerminalSnapshotWithoutEvent(t *testing.T) {
+	bridge, sessionID, jobID := newTestBridgeWithJob(t, models.JobSucceeded, "分析完成。", "分析完成。")
+
+	reply, done := bridge.waitForJobWithTimeout(context.Background(), sessionID, jobID, 20*time.Millisecond, nil)
+	if !done {
+		t.Fatalf("expected completed job to return immediately")
+	}
+	if reply.Text != "分析完成。" {
+		t.Fatalf("expected assistant reply, got %q", reply.Text)
+	}
+}
+
+func TestWatchPendingJobPushesIncompleteJobReply(t *testing.T) {
+	var (
+		mu        sync.Mutex
+		sentTexts []string
+	)
+	client := NewClient("https://example.test", "test-token")
+	client.httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/ilink/bot/sendmessage" {
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader(`{"ret":1,"errcode":404,"message":"not found"}`)),
+				Header:     make(http.Header),
+			}, nil
+		}
+		var payload SendMessageRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			return nil, err
+		}
+		if len(payload.Msg.ItemList) > 0 && payload.Msg.ItemList[0].TextItem != nil {
+			mu.Lock()
+			sentTexts = append(sentTexts, payload.Msg.ItemList[0].TextItem.Text)
+			mu.Unlock()
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"ret":0,"errcode":0,"message":"ok"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	bridge, sessionID, jobID := newTestBridgeWithJob(t, models.JobIncomplete, "当前结果还不完整。", "这是当前能给出的结果。")
+	bridge.client = client
+	pj := &pendingJob{
+		SessionID:    sessionID,
+		JobID:        jobID,
+		StartedAt:    time.Now().Add(-15 * time.Second),
+		ContextToken: "ctx-token",
+	}
+	bridge.pendingJobs["user_1"] = pj
+
+	bridge.watchPendingJob("user_1", pj)
+
+	if _, ok := bridge.pendingJobs["user_1"]; ok {
+		t.Fatalf("expected pending job to be cleared")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sentTexts) != 1 {
+		t.Fatalf("expected one auto-pushed message, got %d", len(sentTexts))
+	}
+	if sentTexts[0] != "这是当前能给出的结果。" {
+		t.Fatalf("expected incomplete job reply to be pushed, got %q", sentTexts[0])
+	}
+}
+
+func newTestBridgeWithJob(t *testing.T, status models.JobStatus, summary, answer string) (*Bridge, string, string) {
+	t.Helper()
+
+	store := session.NewStore()
+	sessionRecord := store.CreateSession("wechat-test")
+	now := time.Now().UTC()
+	finishedAt := now
+	job := &models.Job{
+		ID:          store.NextID("job"),
+		WorkspaceID: sessionRecord.WorkspaceID,
+		SessionID:   sessionRecord.ID,
+		Status:      status,
+		Summary:     summary,
+		CreatedAt:   now,
+		FinishedAt:  &finishedAt,
+	}
+	store.SaveJob(job)
+	if answer != "" {
+		store.AddMessage(&models.Message{
+			ID:        store.NextID("msg"),
+			SessionID: sessionRecord.ID,
+			JobID:     job.ID,
+			Role:      models.MessageAssistant,
+			Content:   answer,
+			CreatedAt: now,
+		})
+	}
+
+	return &Bridge{
+		service:     orchestrator.NewService(store, nil, nil, nil, t.TempDir()),
+		config:      BridgeConfig{JobTimeout: 100 * time.Millisecond},
+		pendingJobs: make(map[string]*pendingJob),
+		sessions:    make(map[string]string),
+	}, sessionRecord.ID, job.ID
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }

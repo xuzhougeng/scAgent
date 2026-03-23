@@ -595,6 +595,10 @@ func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID str
 	timer := time.After(timeout)
 	hardTimeout := time.After(b.config.JobTimeout)
 
+	if reply, done := b.currentJobReply(sessionID, jobID); done {
+		return reply, true
+	}
+
 	var earlyTimer <-chan time.Time
 	if earlyNotify != nil {
 		earlyTimer = time.After(5 * time.Second)
@@ -605,8 +609,14 @@ func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID str
 		case <-ctx.Done():
 			return replyPayload{Text: "系统已停止"}, true
 		case <-hardTimeout:
+			if reply, done := b.currentJobReply(sessionID, jobID); done {
+				return reply, true
+			}
 			return replyPayload{Text: "分析超时，请稍后重试"}, true
 		case <-timer:
+			if reply, done := b.currentJobReply(sessionID, jobID); done {
+				return reply, true
+			}
 			return replyPayload{}, false
 		case <-earlyTimer:
 			earlyNotify()
@@ -624,22 +634,8 @@ func (b *Bridge) waitForJobWithTimeout(ctx context.Context, sessionID, jobID str
 				continue
 			}
 
-			for _, job := range snapshot.Jobs {
-				if job.ID != jobID {
-					continue
-				}
-				if job.Status == models.JobSucceeded {
-					return b.buildJobReply(snapshot, jobID), true
-				}
-				if job.Status == models.JobFailed {
-					if job.Error != "" {
-						return replyPayload{Text: fmt.Sprintf("分析失败: %s", job.Error)}, true
-					}
-					return replyPayload{Text: "分析失败"}, true
-				}
-				if job.Status == models.JobCanceled {
-					return replyPayload{Text: "任务已停止。"}, true
-				}
+			if reply, done, _ := b.jobReplyFromSnapshot(snapshot, jobID); done {
+				return reply, true
 			}
 		}
 	}
@@ -667,43 +663,25 @@ func (b *Bridge) checkPendingJob(fromUserID string) (replyPayload, bool) {
 		return replyPayload{}, false
 	}
 
-	for _, job := range snapshot.Jobs {
-		if job.ID != pj.JobID {
-			continue
-		}
-		if job.Status == models.JobSucceeded {
-			b.mu.Lock()
-			delete(b.pendingJobs, fromUserID)
-			b.mu.Unlock()
-			return b.buildJobReply(snapshot, pj.JobID), true
-		}
-		if job.Status == models.JobFailed {
-			b.mu.Lock()
-			delete(b.pendingJobs, fromUserID)
-			b.mu.Unlock()
-			if job.Error != "" {
-				return replyPayload{Text: fmt.Sprintf("分析失败: %s", job.Error)}, true
-			}
-			return replyPayload{Text: "分析失败"}, true
-		}
-		if job.Status == models.JobCanceled {
-			b.mu.Lock()
-			delete(b.pendingJobs, fromUserID)
-			b.mu.Unlock()
-			return replyPayload{Text: "任务已停止。"}, true
-		}
-		// Still running
-		elapsed := time.Since(pj.StartedAt).Truncate(time.Second)
-		return replyPayload{
-			Text: fmt.Sprintf("任务仍在运行中（已耗时 %s），请再等一分钟后发消息查看。", elapsed),
-		}, true
+	reply, done, found := b.jobReplyFromSnapshot(snapshot, pj.JobID)
+	if done {
+		b.mu.Lock()
+		delete(b.pendingJobs, fromUserID)
+		b.mu.Unlock()
+		return reply, true
+	}
+	if !found {
+		b.mu.Lock()
+		delete(b.pendingJobs, fromUserID)
+		b.mu.Unlock()
+		return replyPayload{}, false
 	}
 
-	// Job not found in snapshot — clear pending
-	b.mu.Lock()
-	delete(b.pendingJobs, fromUserID)
-	b.mu.Unlock()
-	return replyPayload{}, false
+	// Still running
+	elapsed := time.Since(pj.StartedAt).Truncate(time.Second)
+	return replyPayload{
+		Text: fmt.Sprintf("任务仍在运行中（已耗时 %s），请再等一分钟后发消息查看。", elapsed),
+	}, true
 }
 
 // watchPendingJob subscribes to session events and auto-pushes the result
@@ -719,11 +697,26 @@ func (b *Bridge) watchPendingJob(userID string, pj *pendingJob) {
 	defer cancel()
 
 	hardTimeout := time.After(b.config.JobTimeout)
+	poll := time.NewTicker(5 * time.Second)
+	defer poll.Stop()
+	if reply, done := b.currentJobReply(pj.SessionID, pj.JobID); done {
+		b.clearAndPush(userID, pj, reply)
+		return
+	}
 	for {
 		select {
 		case <-hardTimeout:
+			if reply, done := b.currentJobReply(pj.SessionID, pj.JobID); done {
+				b.clearAndPush(userID, pj, reply)
+				return
+			}
 			b.clearAndPush(userID, pj, replyPayload{Text: "任务超时，请重新提交。"})
 			return
+		case <-poll.C:
+			if reply, done := b.currentJobReply(pj.SessionID, pj.JobID); done {
+				b.clearAndPush(userID, pj, reply)
+				return
+			}
 		case event, ok := <-events:
 			if !ok {
 				return
@@ -735,26 +728,9 @@ func (b *Bridge) watchPendingJob(userID string, pj *pendingJob) {
 			if !ok {
 				continue
 			}
-			for _, job := range snapshot.Jobs {
-				if job.ID != pj.JobID {
-					continue
-				}
-				if job.Status == models.JobSucceeded {
-					b.clearAndPush(userID, pj, b.buildJobReply(snapshot, pj.JobID))
-					return
-				}
-				if job.Status == models.JobFailed {
-					msg := "分析失败"
-					if job.Error != "" {
-						msg = fmt.Sprintf("分析失败: %s", job.Error)
-					}
-					b.clearAndPush(userID, pj, replyPayload{Text: msg})
-					return
-				}
-				if job.Status == models.JobCanceled {
-					b.clearAndPush(userID, pj, replyPayload{Text: "任务已停止。"})
-					return
-				}
+			if reply, done, _ := b.jobReplyFromSnapshot(snapshot, pj.JobID); done {
+				b.clearAndPush(userID, pj, reply)
+				return
 			}
 		}
 	}
@@ -817,6 +793,43 @@ func finalizeReplyPayload(reply replyPayload) replyPayload {
 		reply.Text = "已收到请求。"
 	}
 	return reply
+}
+
+func (b *Bridge) currentJobReply(sessionID, jobID string) (replyPayload, bool) {
+	if b == nil || b.service == nil {
+		return replyPayload{}, false
+	}
+	snapshot, err := b.service.GetSnapshot(sessionID)
+	if err != nil {
+		return replyPayload{}, false
+	}
+	reply, done, _ := b.jobReplyFromSnapshot(snapshot, jobID)
+	return reply, done
+}
+
+func (b *Bridge) jobReplyFromSnapshot(snapshot *models.SessionSnapshot, jobID string) (replyPayload, bool, bool) {
+	if snapshot == nil {
+		return replyPayload{}, false, false
+	}
+	for _, job := range snapshot.Jobs {
+		if job == nil || job.ID != jobID {
+			continue
+		}
+		switch job.Status {
+		case models.JobSucceeded, models.JobIncomplete:
+			return b.buildJobReply(snapshot, jobID), true, true
+		case models.JobFailed:
+			if job.Error != "" {
+				return replyPayload{Text: fmt.Sprintf("分析失败: %s", job.Error)}, true, true
+			}
+			return replyPayload{Text: "分析失败"}, true, true
+		case models.JobCanceled:
+			return replyPayload{Text: "任务已停止。"}, true, true
+		default:
+			return replyPayload{}, false, true
+		}
+	}
+	return replyPayload{}, false, false
 }
 
 func stripTrailingImageSummary(text string) string {
