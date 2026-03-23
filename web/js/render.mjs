@@ -649,16 +649,24 @@ async function buildMessageNode(message, template) {
       : formatRole(message.role);
 
   const detailMarkup = await buildMessageDetailMarkup(message);
-  if (String(message.content || "").trim()) {
-    content.textContent = message.content;
-  } else {
-    content.remove();
-  }
   if (detailMarkup) {
     const detail = document.createElement("div");
     detail.className = "message-detail";
     detail.innerHTML = detailMarkup;
-    node.appendChild(detail);
+    if (message.role === "assistant" && message.job_id) {
+      detail.classList.add("message-detail-primary");
+      node.insertBefore(detail, content);
+    } else {
+      node.appendChild(detail);
+    }
+  }
+  if (String(message.content || "").trim()) {
+    content.textContent = message.content;
+    if (message.role === "assistant" && message.job_id && detailMarkup) {
+      content.classList.add("message-content-secondary");
+    }
+  } else {
+    content.remove();
   }
 
   if (message.role === "assistant" && message.job_id) {
@@ -856,10 +864,10 @@ function buildJobStatusMarkup(job) {
 
 async function buildJobResultMarkup(job, assistantMessage) {
   const relatedArtifacts = (appState.snapshot?.artifacts || []).filter((artifact) => artifact.job_id === job.id);
+  const showSummary = shouldRenderJobSummary(job, assistantMessage?.content || "");
   const artifactCards = await Promise.all(
     relatedArtifacts.map((artifact) => buildArtifactCardMarkup(artifact, "chat")),
   );
-  const showSummary = shouldRenderJobSummary(job, assistantMessage?.content || "");
   const cardClass = job.status === "failed" ? "failed" : job.status === "incomplete" ? "incomplete" : "done";
   const phaseMarkup = buildJobPhasesMarkup(job);
   const showInlinePhases = job.status === "failed";
@@ -886,7 +894,6 @@ async function buildJobResultMarkup(job, assistantMessage) {
           ? `<p class="message-job-error">${escapeHTML(job.error)}</p>`
           : ""
       }
-      ${""/* retry button hidden — kept in backend API only */}
       ${
         artifactCards.length
           ? `<div class="message-artifact-group">
@@ -898,6 +905,7 @@ async function buildJobResultMarkup(job, assistantMessage) {
             </div>`
           : ""
       }
+      ${""/* retry button hidden — kept in backend API only */}
       ${detailMarkup}
     </section>
   `;
@@ -1297,7 +1305,12 @@ async function buildArtifactCardMarkup(artifact, variant = "chat") {
         data-artifact-url="${escapeAttribute(artifactURL)}"
         data-artifact-title="${escapeAttribute(artifact.title)}"
       >
-        <img src="${artifactURL}" alt="${escapeAttribute(artifact.title)}" />
+        <img
+          src="${artifactURL}"
+          alt="${escapeAttribute(artifact.title)}"
+          loading="lazy"
+          decoding="async"
+        />
       </button>
     `;
   } else if (isPreviewableDelimitedArtifact(artifact)) {

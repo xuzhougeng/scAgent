@@ -145,6 +145,12 @@
   line-height: 1.5;
 }
 
+.message-content-secondary {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(61, 107, 75, 0.1);
+}
+
 .message-table-block {
   display: grid;
   gap: 8px;
@@ -198,6 +204,10 @@
 
 .message-detail {
   margin-top: 12px;
+}
+
+.message-detail-primary {
+  margin-top: 0;
 }
 
 .message-job-card {
@@ -510,9 +520,11 @@
 .artifact-card img,
 .artifact-card object {
   width: 100%;
+  max-height: 500px;
   border-radius: 12px;
   border: 1px solid rgba(61, 107, 75, 0.12);
   background: white;
+  object-fit: contain;
 }
 
 .artifact-card pre {
