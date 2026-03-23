@@ -2,6 +2,7 @@ import {
   analysisStateLabels,
   annotationRoleLabels,
   appState,
+  artifactKindLabels,
   jobPhaseStatusLabels,
   jobStatusLabels,
   objectKindLabels,
@@ -115,6 +116,10 @@ export function formatObjectKind(kind) {
 
 export function formatObjectState(state) {
   return translateLabel(state, objectStateLabels, state || "未知");
+}
+
+export function formatArtifactKind(kind) {
+  return translateLabel(kind, artifactKindLabels, kind || "未知类型");
 }
 
 export function formatAnnotationRole(role) {
