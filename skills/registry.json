@@ -1006,6 +1006,35 @@
         "artifacts": "file[]",
         "summary": "string"
       }
+    },
+    {
+      "name": "write_method",
+      "label": "Write Methods section",
+      "category": "export",
+      "support_level": "wired",
+      "description": "Generate and export a structured Methods section in English describing the complete analysis pipeline performed in this session. Saves as a Markdown file artifact in the workspace.",
+      "target_kinds": ["raw_dataset", "filtered_dataset", "subset", "reclustered_subset"],
+      "input": {
+        "target_object_id": {
+          "type": "string",
+          "required": false,
+          "description": "Object whose analysis lineage to describe. Defaults to the active object."
+        },
+        "filename": {
+          "type": "string",
+          "required": false,
+          "description": "Output filename without path. Defaults to Methods.md."
+        },
+        "extra_context": {
+          "type": "string",
+          "required": false,
+          "description": "Additional context or instructions for the Methods section, such as dataset origin or study design."
+        }
+      },
+      "output": {
+        "artifacts": "file[]",
+        "summary": "string"
+      }
     }
   ]
 }

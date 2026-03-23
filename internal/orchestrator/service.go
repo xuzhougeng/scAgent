@@ -691,12 +691,17 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 			return
 		}
 
+		execParams := step.Params
+		if step.Skill == "write_method" {
+			execParams = s.injectAnalysisHistory(sessionID, jobID, execParams)
+		}
+
 		response, err := s.runtime.Execute(ctx, runtime.ExecuteRequest{
 			SessionID:        sessionID,
 			RequestID:        jobID + ":" + step.ID,
 			Skill:            step.Skill,
 			TargetBackendRef: backendRef(targetObject),
-			Params:           step.Params,
+			Params:           execParams,
 			WorkspaceRoot:    s.workspaceRoot(sessionRecord.WorkspaceID),
 		})
 		if err != nil {
@@ -1090,6 +1095,49 @@ func backendRef(object *models.ObjectMeta) string {
 		return ""
 	}
 	return object.BackendRef
+}
+
+func (s *Service) injectAnalysisHistory(sessionID string, currentJobID string, params map[string]any) map[string]any {
+	merged := make(map[string]any, len(params)+1)
+	for k, v := range params {
+		merged[k] = v
+	}
+
+	jobs := s.store.ListSessionJobs(sessionID)
+	history := make([]map[string]any, 0)
+	for _, job := range jobs {
+		if job.ID == currentJobID {
+			continue
+		}
+		if job.Status != models.JobSucceeded {
+			continue
+		}
+		for _, step := range job.Steps {
+			if step.Status != models.JobSucceeded {
+				continue
+			}
+			entry := map[string]any{
+				"skill":   step.Skill,
+				"summary": step.Summary,
+			}
+			if step.Params != nil {
+				filtered := make(map[string]any)
+				for k, v := range step.Params {
+					if k == "code" {
+						continue
+					}
+					filtered[k] = v
+				}
+				if len(filtered) > 0 {
+					entry["params"] = filtered
+				}
+			}
+			history = append(history, entry)
+		}
+	}
+
+	merged["_analysis_history"] = history
+	return merged
 }
 
 func (s *Service) ensureRuntimeObject(ctx context.Context, sessionID string, object *models.ObjectMeta) error {

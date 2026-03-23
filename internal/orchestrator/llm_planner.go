@@ -221,6 +221,7 @@ func (p *LLMPlanner) instructions(requestPayload PlanningRequest) string {
 		"Use run_python_analysis only as a last resort when no existing wired skill can satisfy the request; keep the generated code short, deterministic, and focused on adata/scanpy operations.",
 		"When using run_python_analysis, adata is the current object and counts_adata is a count-safe copy for preprocessing-style code.",
 		"When using run_python_analysis for scalar or textual answers, prefer assigning result_value, result_text, or result_summary explicitly instead of only printing to stdout.",
+		"If the user asks to write, generate, or export a Methods section (方法描述 / Methods / 实验方法) describing the analysis pipeline, use write_method instead of run_python_analysis.",
 		"Never return an empty steps array.",
 		"Available skills:",
 	}

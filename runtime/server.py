@@ -82,6 +82,7 @@ BUILTIN_EXECUTABLE_SKILLS = [
     "run_python_analysis",
     "export_h5ad",
     "export_markers_csv",
+    "write_method",
 ]
 SAFE_IMPORT_MODULES = {
     "anndata",
@@ -2388,7 +2389,286 @@ class RuntimeState:
                 },
             }
 
+        if skill == "write_method":
+            filename = str(params.get("filename") or "Methods.md").strip() or "Methods.md"
+            extra_context = str(params.get("extra_context") or "").strip()
+            history = params.get("_analysis_history") or []
+
+            content = self._generate_methods_section(history, target, extra_context)
+
+            stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+            ext = filename.rsplit(".", 1)[1] if "." in filename else "md"
+            method_path = self._artifact_path(workspace_root, slug(stem) or "methods", ext, request_id)
+            method_path.write_text(content, encoding="utf-8")
+
+            return {
+                "summary": f"Methods section saved to {filename}.",
+                "artifacts": [
+                    {
+                        "kind": "file",
+                        "title": filename,
+                        "path": str(method_path),
+                        "content_type": "text/markdown",
+                        "summary": "Methods section describing the analysis pipeline.",
+                    }
+                ],
+            }
+
         raise RuntimeError(f"暂不支持的技能：{skill}")
+
+    def _generate_methods_section(
+        self,
+        history: list[dict[str, Any]],
+        target: "RuntimeObject | None",
+        extra_context: str,
+    ) -> str:
+        sections: list[str] = ["# Methods", ""]
+
+        if extra_context:
+            sections.append(extra_context)
+            sections.append("")
+
+        if not history:
+            sections.append("No analysis steps were recorded in this session.")
+            return "\n".join(sections)
+
+        category_order = [
+            "session",
+            "quality_control",
+            "preprocessing",
+            "embedding",
+            "clustering",
+            "subsetting",
+            "differential_expression",
+            "visualization",
+            "export",
+            "custom",
+        ]
+        skill_category = {
+            "inspect_dataset": "session",
+            "assess_dataset": "session",
+            "summarize_qc": "quality_control",
+            "plot_qc_metrics": "quality_control",
+            "filter_cells": "quality_control",
+            "filter_genes": "quality_control",
+            "normalize_total": "preprocessing",
+            "log1p_transform": "preprocessing",
+            "select_hvg": "preprocessing",
+            "scale_matrix": "preprocessing",
+            "run_pca": "embedding",
+            "compute_neighbors": "embedding",
+            "run_umap": "embedding",
+            "prepare_umap": "embedding",
+            "subset_cells": "subsetting",
+            "subcluster_from_global": "clustering",
+            "recluster": "clustering",
+            "reanalyze_subset": "clustering",
+            "subcluster_group": "clustering",
+            "rename_clusters": "clustering",
+            "score_gene_set": "subsetting",
+            "find_markers": "differential_expression",
+            "plot_umap": "visualization",
+            "plot_gene_umap": "visualization",
+            "plot_dotplot": "visualization",
+            "plot_violin": "visualization",
+            "plot_heatmap": "visualization",
+            "plot_celltype_composition": "visualization",
+            "run_python_analysis": "custom",
+            "export_h5ad": "export",
+            "export_markers_csv": "export",
+        }
+        category_heading = {
+            "session": "Data Loading and Inspection",
+            "quality_control": "Quality Control",
+            "preprocessing": "Preprocessing and Normalization",
+            "embedding": "Dimensionality Reduction",
+            "clustering": "Clustering",
+            "subsetting": "Cell Subsetting and Scoring",
+            "differential_expression": "Differential Expression Analysis",
+            "visualization": "Visualization",
+            "export": "Data Export",
+            "custom": "Custom Analysis",
+        }
+
+        # Group steps by category, preserving first-occurrence order.
+        from collections import OrderedDict
+
+        grouped: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
+        for step in history:
+            cat = skill_category.get(step.get("skill", ""), "custom")
+            grouped.setdefault(cat, []).append(step)
+
+        sorted_cats = sorted(grouped.keys(), key=lambda c: category_order.index(c) if c in category_order else 999)
+
+        for cat in sorted_cats:
+            steps = grouped[cat]
+            heading = category_heading.get(cat, cat.replace("_", " ").title())
+            sections.append(f"## {heading}")
+            sections.append("")
+            for step in steps:
+                desc = self._describe_step(step)
+                if desc:
+                    sections.append(desc)
+            sections.append("")
+
+        # Software note
+        sections.append("## Software")
+        sections.append("")
+        sections.append(
+            "All analyses were performed using scAgent, an interactive single-cell "
+            "analysis platform built on Scanpy (Wolf et al., 2018). Visualizations were "
+            "generated with Matplotlib. Clustering was performed using the Leiden algorithm "
+            "(Traag et al., 2019)."
+        )
+        sections.append("")
+
+        return "\n".join(sections)
+
+    @staticmethod
+    def _describe_step(step: dict[str, Any]) -> str:
+        skill_name = step.get("skill", "")
+        p = step.get("params") or {}
+        summary = step.get("summary", "")
+
+        templates: dict[str, str | None] = {
+            "inspect_dataset": "The dataset was inspected to assess its structure and available annotations.",
+            "assess_dataset": "The dataset was assessed to determine its processing state.",
+        }
+
+        if skill_name == "filter_cells":
+            parts = ["Cells were filtered"]
+            criteria = []
+            if p.get("min_genes"):
+                criteria.append(f"minimum {p['min_genes']} detected genes")
+            if p.get("max_genes"):
+                criteria.append(f"maximum {p['max_genes']} detected genes")
+            if p.get("max_mt_pct"):
+                criteria.append(f"maximum {p['max_mt_pct']}% mitochondrial content")
+            if criteria:
+                parts.append("based on " + ", ".join(criteria))
+            return " ".join(parts) + "."
+
+        if skill_name == "filter_genes":
+            parts = ["Genes were filtered"]
+            criteria = []
+            if p.get("min_cells"):
+                criteria.append(f"expression in at least {p['min_cells']} cells")
+            if p.get("min_counts"):
+                criteria.append(f"minimum total count of {p['min_counts']}")
+            if criteria:
+                parts.append("requiring " + ", ".join(criteria))
+            return " ".join(parts) + "."
+
+        if skill_name == "summarize_qc":
+            prefix = p.get("mt_prefix", "MT-")
+            return (
+                f"Standard quality control metrics were computed, including total counts, "
+                f"number of detected genes, and mitochondrial gene fraction (prefix: {prefix})."
+            )
+
+        if skill_name == "normalize_total":
+            target_sum = p.get("target_sum", 10000)
+            return f"Per-cell counts were normalized to a target library size of {target_sum}."
+
+        if skill_name == "log1p_transform":
+            return "The expression matrix was log1p-transformed."
+
+        if skill_name == "select_hvg":
+            n = p.get("n_top_genes", 2000)
+            flavor = p.get("flavor", "seurat_v3")
+            return f"{n} highly variable genes were selected using the {flavor} method."
+
+        if skill_name == "scale_matrix":
+            mv = p.get("max_value")
+            clip = f", clipping values at {mv}" if mv else ""
+            return f"The expression matrix was scaled to unit variance and zero mean{clip}."
+
+        if skill_name == "run_pca":
+            n = p.get("n_comps", 50)
+            return f"Principal component analysis was performed, retaining {n} components."
+
+        if skill_name == "compute_neighbors":
+            nn = p.get("n_neighbors", 15)
+            return f"A nearest-neighbor graph was constructed using {nn} neighbors."
+
+        if skill_name == "run_umap":
+            md = p.get("min_dist", 0.5)
+            return f"UMAP embedding was computed with min_dist={md}."
+
+        if skill_name == "prepare_umap":
+            return (
+                "An automated preprocessing pipeline was applied to prepare the data for "
+                "UMAP visualization, including normalization, log-transformation, HVG selection, "
+                "PCA, neighbor graph construction, and UMAP embedding."
+            )
+
+        if skill_name == "recluster":
+            res = p.get("resolution", 1.0)
+            return f"The data were reclustered using the Leiden algorithm at resolution {res}."
+
+        if skill_name == "subcluster_from_global":
+            field = p.get("obs_field", "")
+            value = p.get("value", "")
+            res = p.get("resolution", 1.0)
+            return (
+                f"A subgroup defined by {field}={value} was isolated from the global object "
+                f"and subclustered at resolution {res}."
+            )
+
+        if skill_name == "subcluster_group":
+            groupby = p.get("groupby", "")
+            groups = p.get("groups", [])
+            res = p.get("resolution", 1.0)
+            group_str = ", ".join(str(g) for g in groups) if isinstance(groups, list) else str(groups)
+            return (
+                f"Clusters {group_str} (from {groupby}) were isolated and reclustered "
+                f"at resolution {res}."
+            )
+
+        if skill_name == "reanalyze_subset":
+            return "The subset was reanalyzed using a dedicated subclustering workflow."
+
+        if skill_name == "subset_cells":
+            field = p.get("obs_field", "")
+            op = p.get("op", "eq")
+            value = p.get("value", "")
+            return f"A cell subset was extracted where {field} {op} {value}."
+
+        if skill_name == "rename_clusters":
+            return "Cluster labels were manually renamed for biological annotation."
+
+        if skill_name == "score_gene_set":
+            genes = p.get("genes", [])
+            name = p.get("score_name", "gene_set_score")
+            gene_str = ", ".join(str(g) for g in genes[:5]) if isinstance(genes, list) else str(genes)
+            if isinstance(genes, list) and len(genes) > 5:
+                gene_str += f" and {len(genes) - 5} others"
+            return f"A gene-set score ({name}) was computed using genes: {gene_str}."
+
+        if skill_name == "find_markers":
+            groupby = p.get("groupby", "leiden")
+            return f"Marker genes were identified for each group defined by {groupby} using the Wilcoxon rank-sum test."
+
+        if skill_name in {"plot_umap", "plot_gene_umap", "plot_dotplot", "plot_violin", "plot_heatmap", "plot_celltype_composition"}:
+            return None  # Skip visualization steps — not typically included in Methods.
+
+        if skill_name == "export_h5ad":
+            return None
+
+        if skill_name == "export_markers_csv":
+            return None
+
+        if skill_name == "run_python_analysis":
+            if summary:
+                return f"A custom analysis step was performed: {summary}"
+            return "A custom Python analysis step was performed."
+
+        if skill_name in templates:
+            return templates[skill_name]
+
+        if summary:
+            return summary
+        return None
 
     def _descriptor(self, obj: RuntimeObject) -> dict[str, Any]:
         return {

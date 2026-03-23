@@ -195,6 +195,21 @@ func (s *Store) GetJob(id string) (*models.Job, bool) {
 	return cloneJob(job), true
 }
 
+func (s *Store) ListSessionJobs(sessionID string) []*models.Job {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	jobs := make([]*models.Job, 0)
+	for _, job := range s.jobs {
+		if job.SessionID == sessionID {
+			jobs = append(jobs, cloneJob(job))
+		}
+	}
+	slices.SortFunc(jobs, func(a, b *models.Job) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
+	})
+	return jobs
+}
+
 func (s *Store) SaveArtifact(artifact *models.Artifact) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
