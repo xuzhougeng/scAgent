@@ -153,6 +153,30 @@ def build_request_handler(state: Any, logger: Any) -> type[BaseHTTPRequestHandle
                     )
                     self._write_json(HTTPStatus.OK, response)
                     return
+                if self.path == "/sessions/cancel_execution":
+                    log_runtime_event(
+                        logger,
+                        "job_cancel_started",
+                        session_id=session_id,
+                        request_id=request_id,
+                    )
+                    response = state.cancel_execution(
+                        session_id=payload["session_id"],
+                        request_id=str(payload.get("request_id") or "").strip() or None,
+                    )
+                    log_runtime_event(
+                        logger,
+                        "job_cancel_finished",
+                        session_id=session_id,
+                        request_id=request_id,
+                        duration_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                        stopped=response.get("stopped"),
+                        isolated=response.get("isolated"),
+                        active_request_id=response.get("active_request_id"),
+                        active_operation=response.get("active_operation"),
+                    )
+                    self._write_json(HTTPStatus.OK, response)
+                    return
                 self._write_json(HTTPStatus.NOT_FOUND, {"error": "未找到接口"})
             except Exception as exc:  # noqa: BLE001
                 log_runtime_event(
@@ -177,10 +201,13 @@ def build_request_handler(state: Any, logger: Any) -> type[BaseHTTPRequestHandle
 
         def _write_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             body = json.dumps(payload).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
     return RequestHandler

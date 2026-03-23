@@ -671,16 +671,39 @@ func (s *Service) CancelJob(_ context.Context, jobID string) (*models.Job, *mode
 		return nil, nil, fmt.Errorf("当前任务暂时无法停止，请稍后重试")
 	}
 
+	cancelSummary := ""
+	cancelWarn := ""
+	if s.runtime != nil {
+		cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		response, err := s.runtime.CancelExecution(cancelCtx, runtime.CancelExecutionRequest{
+			SessionID: job.SessionID,
+		})
+		switch {
+		case err != nil:
+			cancelWarn = fmt.Sprintf("运行时强制停止未确认：%v", err)
+		case response != nil:
+			cancelSummary = strings.TrimSpace(response.Summary)
+		}
+	}
+
 	currentJob, ok := s.store.GetJob(jobID)
 	if ok && (currentJob.Status == models.JobQueued || currentJob.Status == models.JobRunning) {
 		currentJob.Summary = "正在停止当前任务..."
+		detail := "已收到停止请求，正在终止当前任务。"
+		if cancelSummary != "" {
+			detail = cancelSummary
+		}
+		if cancelWarn != "" {
+			detail = joinCheckpointSummary(detail, cancelWarn)
+		}
 		s.appendJobCheckpoint(
 			currentJob,
 			"execution",
 			"muted",
 			"停止请求",
 			"正在停止",
-			"已收到停止请求，正在终止当前任务。",
+			detail,
 		)
 		s.store.SaveJob(currentJob)
 		s.publishJob(currentJob.SessionID, currentJob.ID)

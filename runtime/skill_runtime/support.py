@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import math
+import os
 import re
+import shutil
+import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .base import SkillExecutionContext
 from .plugins import execute_plugin_skill
@@ -49,12 +52,17 @@ class SkillRuntimeSupport:
         kind: str,
         adata: Any,
         summary: str,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         backend_ref = self.next_ref(session_id)
         suffix = backend_ref.split(":")[-1]
-        materialized_path = workspace_root / "objects" / f"{self.slug(label)}_{self.slug(suffix)}.h5ad"
-        materialized_path.parent.mkdir(parents=True, exist_ok=True)
-        adata.write_h5ad(materialized_path)
+        materialized_path = self._object_path(
+            workspace_root,
+            label=label,
+            suffix=suffix,
+            request_id=request_id,
+        )
+        self._write_adata_atomic(adata, materialized_path)
 
         n_obs, n_vars = self.inspect_h5ad_shape(materialized_path)
         metadata = self.inspect_h5ad_metadata(materialized_path)
@@ -186,8 +194,61 @@ class SkillRuntimeSupport:
             duplicate_index += 1
         return candidate
 
+    def _object_path(self, workspace_root: Path, label: str, suffix: str, request_id: str | None = None) -> Path:
+        objects_dir = workspace_root / "objects"
+        objects_dir.mkdir(parents=True, exist_ok=True)
+
+        label_stem = self.slug(label) or "object"
+        suffix_stem = self.slug(suffix) or "adata"
+        request_suffix = self.slug(str(request_id or "").strip())
+        file_stem = f"{label_stem}_{suffix_stem}"
+        if request_suffix:
+            file_stem = f"{file_stem}_{request_suffix}"
+        candidate = objects_dir / f"{file_stem}.h5ad"
+        duplicate_index = 2
+        while candidate.exists():
+            candidate = objects_dir / f"{file_stem}_{duplicate_index}.h5ad"
+            duplicate_index += 1
+        return candidate
+
     def _plot_path(self, workspace_root: Path, skill: str, label: str, request_id: str | None = None) -> Path:
         return self._artifact_path(workspace_root, f"{skill}_{label}", "png", request_id)
+
+    @staticmethod
+    def _cleanup_temp_path(path: Path) -> None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+
+    def _atomic_write(self, path: Path, writer: Callable[[Path], None]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        try:
+            writer(temp_path)
+            os.replace(temp_path, path)
+        except Exception:  # noqa: BLE001
+            self._cleanup_temp_path(temp_path)
+            raise
+
+    def _write_adata_atomic(self, adata: Any, path: Path) -> None:
+        self._atomic_write(path, lambda temp_path: adata.write_h5ad(temp_path))
+
+    def _copy_file_atomic(self, source_path: Path | str, target_path: Path) -> None:
+        source = Path(str(source_path))
+        self._atomic_write(target_path, lambda temp_path: shutil.copy2(source, temp_path))
+
+    def _write_text_atomic(self, path: Path, content: str, *, encoding: str = "utf-8") -> None:
+        self._atomic_write(path, lambda temp_path: temp_path.write_text(content, encoding=encoding))
+
+    def _write_table_atomic(self, table: Any, path: Path, *, index: bool = False) -> None:
+        self._atomic_write(path, lambda temp_path: table.to_csv(temp_path, index=index))
+
+    def _save_figure_atomic(self, figure: Any, path: Path) -> None:
+        self._atomic_write(
+            path,
+            lambda temp_path: figure.savefig(temp_path, format="png", dpi=180, bbox_inches="tight", facecolor="white"),
+        )
 
     def _infer_mt_prefix(self, adata: Any, explicit_prefix: Any = None) -> str | None:
         prefix = str(explicit_prefix or "").strip()
@@ -571,7 +632,7 @@ class SkillRuntimeSupport:
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         fig.tight_layout()
-        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        self._save_figure_atomic(fig, path)
         plt.close(fig)
 
     def _save_gene_umap_plot(
@@ -613,7 +674,7 @@ class SkillRuntimeSupport:
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         fig.tight_layout()
-        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        self._save_figure_atomic(fig, path)
         plt.close(fig)
 
     def _save_qc_metrics_plot(self, adata: Any, path: Path, metrics: list[str], *, title: str | None = None) -> None:
@@ -640,7 +701,7 @@ class SkillRuntimeSupport:
 
         fig.suptitle(figure_title)
         fig.tight_layout()
-        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        self._save_figure_atomic(fig, path)
         plt.close(fig)
 
     def _save_dotplot(
@@ -690,7 +751,7 @@ class SkillRuntimeSupport:
         ax.legend(title="% expressing", frameon=False, loc="upper left", bbox_to_anchor=(1.02, 1.0))
 
         fig.tight_layout()
-        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        self._save_figure_atomic(fig, path)
         plt.close(fig)
 
     def _save_group_heatmap(
@@ -727,7 +788,7 @@ class SkillRuntimeSupport:
         colorbar.set_label("Mean expression")
 
         fig.tight_layout()
-        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        self._save_figure_atomic(fig, path)
         plt.close(fig)
 
     def _save_violin_plot(
@@ -821,7 +882,7 @@ class SkillRuntimeSupport:
             fig.tight_layout(rect=rect, h_pad=0.0)
         else:
             fig.tight_layout(h_pad=0.0)
-        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        self._save_figure_atomic(fig, path)
         plt.close(fig)
 
     def _save_stacked_bar_plot(self, path: Path, composition: Any, *, title: str | None = None) -> None:
@@ -849,19 +910,19 @@ class SkillRuntimeSupport:
         ax.legend(title="Cell groups", frameon=False, loc="upper left", bbox_to_anchor=(1.02, 1.0))
 
         fig.tight_layout()
-        fig.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        self._save_figure_atomic(fig, path)
         plt.close(fig)
 
     def _save_custom_figure(self, figure: Any, workspace_root: Path, stem: str, request_id: str | None = None) -> Path:
         path = self._artifact_path(workspace_root, stem, "png", request_id)
-        figure.savefig(path, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+        self._save_figure_atomic(figure, path)
         _, _, plt, _, _ = self.analysis_modules()
         plt.close(figure)
         return path
 
     def _save_custom_table(self, table: Any, workspace_root: Path, stem: str, request_id: str | None = None) -> Path:
         path = self._artifact_path(workspace_root, stem, "csv", request_id)
-        table.to_csv(path, index=False)
+        self._write_table_atomic(table, path, index=False)
         return path
 
     def _table_source_path(self, target: Any) -> Path:

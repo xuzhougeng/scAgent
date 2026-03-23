@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 from typing import Any
 
 from .base import SkillExecutionContext
@@ -9,12 +8,10 @@ from .common import require_target
 
 def export_h5ad(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     target = require_target(state, ctx)
-    export_path = ctx.workspace_root / "objects" / f"{state.slug(target.label)}.h5ad"
-    shutil.copy2(target.materialized_path, export_path)
-    target.materialized_path = str(export_path)
-    target.state = "materialized"
+    export_path = state._artifact_path(ctx.workspace_root, state.slug(target.label) or "dataset", "h5ad", ctx.request_id)
+    state._copy_file_atomic(target.materialized_path, export_path)
     return {
-        "summary": f"已将 {target.label} 导出到磁盘。",
+        "summary": f"已将 {target.label} 导出为 h5ad 文件。",
         "artifacts": [
             {
                 "kind": "file",
@@ -35,16 +32,16 @@ def export_markers_csv(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]
     export_path = state._artifact_path(ctx.workspace_root, f"{target.label}_markers", "csv", ctx.request_id)
     suffix = source_path.suffix.lower()
     if suffix == ".csv":
-        shutil.copy2(source_path, export_path)
+        state._copy_file_atomic(source_path, export_path)
     elif suffix in {".tsv", ".txt"}:
         table = pd.read_csv(source_path, sep="\t")
-        table.to_csv(export_path, index=False)
+        state._write_table_atomic(table, export_path, index=False)
     else:
         try:
             table = pd.read_csv(source_path)
         except Exception:
             table = pd.read_csv(source_path, sep="\t")
-        table.to_csv(export_path, index=False)
+        state._write_table_atomic(table, export_path, index=False)
 
     return {
         "summary": f"已将 {target.label} 导出为 CSV 文件。",
@@ -72,7 +69,7 @@ def write_method(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     stem = filename.rsplit(".", 1)[0] if "." in filename else filename
     ext = filename.rsplit(".", 1)[1] if "." in filename else "md"
     method_path = state._artifact_path(ctx.workspace_root, state.slug(stem) or "methods", ext, ctx.request_id)
-    method_path.write_text(content, encoding="utf-8")
+    state._write_text_atomic(method_path, content, encoding="utf-8")
 
     return {
         "summary": f"Methods section saved to {filename}.",

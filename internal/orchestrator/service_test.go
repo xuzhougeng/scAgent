@@ -79,7 +79,8 @@ type scalarResultRuntime struct {
 }
 
 type blockingRuntime struct {
-	started chan struct{}
+	started     chan struct{}
+	cancelCalls []runtimeclient.CancelExecutionRequest
 }
 
 type scriptedEvaluator struct {
@@ -169,6 +170,14 @@ func (r *sequentialRuntime) Execute(_ context.Context, payload runtimeclient.Exe
 	}, nil
 }
 
+func (r *sequentialRuntime) CancelExecution(context.Context, runtimeclient.CancelExecutionRequest) (*runtimeclient.CancelExecutionResponse, error) {
+	return &runtimeclient.CancelExecutionResponse{
+		Summary:  "stopped",
+		Stopped:  true,
+		Isolated: false,
+	}, nil
+}
+
 func (r *restoringRuntime) Health(context.Context) error {
 	return nil
 }
@@ -215,6 +224,14 @@ func (r *restoringRuntime) Execute(_ context.Context, payload runtimeclient.Exec
 	}, nil
 }
 
+func (r *restoringRuntime) CancelExecution(context.Context, runtimeclient.CancelExecutionRequest) (*runtimeclient.CancelExecutionResponse, error) {
+	return &runtimeclient.CancelExecutionResponse{
+		Summary:  "stopped",
+		Stopped:  true,
+		Isolated: false,
+	}, nil
+}
+
 func (r *scalarResultRuntime) Health(context.Context) error {
 	return nil
 }
@@ -254,6 +271,14 @@ func (r *scalarResultRuntime) Execute(_ context.Context, payload runtimeclient.E
 	}, nil
 }
 
+func (r *scalarResultRuntime) CancelExecution(context.Context, runtimeclient.CancelExecutionRequest) (*runtimeclient.CancelExecutionResponse, error) {
+	return &runtimeclient.CancelExecutionResponse{
+		Summary:  "stopped",
+		Stopped:  true,
+		Isolated: false,
+	}, nil
+}
+
 func (r *blockingRuntime) Health(context.Context) error {
 	return nil
 }
@@ -287,6 +312,15 @@ func (r *blockingRuntime) Execute(ctx context.Context, payload runtimeclient.Exe
 	}
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+func (r *blockingRuntime) CancelExecution(_ context.Context, payload runtimeclient.CancelExecutionRequest) (*runtimeclient.CancelExecutionResponse, error) {
+	r.cancelCalls = append(r.cancelCalls, payload)
+	return &runtimeclient.CancelExecutionResponse{
+		Summary:  "worker stopped",
+		Stopped:  true,
+		Isolated: false,
+	}, nil
 }
 
 func TestBuildExecutablePlanRejectsEmptyLLMPlan(t *testing.T) {
@@ -603,6 +637,9 @@ func TestSubmitMessageRejectsConcurrentActiveJob(t *testing.T) {
 	if _, _, err := service.CancelJob(context.Background(), job.ID); err != nil {
 		t.Fatalf("cancel job: %v", err)
 	}
+	if len(runtime.cancelCalls) != 1 || runtime.cancelCalls[0].SessionID != sessionRecord.ID {
+		t.Fatalf("expected runtime cancel request for session %s, got %+v", sessionRecord.ID, runtime.cancelCalls)
+	}
 
 	for range 100 {
 		currentJob, ok := store.GetJob(job.ID)
@@ -681,6 +718,9 @@ func TestCancelJobAddsCanceledAssistantMessage(t *testing.T) {
 
 	if _, _, err := service.CancelJob(context.Background(), job.ID); err != nil {
 		t.Fatalf("cancel job: %v", err)
+	}
+	if len(runtime.cancelCalls) != 1 || runtime.cancelCalls[0].SessionID != sessionRecord.ID {
+		t.Fatalf("expected runtime cancel request for session %s, got %+v", sessionRecord.ID, runtime.cancelCalls)
 	}
 
 	for range 100 {

@@ -46,6 +46,7 @@ def filter_cells(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
             f"已对 {target.label} 应用细胞过滤（{', '.join(threshold_bits)}），"
             f"保留 {filtered.n_obs} 个细胞，移除 {removed} 个细胞。"
         ),
+        request_id=ctx.request_id,
     )
 
 
@@ -93,6 +94,7 @@ def filter_genes(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
             f"已对 {target.label} 应用基因过滤（{', '.join(threshold_bits)}），"
             f"保留 {filtered.n_vars} 个基因，移除 {removed} 个基因。"
         ),
+        request_id=ctx.request_id,
     )
 
 
@@ -109,6 +111,7 @@ def normalize_total(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind=state._default_kind_after_processing(target),
         adata=adata,
         summary=f"已对 {target.label} 完成总表达归一化（target_sum={target_sum:g}）。",
+        request_id=ctx.request_id,
     )
 
 
@@ -124,6 +127,7 @@ def log1p_transform(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind=state._default_kind_after_processing(target),
         adata=adata,
         summary=f"已对 {target.label} 完成 log1p 变换。",
+        request_id=ctx.request_id,
     )
 
 
@@ -153,6 +157,7 @@ def select_hvg(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind=state._default_kind_after_processing(target),
         adata=adata,
         summary=f"已为 {target.label} 选择高变基因（n_top_genes={n_top_genes}，实际标记 {n_hvg} 个）。",
+        request_id=ctx.request_id,
     )
 
 
@@ -175,6 +180,7 @@ def scale_matrix(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind=state._default_kind_after_processing(target),
         adata=adata,
         summary=summary,
+        request_id=ctx.request_id,
     )
 
 
@@ -194,6 +200,7 @@ def run_pca(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind=state._default_kind_after_processing(target),
         adata=adata,
         summary=f"已为 {target.label} 计算 PCA（n_comps={max_comps}）。",
+        request_id=ctx.request_id,
     )
 
 
@@ -218,6 +225,7 @@ def compute_neighbors(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind=state._default_kind_after_processing(target),
         adata=adata,
         summary=f"已为 {target.label} 计算邻接图（n_neighbors={n_neighbors}）。",
+        request_id=ctx.request_id,
     )
 
 
@@ -237,6 +245,7 @@ def run_umap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind=state._default_kind_after_processing(target),
         adata=adata,
         summary=f"已为 {target.label} 计算 UMAP（min_dist={min_dist:g}）。",
+        request_id=ctx.request_id,
     )
 
 
@@ -257,6 +266,7 @@ def prepare_umap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind=state._default_kind_after_processing(target),
         adata=adata,
         summary=f"已为 {target.label} 完成常规预处理链，并生成 PCA、邻接图和 UMAP。",
+        request_id=ctx.request_id,
     )
 
 

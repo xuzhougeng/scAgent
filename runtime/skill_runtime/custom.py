@@ -131,6 +131,7 @@ def run_python_analysis(state: Any, ctx: SkillExecutionContext) -> dict[str, Any
             kind=state._default_kind_after_processing(target),
             adata=output_adata,
             summary="",
+            request_id=ctx.request_id,
         )
         response["object"] = persisted["object"]
         if not result_summary and not result_text and facts.get("result_value") is None:

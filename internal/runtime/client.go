@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"scagent/internal/models"
 )
@@ -20,6 +19,7 @@ type Service interface {
 	LoadFile(ctx context.Context, payload LoadFileRequest) (*LoadFileResponse, error)
 	EnsureObject(ctx context.Context, payload EnsureObjectRequest) (*EnsureObjectResponse, error)
 	Execute(ctx context.Context, payload ExecuteRequest) (*ExecuteResponse, error)
+	CancelExecution(ctx context.Context, payload CancelExecutionRequest) (*CancelExecutionResponse, error)
 }
 
 type Client struct {
@@ -29,10 +29,8 @@ type Client struct {
 
 func NewClient(baseURL string) *Client {
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		httpClient: &http.Client{},
 	}
 }
 
@@ -105,6 +103,19 @@ type ExecuteResponse struct {
 	Facts      map[string]any       `json:"facts,omitempty"`
 	Metadata   map[string]any       `json:"metadata,omitempty"`
 	ActiveHint string               `json:"active_hint,omitempty"`
+}
+
+type CancelExecutionRequest struct {
+	SessionID string `json:"session_id"`
+	RequestID string `json:"request_id,omitempty"`
+}
+
+type CancelExecutionResponse struct {
+	Summary         string `json:"summary"`
+	Stopped         bool   `json:"stopped"`
+	Isolated        bool   `json:"isolated,omitempty"`
+	ActiveRequestID string `json:"active_request_id,omitempty"`
+	ActiveOperation string `json:"active_operation,omitempty"`
 }
 
 type EnvironmentCheck struct {
@@ -188,6 +199,14 @@ func (c *Client) LoadFile(ctx context.Context, payload LoadFileRequest) (*LoadFi
 func (c *Client) EnsureObject(ctx context.Context, payload EnsureObjectRequest) (*EnsureObjectResponse, error) {
 	var response EnsureObjectResponse
 	if err := c.postJSON(ctx, "/objects/ensure", payload, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) CancelExecution(ctx context.Context, payload CancelExecutionRequest) (*CancelExecutionResponse, error) {
+	var response CancelExecutionResponse
+	if err := c.postJSON(ctx, "/sessions/cancel_execution", payload, &response); err != nil {
 		return nil, err
 	}
 	return &response, nil

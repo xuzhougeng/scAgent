@@ -13,13 +13,17 @@ from .diagnostics import (
     slug,
 )
 from .http import build_request_handler
+from .managed_state import ManagedRuntimeState
 from .models import RuntimeObject
 from .object_store import RuntimeObjectStore
+from .state import RuntimeState
 
 __all__ = [
+    "ManagedRuntimeState",
     "SAFE_EXEC_BUILTINS",
     "RuntimeObject",
     "RuntimeObjectStore",
+    "RuntimeState",
     "analysis_modules",
     "build_custom_analysis_facts",
     "build_environment_report",

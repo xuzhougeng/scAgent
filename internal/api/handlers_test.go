@@ -229,6 +229,9 @@ func TestCancelJobEndpoint(t *testing.T) {
 	if cancelRecorder.Code != http.StatusAccepted && cancelRecorder.Code != http.StatusOK {
 		t.Fatalf("expected 202 or 200, got %d: %s", cancelRecorder.Code, cancelRecorder.Body.String())
 	}
+	if len(runtimeService.cancelCalls) != 1 || runtimeService.cancelCalls[0].SessionID != sessionID {
+		t.Fatalf("expected runtime cancel call for session %s, got %+v", sessionID, runtimeService.cancelCalls)
+	}
 
 	var finalSnapshot models.SessionSnapshot
 	var canceled bool
@@ -722,7 +725,8 @@ type fakeRuntime struct{}
 
 type cancelableFakeRuntime struct {
 	fakeRuntime
-	started chan struct{}
+	started     chan struct{}
+	cancelCalls []runtimeclient.CancelExecutionRequest
 }
 
 func (f *fakeRuntime) Health(context.Context) error {
@@ -852,6 +856,14 @@ func (f *fakeRuntime) Execute(_ context.Context, payload runtimeclient.ExecuteRe
 	}
 }
 
+func (f *fakeRuntime) CancelExecution(context.Context, runtimeclient.CancelExecutionRequest) (*runtimeclient.CancelExecutionResponse, error) {
+	return &runtimeclient.CancelExecutionResponse{
+		Summary:  "worker stopped",
+		Stopped:  true,
+		Isolated: false,
+	}, nil
+}
+
 func (f *cancelableFakeRuntime) Execute(ctx context.Context, payload runtimeclient.ExecuteRequest) (*runtimeclient.ExecuteResponse, error) {
 	if f.started != nil {
 		select {
@@ -862,4 +874,9 @@ func (f *cancelableFakeRuntime) Execute(ctx context.Context, payload runtimeclie
 	}
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+func (f *cancelableFakeRuntime) CancelExecution(ctx context.Context, payload runtimeclient.CancelExecutionRequest) (*runtimeclient.CancelExecutionResponse, error) {
+	f.cancelCalls = append(f.cancelCalls, payload)
+	return f.fakeRuntime.CancelExecution(ctx, payload)
 }

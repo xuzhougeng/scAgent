@@ -26,6 +26,7 @@ def subset_cells(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind="subset",
         adata=subset,
         summary=f"已从 {target.label} 中筛选出 {subset.n_obs} 个细胞，生成子集 {subset_label}。",
+        request_id=ctx.request_id,
     )
 
 
@@ -52,6 +53,7 @@ def subcluster_from_global(state: Any, ctx: SkillExecutionContext) -> dict[str, 
             f"已保持 {target.label} 不变，并仅对 {obs_field}={value} 的 {analyzed_subset.n_obs} 个细胞完成亚群分析。"
             f"流程包括归一化、log1p、高变基因、PCA、邻接图、UMAP 和 Leiden（resolution={workflow['resolution']}）。"
         ),
+        request_id=ctx.request_id,
     )
 
 
@@ -85,6 +87,7 @@ def score_gene_set(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind=state._default_kind_after_processing(target),
         adata=adata,
         summary="".join(summary_bits),
+        request_id=ctx.request_id,
     )
     persisted["metadata"] = {
         "score_name": score_name,
@@ -113,6 +116,7 @@ def recluster(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind="reclustered_subset",
         adata=adata,
         summary=f"已对 {target.label} 完成重新聚类，分辨率为 {resolution}。",
+        request_id=ctx.request_id,
     )
 
 
@@ -130,6 +134,7 @@ def reanalyze_subset(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
             f"已对提取亚群 {target.label} 重新执行低计数友好的亚群分析。"
             f"流程包括归一化、log1p、高变基因、PCA、邻接图、UMAP 和 Leiden（resolution={workflow['resolution']}）。"
         ),
+        request_id=ctx.request_id,
     )
 
 
@@ -160,6 +165,7 @@ def subcluster_group(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
             f"已从 {target.label} 中提取 {groupby}={state.format_list_zh([str(item) for item in groups])} 的 {analyzed_subset.n_obs} 个细胞，"
             f"并完成亚群重分析（resolution={workflow['resolution']}）。"
         ),
+        request_id=ctx.request_id,
     )
 
 
@@ -184,6 +190,7 @@ def rename_clusters(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         kind=target.kind,
         adata=adata,
         summary=f"已在 {target.label} 中重命名 `{groupby}` 的类别标签，共应用 {len(mapping)} 条映射。",
+        request_id=ctx.request_id,
     )
 
 
@@ -196,7 +203,7 @@ def find_markers(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     path = state._artifact_path(ctx.workspace_root, f"markers_{target.label}", "csv", ctx.request_id)
     sc.tl.rank_genes_groups(adata, groupby=groupby, method="wilcoxon", use_raw=adata.raw is not None)
     markers = sc.get.rank_genes_groups_df(adata, group=None)
-    markers.to_csv(path, index=False)
+    state._write_table_atomic(markers, path, index=False)
     return {
         "summary": f"已为 {target.label} 生成 marker 表（groupby={groupby}）。",
         "artifacts": [

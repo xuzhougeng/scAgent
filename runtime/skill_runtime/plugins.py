@@ -31,6 +31,7 @@ def execute_plugin_skill(state: Any, ctx: SkillExecutionContext, plugin: PluginS
             kind=kind or state._default_kind_after_processing(target),
             adata=output_adata,
             summary="",
+            request_id=ctx.request_id,
         )
         return persisted["object"]
 
