@@ -30,7 +30,9 @@ type EvaluationRequest struct {
 	RecentMessages  []*models.Message     `json:"recent_messages,omitempty"`
 	RecentJobs      []*models.Job         `json:"recent_jobs,omitempty"`
 	RecentArtifacts []*models.Artifact    `json:"recent_artifacts,omitempty"`
+	RecentTurns     []*models.Turn        `json:"recent_turns,omitempty"`
 	CurrentJob      *models.Job           `json:"current_job,omitempty"`
+	CurrentTurn     *models.Turn          `json:"current_turn,omitempty"`
 	WorkingMemory   *models.WorkingMemory `json:"working_memory,omitempty"`
 }
 
@@ -96,6 +98,9 @@ func (e *FakeEvaluator) Mode() string {
 }
 
 func (e *FakeEvaluator) Evaluate(_ context.Context, request EvaluationRequest) (*CompletionEvaluation, error) {
+	if evaluation := evaluateTurnCompletion(request.CurrentTurn, request.CurrentJob); evaluation != nil {
+		return evaluation, nil
+	}
 	if request.CurrentJob == nil || len(request.CurrentJob.Steps) == 0 {
 		return &CompletionEvaluation{
 			Completed: false,
@@ -376,6 +381,7 @@ func (e *LLMEvaluator) instructions(requestPayload EvaluationRequest) string {
 		"A succeeded export_h5ad step is terminal for a simple export request; do not require extra downstream steps or repeated artifact references.",
 		"For plot or plot-edit requests, a succeeded plot_umap or plot_gene_umap step that produced the requested plot is a strong signal for completed=true.",
 		"For workflow requests such as subset-then-plot, an earlier succeeded subset step alone is not sufficient; all requested downstream outputs must exist before completed=true.",
+		"Treat current_turn as the authoritative fulfillment contract when it is present.",
 		"Current execution context:",
 	}
 	lines = append(lines, formatEvaluationContext(requestPayload)...)
@@ -407,14 +413,18 @@ func formatEvaluationContext(request EvaluationRequest) []string {
 		RecentMessages:  request.RecentMessages,
 		RecentJobs:      request.RecentJobs,
 		RecentArtifacts: request.RecentArtifacts,
+		RecentTurns:     request.RecentTurns,
+		CurrentTurn:     request.CurrentTurn,
 		WorkingMemory:   request.WorkingMemory,
 	}, evaluatorPlanningContextPolicy())
 	if request.CurrentJob == nil {
-		return append(planningContext, "- current_job=none")
+		lines := append(planningContext, "- current_job=none")
+		return append(lines, formatTurnEvaluationContext(request.CurrentTurn, request.RecentTurns)...)
 	}
 
 	lines := append([]string(nil), planningContext...)
 	lines = append(lines, "- current_job="+formatCurrentJobContext(request.CurrentJob))
+	lines = append(lines, formatTurnEvaluationContext(request.CurrentTurn, request.RecentTurns)...)
 	return lines
 }
 

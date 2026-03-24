@@ -21,6 +21,7 @@ type PlanningContextPolicy struct {
 	MaxRecentMessages            int
 	MaxRecentJobs                int
 	MaxRecentArtifacts           int
+	MaxRecentTurns               int
 	MaxWorkingMemoryArtifacts    int
 	MaxWorkingMemoryPreferences  int
 	MaxWorkingMemoryStateChanges int
@@ -34,6 +35,7 @@ func plannerPlanningContextPolicy() PlanningContextPolicy {
 		MaxRecentMessages:            4,
 		MaxRecentJobs:                2,
 		MaxRecentArtifacts:           3,
+		MaxRecentTurns:               3,
 		MaxWorkingMemoryArtifacts:    2,
 		MaxWorkingMemoryPreferences:  3,
 		MaxWorkingMemoryStateChanges: 3,
@@ -48,6 +50,7 @@ func answererPlanningContextPolicy() PlanningContextPolicy {
 		MaxRecentMessages:            6,
 		MaxRecentJobs:                3,
 		MaxRecentArtifacts:           4,
+		MaxRecentTurns:               4,
 		MaxWorkingMemoryArtifacts:    3,
 		MaxWorkingMemoryPreferences:  4,
 		MaxWorkingMemoryStateChanges: 4,
@@ -62,6 +65,7 @@ func evaluatorPlanningContextPolicy() PlanningContextPolicy {
 		MaxRecentMessages:            4,
 		MaxRecentJobs:                2,
 		MaxRecentArtifacts:           3,
+		MaxRecentTurns:               3,
 		MaxWorkingMemoryArtifacts:    2,
 		MaxWorkingMemoryPreferences:  3,
 		MaxWorkingMemoryStateChanges: 3,
@@ -99,6 +103,7 @@ func formatPlanningContextWithPolicy(request PlanningRequest, policy PlanningCon
 	lines = append(lines, formatPlannerRecentMessages(request.RecentMessages, policy.MaxRecentMessages)...)
 	lines = append(lines, formatPlannerRecentJobs(request.RecentJobs, policy.MaxRecentJobs)...)
 	lines = append(lines, formatPlannerArtifactGroup("recent_artifacts", request.RecentArtifacts, policy.MaxRecentArtifacts)...)
+	lines = append(lines, formatPlannerTurnContext(request.CurrentTurn, request.RecentTurns, policy.MaxRecentTurns)...)
 	lines = append(lines, formatPlannerWorkingMemoryContext(
 		request.WorkingMemory,
 		policy.MaxWorkingMemoryArtifacts,

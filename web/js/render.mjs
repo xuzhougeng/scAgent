@@ -1102,12 +1102,12 @@ async function buildMessageNode(message, template) {
       ? `${formatRole(message.role)} · 发送中`
       : formatRole(message.role);
 
-  const detailMarkup = await buildMessageDetailMarkup(message);
-  if (detailMarkup) {
+  const detailResult = await buildMessageDetailMarkup(message);
+  if (detailResult.markup) {
     const detail = document.createElement("div");
     detail.className = "message-detail";
-    detail.innerHTML = detailMarkup;
-    if (message.role === "assistant" && message.job_id) {
+    detail.innerHTML = detailResult.markup;
+    if (detailResult.primary) {
       detail.classList.add("message-detail-primary");
       node.insertBefore(detail, content);
     } else {
@@ -1116,15 +1116,15 @@ async function buildMessageNode(message, template) {
   }
   if (String(message.content || "").trim()) {
     content.textContent = message.content;
-    if (message.role === "assistant" && message.job_id && detailMarkup) {
+    if (message.role === "assistant" && detailResult.primary) {
       content.classList.add("message-content-secondary");
     }
   } else {
     content.remove();
   }
 
-  if (message.role === "assistant" && message.job_id) {
-    const job = (appState.snapshot?.jobs || []).find((item) => item.id === message.job_id);
+  if (message.role === "assistant") {
+    const job = snapshotJob(message.job_id || turnForMessage(message)?.job_id);
     if (job && job.status !== "queued" && job.status !== "running") {
       const actions = document.createElement("div");
       actions.className = "message-actions";
@@ -1157,6 +1157,64 @@ function buildMessageActionsMarkup(job) {
     );
   }
   return buttons.join("");
+}
+
+function snapshotJob(jobId) {
+  if (!jobId) {
+    return null;
+  }
+  return (appState.snapshot?.jobs || []).find((item) => item.id === jobId) || null;
+}
+
+function snapshotTurn(turnId) {
+  if (!turnId) {
+    return null;
+  }
+  return (appState.snapshot?.turns || []).find((item) => item.id === turnId) || null;
+}
+
+function snapshotArtifact(artifactId) {
+  if (!artifactId) {
+    return null;
+  }
+  return (appState.snapshot?.artifacts || []).find((item) => item.id === artifactId) || null;
+}
+
+function snapshotObject(objectId) {
+  if (!objectId) {
+    return null;
+  }
+  return (appState.snapshot?.objects || []).find((item) => item.id === objectId) || null;
+}
+
+function turnForMessage(message) {
+  return snapshotTurn(message?.turn_id);
+}
+
+function formatTurnStatusLabel(status) {
+  switch (status) {
+    case "fulfilled":
+      return "本轮已完成";
+    case "failed":
+      return "本轮失败";
+    case "canceled":
+      return "已取消";
+    default:
+      return "等待中";
+  }
+}
+
+function statusKindForTurn(status) {
+  switch (status) {
+    case "fulfilled":
+      return "ok";
+    case "failed":
+      return "bad";
+    case "canceled":
+      return "muted";
+    default:
+      return "warn";
+  }
 }
 
 function hasActiveJob() {
@@ -1291,26 +1349,35 @@ function normalizeTableRow(row, width) {
 
 async function buildMessageDetailMarkup(message) {
   if (!appState.snapshot) {
-    return "";
+    return { markup: "", primary: false };
   }
 
   if (message.role === "user") {
     const job = (appState.snapshot.jobs || []).find((item) => item.message_id === message.id);
     if (!job || (job.status !== "queued" && job.status !== "running")) {
-      return "";
+      return { markup: "", primary: false };
     }
-    return buildJobStatusMarkup(job);
+    return { markup: buildJobStatusMarkup(job), primary: false };
   }
 
-  if (message.role === "assistant" && message.job_id) {
-    const job = (appState.snapshot.jobs || []).find((item) => item.id === message.job_id);
-    if (!job) {
-      return "";
+  if (message.role === "assistant") {
+    const turn = turnForMessage(message);
+    const job = snapshotJob(message.job_id || turn?.job_id);
+    if (job) {
+      return {
+        markup: await buildJobResultMarkup(job, message, turn),
+        primary: true,
+      };
     }
-    return buildJobResultMarkup(job, message);
+    if (turn) {
+      const markup = await buildTurnResultMarkup(turn, message);
+      if (markup) {
+        return { markup, primary: true };
+      }
+    }
   }
 
-  return "";
+  return { markup: "", primary: false };
 }
 
 function buildJobStatusMarkup(job) {
@@ -1344,12 +1411,9 @@ function buildJobStatusMarkup(job) {
   `;
 }
 
-async function buildJobResultMarkup(job, assistantMessage) {
-  const relatedArtifacts = (appState.snapshot?.artifacts || []).filter((artifact) => artifact.job_id === job.id);
+async function buildJobResultMarkup(job, assistantMessage, turn) {
+  const resultMarkup = await buildTurnResultGroupMarkup(turn, { fallbackJob: job });
   const showSummary = shouldRenderJobSummary(job, assistantMessage?.content || "");
-  const artifactCards = await Promise.all(
-    relatedArtifacts.map((artifact) => buildArtifactCardMarkup(artifact, "chat")),
-  );
   const cardClass =
     job.status === "failed"
       ? "failed"
@@ -1384,18 +1448,131 @@ async function buildJobResultMarkup(job, assistantMessage) {
           : ""
       }
       ${
-        artifactCards.length
-          ? `<div class="message-artifact-group">
-              <div class="message-artifact-head">
-                <strong>结果文件</strong>
-                <span class="muted">${artifactCards.length} 项</span>
-              </div>
-              ${artifactCards.join("")}
-            </div>`
-          : ""
+        resultMarkup
       }
       ${""/* retry button hidden — kept in backend API only */}
       ${detailMarkup}
+    </section>
+  `;
+}
+
+function shouldRenderTurnSummary(turn, assistantContent = "") {
+  if (!turn?.summary) {
+    return false;
+  }
+  return turn.summary.trim() !== String(assistantContent || "").trim();
+}
+
+async function buildTurnResultMarkup(turn, assistantMessage) {
+  const resultMarkup = await buildTurnResultGroupMarkup(turn);
+  if (!resultMarkup) {
+    return "";
+  }
+  const showSummary = shouldRenderTurnSummary(turn, assistantMessage?.content || "");
+  const cardClass =
+    turn.status === "failed"
+      ? "failed"
+      : turn.status === "canceled"
+        ? "canceled"
+        : "done";
+
+  return `
+    <section class="message-job-card ${cardClass}">
+      <div class="message-job-head">
+        <strong>结果详情</strong>
+        ${statusPill(statusKindForTurn(turn.status), formatTurnStatusLabel(turn.status))}
+      </div>
+      ${
+        showSummary
+          ? `<p class="message-job-summary">${escapeHTML(turn.summary)}</p>`
+          : ""
+      }
+      ${resultMarkup}
+    </section>
+  `;
+}
+
+async function buildTurnResultGroupMarkup(turn, { fallbackJob = null } = {}) {
+  const resultCards = await buildTurnResultCards(turn, { fallbackJob });
+  if (!resultCards.length) {
+    return "";
+  }
+
+  return `
+    <div class="message-artifact-group">
+      <div class="message-artifact-head">
+        <strong>${escapeHTML(turnResultGroupLabel(turn, resultCards.length))}</strong>
+        <span class="muted">${escapeHTML(`${resultCards.length} 项`)}</span>
+      </div>
+      ${resultCards.join("")}
+    </div>
+  `;
+}
+
+function turnResultGroupLabel(turn, count) {
+  if (!count) {
+    return "结果内容";
+  }
+  const refs = turn?.result_refs || [];
+  const artifactCount = refs.filter((ref) => ref.kind === "artifact").length;
+  return artifactCount === count ? "结果文件" : "结果内容";
+}
+
+async function buildTurnResultCards(turn, { fallbackJob = null } = {}) {
+  const refs = [];
+  for (const ref of turn?.result_refs || []) {
+    if (ref?.kind === "artifact" && snapshotArtifact(ref.artifact_id)) {
+      refs.push(ref);
+      continue;
+    }
+    if (ref?.kind === "object" && snapshotObject(ref.object_id)) {
+      refs.push(ref);
+    }
+  }
+
+  if (!refs.length && fallbackJob) {
+    for (const artifact of appState.snapshot?.artifacts || []) {
+      if (artifact.job_id === fallbackJob.id) {
+        refs.push({
+          kind: "artifact",
+          artifact_id: artifact.id,
+          artifact_kind: artifact.kind,
+        });
+      }
+    }
+  }
+
+  const cards = [];
+  for (const ref of refs) {
+    if (ref.kind === "artifact") {
+      const artifact = snapshotArtifact(ref.artifact_id);
+      if (!artifact) {
+        continue;
+      }
+      cards.push(await buildArtifactCardMarkup(artifact, "chat"));
+      continue;
+    }
+    if (ref.kind === "object") {
+      const object = snapshotObject(ref.object_id);
+      if (!object) {
+        continue;
+      }
+      cards.push(buildObjectResultCardMarkup(object, "chat"));
+    }
+  }
+  return cards;
+}
+
+function buildObjectResultCardMarkup(object, variant = "chat") {
+  return `
+    <section class="artifact-card artifact-card-${variant}">
+      <div class="artifact-head">
+        <h3>${escapeHTML(object.label || object.id || "对象结果")}</h3>
+      </div>
+      <p class="muted">${escapeHTML(`${formatObjectKind(object.kind)} · ${object.n_obs || 0} 个细胞 · ${object.n_vars || 0} 个基因`)}</p>
+      <div class="kv"><span>对象 ID</span><span>${escapeHTML(object.id)}</span></div>
+      <div class="kv"><span>状态</span><span>${escapeHTML(formatObjectState(object.state))}</span></div>
+      <div class="kv"><span>当前上下文</span><span>${escapeHTML(object.id === appState.focusObjectId ? "是" : "否")}</span></div>
     </section>
   `;
 }

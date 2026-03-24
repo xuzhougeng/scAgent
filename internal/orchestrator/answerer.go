@@ -14,6 +14,7 @@ import (
 )
 
 type Answerer interface {
+	ResolveTurn(ctx context.Context, request PlanningRequest) (*TurnResolveResult, error)
 	BuildDirectAnswer(ctx context.Context, request PlanningRequest) (string, bool, error)
 	BuildInvestigationResponse(ctx context.Context, request ResponseComposeRequest) (*ResponseComposeResult, error)
 	BuildFailureAnswer(err error) string
@@ -57,7 +58,9 @@ type ResponseComposeRequest struct {
 	RecentMessages  []*models.Message     `json:"recent_messages,omitempty"`
 	RecentJobs      []*models.Job         `json:"recent_jobs,omitempty"`
 	RecentArtifacts []*models.Artifact    `json:"recent_artifacts,omitempty"`
+	RecentTurns     []*models.Turn        `json:"recent_turns,omitempty"`
 	CurrentJob      *models.Job           `json:"current_job,omitempty"`
+	CurrentTurn     *models.Turn          `json:"current_turn,omitempty"`
 	WorkingMemory   *models.WorkingMemory `json:"working_memory,omitempty"`
 }
 
@@ -92,6 +95,10 @@ func NewAnswerer(config AnswererConfig) (Answerer, error) {
 
 func NewNoopAnswerer() *NoopAnswerer {
 	return &NoopAnswerer{}
+}
+
+func (a *NoopAnswerer) ResolveTurn(_ context.Context, request PlanningRequest) (*TurnResolveResult, error) {
+	return normalizeTurnResolveResult(request, buildFallbackTurnResolveResult(request)), nil
 }
 
 func (a *NoopAnswerer) BuildDirectAnswer(_ context.Context, _ PlanningRequest) (string, bool, error) {
@@ -221,6 +228,51 @@ func NewLLMAnswerer(config LLMAnswererConfig, httpClient *http.Client) (*LLMAnsw
 		reasoningEffort: reasoningEffort,
 		httpClient:      httpClient,
 	}, nil
+}
+
+func (a *LLMAnswerer) ResolveTurn(ctx context.Context, requestPayload PlanningRequest) (*TurnResolveResult, error) {
+	payload, err := json.Marshal(a.buildTurnRequest(requestPayload))
+	if err != nil {
+		return nil, fmt.Errorf("marshal turn resolver request: %w", err)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/responses", bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("create turn resolver request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+a.apiKey)
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("turn resolver request failed: %w", err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read turn resolver response: %w", err)
+	}
+	if response.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("turn resolver returned %s: %s", response.Status, compactJSON(string(body)))
+	}
+
+	var decoded openAIResponsesResponse
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil, fmt.Errorf("decode turn resolver response: %w", err)
+	}
+
+	rawDecision := extractPlannerText(decoded)
+	if strings.TrimSpace(rawDecision) == "" {
+		return nil, fmt.Errorf("turn resolver response did not contain text output")
+	}
+
+	var decision TurnResolveResult
+	if err := json.Unmarshal([]byte(rawDecision), &decision); err != nil {
+		return nil, fmt.Errorf("decode turn resolver JSON: %w", err)
+	}
+
+	return normalizeTurnResolveResult(requestPayload, &decision), nil
 }
 
 func (a *LLMAnswerer) BuildDirectAnswer(ctx context.Context, requestPayload PlanningRequest) (string, bool, error) {
@@ -362,6 +414,41 @@ func (a *LLMAnswerer) buildRequest(requestPayload PlanningRequest) map[string]an
 	}
 }
 
+func (a *LLMAnswerer) buildTurnRequest(requestPayload PlanningRequest) map[string]any {
+	return map[string]any{
+		"model": a.model,
+		"reasoning": map[string]any{
+			"effort": a.reasoningEffort,
+		},
+		"input": []map[string]any{
+			{
+				"role":    "developer",
+				"content": a.turnInstructions(requestPayload),
+			},
+			{
+				"role": "user",
+				"content": buildUserInputContentWithPolicy(
+					requestPayload.Message,
+					requestPayload.InputArtifacts,
+					requestPayload.RecentArtifacts,
+					UserInputContentPolicy{
+						IncludeInputVisualArtifacts:  true,
+						IncludeRecentVisualArtifacts: false,
+					},
+				),
+			},
+		},
+		"text": map[string]any{
+			"format": map[string]any{
+				"type":   "json_schema",
+				"name":   "scagent_turn_resolution",
+				"strict": true,
+				"schema": turnResolveSchema(),
+			},
+		},
+	}
+}
+
 func (a *LLMAnswerer) buildResponseRequest(requestPayload ResponseComposeRequest) map[string]any {
 	return map[string]any{
 		"model": a.model,
@@ -417,11 +504,33 @@ func (a *LLMAnswerer) instructions(requestPayload PlanningRequest) string {
 	return strings.Join(lines, "\n")
 }
 
+func (a *LLMAnswerer) turnInstructions(requestPayload PlanningRequest) string {
+	lines := []string{
+		"You are the scAgent turn resolver.",
+		"Resolve the user's message into a fulfillment contract and a fulfillment strategy.",
+		"Think in terms of deliverables, not conversational plausibility.",
+		"If the user asks for a plot, file, table, or object result, a plain sentence does not fulfill the turn.",
+		"Use strategy=answer_text only when a text answer fully satisfies the user's requested deliverable.",
+		"Use strategy=reuse_existing_artifact only when the current session already has concrete result refs that satisfy the deliverable. Return those refs explicitly.",
+		"Use strategy=execute when new analysis, generation, or materialization is required.",
+		"Use strategy=ask_clarification only when ambiguity prevents safe fulfillment.",
+		"For requests like 给我 umap / 画一下 UMAP, set deliverable_kind=plot and prefer strategy=execute unless a matching existing artifact clearly satisfies the request.",
+		"For follow-up requests like 图呢 / 文件呢 / 结果呢, prefer reuse_existing_artifact when a recent turn already produced matching results.",
+		"Set completion_criteria so deterministic code can verify fulfillment later.",
+		"Return only valid JSON matching the supplied schema.",
+		"Current session context:",
+	}
+	lines = append(lines, formatPlanningContextWithPolicy(requestPayload, answererPlanningContextPolicy())...)
+	lines = append(lines, formatTurnResolutionContext(requestPayload)...)
+	return strings.Join(lines, "\n")
+}
+
 func (a *LLMAnswerer) responseInstructions(requestPayload ResponseComposeRequest) string {
 	lines := []string{
 		"You are the scAgent responder.",
 		"Your task is to produce the final user-facing answer after the investigation phase has collected evidence.",
 		"Base the answer on current_job facts, metadata, artifacts, the resolved object roles (focus/global/root), and recent context.",
+		"Treat current_turn as the fulfillment contract for this turn. The answer should describe or present the results that satisfy that contract.",
 		"If the current request includes attached images, use them as additional evidence when they are relevant to the answer.",
 		"Prefer concrete collected evidence such as structured facts, scalar results, tables, generated objects, and artifacts over generic step summaries.",
 		"If the investigation is still incomplete, say clearly what is still missing instead of pretending the answer is known.",
@@ -454,6 +563,120 @@ func directAnswerSchema() map[string]any {
 				"type": "array",
 				"items": map[string]any{
 					"type": "string",
+				},
+			},
+		},
+	}
+}
+
+func turnResolveSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"strategy", "contract", "answer", "summary", "result_refs"},
+		"properties": map[string]any{
+			"strategy": map[string]any{
+				"type": "string",
+				"enum": []string{
+					string(models.TurnStrategyAnswerText),
+					string(models.TurnStrategyReuseExistingArtifact),
+					string(models.TurnStrategyExecute),
+					string(models.TurnStrategyAskClarification),
+				},
+			},
+			"contract": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []string{"intent", "deliverable_kind", "target_object_id", "follow_up_turn_id", "follow_up_artifact_id", "reuse_policy", "completion_criteria"},
+				"properties": map[string]any{
+					"intent": map[string]any{"type": "string"},
+					"deliverable_kind": map[string]any{
+						"type": "string",
+						"enum": []string{
+							string(models.TurnDeliverableText),
+							string(models.TurnDeliverablePlot),
+							string(models.TurnDeliverableFile),
+							string(models.TurnDeliverableTable),
+							string(models.TurnDeliverableObject),
+							string(models.TurnDeliverableUnknown),
+						},
+					},
+					"target_object_id":      map[string]any{"type": "string"},
+					"follow_up_turn_id":     map[string]any{"type": "string"},
+					"follow_up_artifact_id": map[string]any{"type": "string"},
+					"reuse_policy": map[string]any{
+						"type": "string",
+						"enum": []string{
+							string(models.TurnReusePreferExisting),
+							string(models.TurnReuseRequireNew),
+							string(models.TurnReuseNoReuse),
+						},
+					},
+					"completion_criteria": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type":                 "object",
+							"additionalProperties": false,
+							"required":             []string{"kind", "artifact_kind", "artifact_id", "object_id"},
+							"properties": map[string]any{
+								"kind": map[string]any{
+									"type": "string",
+									"enum": []string{
+										string(models.TurnCompletionAnyResult),
+										string(models.TurnCompletionTextAnswer),
+										string(models.TurnCompletionArtifactKind),
+										string(models.TurnCompletionArtifactID),
+										string(models.TurnCompletionObjectID),
+									},
+								},
+								"artifact_kind": map[string]any{
+									"type": "string",
+									"enum": []string{
+										string(models.ArtifactPlot),
+										string(models.ArtifactTable),
+										string(models.ArtifactObjectSummary),
+										string(models.ArtifactFile),
+										"",
+									},
+								},
+								"artifact_id": map[string]any{"type": "string"},
+								"object_id":   map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			},
+			"answer":  map[string]any{"type": "string"},
+			"summary": map[string]any{"type": "string"},
+			"result_refs": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"required":             []string{"kind", "artifact_id", "object_id", "text"},
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type": "string",
+							"enum": []string{
+								string(models.TurnResultArtifact),
+								string(models.TurnResultObject),
+								string(models.TurnResultText),
+							},
+						},
+						"artifact_id": map[string]any{"type": "string"},
+						"artifact_kind": map[string]any{
+							"type": "string",
+							"enum": []string{
+								string(models.ArtifactPlot),
+								string(models.ArtifactTable),
+								string(models.ArtifactObjectSummary),
+								string(models.ArtifactFile),
+								"",
+							},
+						},
+						"object_id": map[string]any{"type": "string"},
+						"text":      map[string]any{"type": "string"},
+					},
 				},
 			},
 		},
@@ -508,7 +731,9 @@ func formatResponseComposeContext(request ResponseComposeRequest) []string {
 		RecentMessages:  request.RecentMessages,
 		RecentJobs:      request.RecentJobs,
 		RecentArtifacts: request.RecentArtifacts,
+		RecentTurns:     request.RecentTurns,
 		CurrentJob:      request.CurrentJob,
+		CurrentTurn:     request.CurrentTurn,
 		WorkingMemory:   request.WorkingMemory,
 	})
 	return contextLines

@@ -25,6 +25,7 @@ type stubAnswerer struct {
 	directAnswer string
 	directOK     bool
 	directErr    error
+	resolvedTurn *orchestrator.TurnResolveResult
 	response     *orchestrator.ResponseComposeResult
 }
 
@@ -52,6 +53,33 @@ func (p unhealthyPlanner) Mode() string {
 
 func (p unhealthyPlanner) Health(context.Context) error {
 	return context.DeadlineExceeded
+}
+
+func (a *stubAnswerer) ResolveTurn(_ context.Context, request orchestrator.PlanningRequest) (*orchestrator.TurnResolveResult, error) {
+	if a.directErr != nil {
+		return nil, a.directErr
+	}
+	if a.resolvedTurn != nil {
+		return a.resolvedTurn, nil
+	}
+	if a.directOK {
+		return &orchestrator.TurnResolveResult{
+			Strategy: models.TurnStrategyAnswerText,
+			Contract: models.TurnContract{
+				DeliverableKind: models.TurnDeliverableText,
+				CompletionCriteria: []models.TurnCompletionCriterion{{
+					Kind: models.TurnCompletionTextAnswer,
+				}},
+			},
+			Answer:  a.directAnswer,
+			Summary: a.directAnswer,
+			ResultRefs: []models.TurnResultRef{{
+				Kind: models.TurnResultText,
+				Text: a.directAnswer,
+			}},
+		}, nil
+	}
+	return orchestrator.NewNoopAnswerer().ResolveTurn(context.Background(), request)
 }
 
 func (a *stubAnswerer) BuildDirectAnswer(_ context.Context, _ orchestrator.PlanningRequest) (string, bool, error) {
@@ -409,6 +437,15 @@ func TestMessageDirectAnswerFlow(t *testing.T) {
 	}
 	if lastMessage.Content != "当前对象 pbmc3k 有 2638 个细胞。" {
 		t.Fatalf("unexpected direct answer content: %q", lastMessage.Content)
+	}
+	if len(response.Snapshot.Turns) != 1 {
+		t.Fatalf("expected one turn in direct answer snapshot, got %+v", response.Snapshot.Turns)
+	}
+	if response.Snapshot.Turns[0].Status != models.TurnFulfilled {
+		t.Fatalf("expected fulfilled direct-answer turn, got %+v", response.Snapshot.Turns[0])
+	}
+	if response.Snapshot.Turns[0].Strategy != models.TurnStrategyAnswerText {
+		t.Fatalf("expected answer_text turn strategy, got %+v", response.Snapshot.Turns[0])
 	}
 }
 

@@ -71,6 +71,61 @@ const (
 	ArtifactFile          ArtifactKind = "file"
 )
 
+type TurnStatus string
+
+const (
+	TurnPending   TurnStatus = "pending"
+	TurnFulfilled TurnStatus = "fulfilled"
+	TurnFailed    TurnStatus = "failed"
+	TurnCanceled  TurnStatus = "canceled"
+)
+
+type TurnStrategy string
+
+const (
+	TurnStrategyAnswerText            TurnStrategy = "answer_text"
+	TurnStrategyReuseExistingArtifact TurnStrategy = "reuse_existing_artifact"
+	TurnStrategyExecute               TurnStrategy = "execute"
+	TurnStrategyAskClarification      TurnStrategy = "ask_clarification"
+)
+
+type TurnDeliverableKind string
+
+const (
+	TurnDeliverableText    TurnDeliverableKind = "text"
+	TurnDeliverablePlot    TurnDeliverableKind = "plot"
+	TurnDeliverableFile    TurnDeliverableKind = "file"
+	TurnDeliverableTable   TurnDeliverableKind = "table"
+	TurnDeliverableObject  TurnDeliverableKind = "object"
+	TurnDeliverableUnknown TurnDeliverableKind = "unknown"
+)
+
+type TurnReusePolicy string
+
+const (
+	TurnReusePreferExisting TurnReusePolicy = "prefer_existing"
+	TurnReuseRequireNew     TurnReusePolicy = "require_new"
+	TurnReuseNoReuse        TurnReusePolicy = "no_reuse"
+)
+
+type TurnResultRefKind string
+
+const (
+	TurnResultArtifact TurnResultRefKind = "artifact"
+	TurnResultObject   TurnResultRefKind = "object"
+	TurnResultText     TurnResultRefKind = "text"
+)
+
+type TurnCompletionCriterionKind string
+
+const (
+	TurnCompletionAnyResult    TurnCompletionCriterionKind = "any_result"
+	TurnCompletionTextAnswer   TurnCompletionCriterionKind = "text_answer"
+	TurnCompletionArtifactKind TurnCompletionCriterionKind = "artifact_kind"
+	TurnCompletionArtifactID   TurnCompletionCriterionKind = "artifact_id"
+	TurnCompletionObjectID     TurnCompletionCriterionKind = "object_id"
+)
+
 type MessageRole string
 
 const (
@@ -137,9 +192,51 @@ type Artifact struct {
 	CreatedAt   time.Time    `json:"created_at"`
 }
 
+type TurnContract struct {
+	Intent             string                    `json:"intent,omitempty"`
+	DeliverableKind    TurnDeliverableKind       `json:"deliverable_kind,omitempty"`
+	TargetObjectID     string                    `json:"target_object_id,omitempty"`
+	FollowUpTurnID     string                    `json:"follow_up_turn_id,omitempty"`
+	FollowUpArtifactID string                    `json:"follow_up_artifact_id,omitempty"`
+	ReusePolicy        TurnReusePolicy           `json:"reuse_policy,omitempty"`
+	CompletionCriteria []TurnCompletionCriterion `json:"completion_criteria,omitempty"`
+}
+
+type TurnCompletionCriterion struct {
+	Kind         TurnCompletionCriterionKind `json:"kind"`
+	ArtifactKind ArtifactKind                `json:"artifact_kind,omitempty"`
+	ArtifactID   string                      `json:"artifact_id,omitempty"`
+	ObjectID     string                      `json:"object_id,omitempty"`
+}
+
+type TurnResultRef struct {
+	Kind         TurnResultRefKind `json:"kind"`
+	ArtifactID   string            `json:"artifact_id,omitempty"`
+	ArtifactKind ArtifactKind      `json:"artifact_kind,omitempty"`
+	ObjectID     string            `json:"object_id,omitempty"`
+	Text         string            `json:"text,omitempty"`
+}
+
+type Turn struct {
+	ID                 string          `json:"id"`
+	SessionID          string          `json:"session_id"`
+	UserMessageID      string          `json:"user_message_id"`
+	AssistantMessageID string          `json:"assistant_message_id,omitempty"`
+	JobID              string          `json:"job_id,omitempty"`
+	Status             TurnStatus      `json:"status"`
+	Strategy           TurnStrategy    `json:"strategy,omitempty"`
+	Summary            string          `json:"summary,omitempty"`
+	Contract           TurnContract    `json:"contract,omitempty"`
+	ResultRefs         []TurnResultRef `json:"result_refs,omitempty"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
+	FinishedAt         *time.Time      `json:"finished_at,omitempty"`
+}
+
 type Message struct {
 	ID        string      `json:"id"`
 	SessionID string      `json:"session_id"`
+	TurnID    string      `json:"turn_id,omitempty"`
 	JobID     string      `json:"job_id,omitempty"`
 	Role      MessageRole `json:"role"`
 	Content   string      `json:"content"`
@@ -198,6 +295,7 @@ type Job struct {
 	ID           string          `json:"id"`
 	WorkspaceID  string          `json:"workspace_id,omitempty"`
 	SessionID    string          `json:"session_id"`
+	TurnID       string          `json:"turn_id,omitempty"`
 	MessageID    string          `json:"message_id"`
 	Status       JobStatus       `json:"status"`
 	CurrentPhase JobPhaseKind    `json:"current_phase,omitempty"`
@@ -267,6 +365,7 @@ type SessionSnapshot struct {
 	Objects       []*ObjectMeta  `json:"objects"`
 	Jobs          []*Job         `json:"jobs"`
 	Artifacts     []*Artifact    `json:"artifacts"`
+	Turns         []*Turn        `json:"turns"`
 	Messages      []*Message     `json:"messages"`
 	WorkingMemory *WorkingMemory `json:"working_memory,omitempty"`
 }

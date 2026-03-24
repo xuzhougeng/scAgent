@@ -107,6 +107,31 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 				},
 			},
 		},
+		CurrentTurn: &models.Turn{
+			ID:       "turn_current",
+			Status:   models.TurnPending,
+			Strategy: models.TurnStrategyExecute,
+			Contract: models.TurnContract{
+				DeliverableKind: models.TurnDeliverablePlot,
+			},
+			Summary: "当前需要补齐一张图像结果。",
+		},
+		RecentTurns: []*models.Turn{
+			{
+				ID:       "turn_prev",
+				Status:   models.TurnFulfilled,
+				Strategy: models.TurnStrategyExecute,
+				Summary:  "上一轮生成了 UMAP 图。",
+				Contract: models.TurnContract{
+					DeliverableKind: models.TurnDeliverablePlot,
+				},
+				ResultRefs: []models.TurnResultRef{{
+					Kind:         models.TurnResultArtifact,
+					ArtifactID:   "art_1",
+					ArtifactKind: models.ArtifactPlot,
+				}},
+			},
+		},
 		WorkingMemory: &models.WorkingMemory{
 			Focus: &models.WorkingMemoryFocus{
 				FocusObjectID:         "obj_1",
@@ -166,6 +191,9 @@ func TestLLMPlannerBuildsRequestAndParsesPlan(t *testing.T) {
 	}
 	if !bytes.Contains(capturedBody, []byte(`working_memory`)) || !bytes.Contains(capturedBody, []byte(`confirmed_preferences`)) {
 		t.Fatalf("planner request missing working memory context: %s", string(capturedBody))
+	}
+	if !bytes.Contains(capturedBody, []byte(`current_turn`)) || !bytes.Contains(capturedBody, []byte(`recent_turns`)) {
+		t.Fatalf("planner request missing turn context: %s", string(capturedBody))
 	}
 	if bytes.Contains(capturedBody, []byte(`input_image`)) {
 		t.Fatalf("planner request should not inline image inputs: %s", string(capturedBody))

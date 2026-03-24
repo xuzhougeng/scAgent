@@ -612,6 +612,7 @@ func formatPlanningContext(request PlanningRequest) []string {
 			lines = append(lines, "  "+formatArtifactContext(artifact))
 		}
 	}
+	lines = append(lines, formatPlannerTurnContext(request.CurrentTurn, request.RecentTurns, len(request.RecentTurns))...)
 	lines = append(lines, formatWorkingMemoryContext(request.WorkingMemory)...)
 	return lines
 }

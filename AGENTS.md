@@ -41,8 +41,11 @@
 
 - Trust the LLM to interpret user intent, especially for follow-up requests that depend on prior turns, prior artifacts, or previously chosen parameters.
 - Do not push natural-language understanding down into orchestrator/runtime/UI with ad hoc keyword rules when the issue is actually missing context.
+- Outside explicit mock/fake LLM implementations and test doubles, do not use keyword matching, keyword-triggered branching, or keyword-based canned replies to infer user intent, choose strategies, or compose answers.
+- Production orchestrator, resolver, answerer, evaluator, runtime, and UI paths must remain language-agnostic at the deterministic layer; semantic interpretation must come from LLM output plus preserved structured context, not from hard-coded tokens in any single human language.
 - The orchestrator should preserve and pass forward rich structured state such as prior step params, metadata, artifact references, active object state, and recent decisions.
 - Deterministic code should enforce schemas, safety checks, state persistence, and conservative defaults; it should not silently reinterpret ambiguous user language.
+- When the LLM is unavailable or returns unusable output, deterministic fallbacks may validate, defer, ask for clarification, or take the most conservative safe action, but they must not emulate understanding by scanning for task keywords.
 - If a follow-up request fails because prior intent was forgotten, fix the context representation or prompt contract first; do not patch over the gap with task-specific heuristics unless there is a hard safety or correctness requirement.
 - Prefer general context-management solutions over plot-specific or feature-specific patches. The same design should work for analysis steps, exports, tables, plots, and UI follow-ups.
 

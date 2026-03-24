@@ -45,6 +45,8 @@ type PlanningRequest struct {
 	RecentMessages  []*models.Message     `json:"recent_messages,omitempty"`
 	RecentJobs      []*models.Job         `json:"recent_jobs,omitempty"`
 	RecentArtifacts []*models.Artifact    `json:"recent_artifacts,omitempty"`
+	RecentTurns     []*models.Turn        `json:"recent_turns,omitempty"`
+	CurrentTurn     *models.Turn          `json:"current_turn,omitempty"`
 	WorkingMemory   *models.WorkingMemory `json:"working_memory,omitempty"`
 }
 
@@ -668,6 +670,9 @@ func (s *Service) RetryJob(ctx context.Context, jobID, overrideContent string) (
 	s.store.DeleteMessagesByJobID(job.SessionID, jobID)
 	s.store.DeleteMessage(job.SessionID, job.MessageID)
 	s.store.DeleteJob(jobID)
+	if job.TurnID != "" {
+		s.store.DeleteTurn(job.TurnID)
+	}
 	s.publishSnapshot(job.SessionID)
 
 	return s.SubmitMessage(ctx, job.SessionID, nextContent)
@@ -691,6 +696,9 @@ func (s *Service) RegenerateResponse(ctx context.Context, jobID string) (*models
 	s.store.DeleteMessagesByJobID(job.SessionID, jobID)
 	s.store.DeleteMessage(job.SessionID, job.MessageID)
 	s.store.DeleteJob(jobID)
+	if job.TurnID != "" {
+		s.store.DeleteTurn(job.TurnID)
+	}
 	s.publishSnapshot(job.SessionID)
 
 	return s.SubmitMessage(ctx, job.SessionID, msg.Content)
@@ -766,51 +774,102 @@ func (s *Service) SubmitMessageWithArtifacts(ctx context.Context, sessionID, con
 
 	trimmedContent := strings.TrimSpace(content)
 	now := time.Now().UTC()
+	turn := &models.Turn{
+		ID:        s.store.NextID("turn"),
+		SessionID: sessionID,
+		Status:    models.TurnPending,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
 	message := &models.Message{
 		ID:        s.store.NextID("msg"),
 		SessionID: sessionID,
+		TurnID:    turn.ID,
 		Role:      models.MessageUser,
 		Content:   trimmedContent,
 		CreatedAt: now,
 	}
+	turn.UserMessageID = message.ID
 	s.store.AddMessage(message)
+	s.store.SaveTurn(turn)
 
 	sessionRecord.UpdatedAt = now
 	sessionRecord.LastAccessedAt = now
 	s.store.SaveSession(sessionRecord)
 
-	planningRequest, err := s.buildPlanningRequestWithInputs(sessionRecord, trimmedContent, inputArtifacts)
+	planningRequest, err := s.buildPlanningRequestWithInputsAndTurn(sessionRecord, trimmedContent, inputArtifacts, turn)
 	if err != nil {
 		return nil, nil, err
 	}
-	if s.answerer != nil {
-		if answer, ok, answerErr := s.answerer.BuildDirectAnswer(ctx, planningRequest); answerErr == nil && ok {
-			s.store.AddMessage(&models.Message{
-				ID:        s.store.NextID("msg"),
-				SessionID: sessionID,
-				Role:      models.MessageAssistant,
-				Content:   answer,
-				CreatedAt: time.Now().UTC(),
-			})
-			s.publishSnapshot(sessionID)
-			snapshot, err := s.store.Snapshot(sessionID)
-			if err != nil {
-				return nil, nil, err
-			}
-			return nil, snapshot, nil
+
+	resolvedTurn, resolveErr := s.resolveTurn(ctx, planningRequest)
+	if resolveErr != nil {
+		resolvedTurn = normalizeTurnResolveResult(planningRequest, buildFallbackTurnResolveResult(planningRequest))
+	}
+	turn.Strategy = resolvedTurn.Strategy
+	turn.Contract = cloneTurnContractForPlanning(resolvedTurn.Contract)
+	if strings.TrimSpace(resolvedTurn.Summary) != "" {
+		turn.Summary = strings.TrimSpace(resolvedTurn.Summary)
+	}
+	s.store.SaveTurn(turn)
+
+	switch resolvedTurn.Strategy {
+	case models.TurnStrategyAnswerText:
+		answer := strings.TrimSpace(resolvedTurn.Answer)
+		if answer == "" {
+			answer = turn.Summary
 		}
+		if answer == "" {
+			answer = "本次请求已完成。"
+		}
+		resultRefs := selectTurnResultRefsFromDecision(resolvedTurn)
+		if len(resultRefs) == 0 {
+			resultRefs = []models.TurnResultRef{{
+				Kind: models.TurnResultText,
+				Text: answer,
+			}}
+		}
+		return nil, s.finishTurnWithoutJob(sessionRecord, turn, answer, resultRefs, models.TurnFulfilled), nil
+	case models.TurnStrategyReuseExistingArtifact:
+		snapshot, err := s.store.Snapshot(sessionID)
+		if err != nil {
+			return nil, nil, err
+		}
+		resultRefs := selectTurnResultRefs(snapshot, resolvedTurn.ResultRefs)
+		if len(resultRefs) > 0 {
+			answer := strings.TrimSpace(resolvedTurn.Answer)
+			if answer == "" {
+				answer = defaultReuseTurnAnswer(resultRefs, trimmedContent)
+			}
+			return nil, s.finishTurnWithoutJob(sessionRecord, turn, answer, resultRefs, models.TurnFulfilled), nil
+		}
+		turn.Strategy = models.TurnStrategyExecute
+		if strings.TrimSpace(turn.Summary) == "" {
+			turn.Summary = "当前还没有可直接复用的结果，转入执行。"
+		}
+		s.store.SaveTurn(turn)
+	case models.TurnStrategyAskClarification:
+		answer := strings.TrimSpace(resolvedTurn.Answer)
+		if answer == "" {
+			answer = "请再具体说明你希望我交付的结果。"
+		}
+		return nil, s.finishTurnWithoutJob(sessionRecord, turn, answer, nil, models.TurnPending), nil
 	}
 
 	job := &models.Job{
 		ID:           s.store.NextID("job"),
 		WorkspaceID:  sessionRecord.WorkspaceID,
 		SessionID:    sessionID,
+		TurnID:       turn.ID,
 		MessageID:    message.ID,
 		Status:       models.JobQueued,
 		CurrentPhase: models.JobPhaseInvestigate,
-		Summary:      "当前上下文不足以直接回答，开始收集相关信息。",
+		Summary:      defaultTurnExecutionSummary(turn),
 		CreatedAt:    now,
 	}
+	turn.JobID = job.ID
+	turn.UpdatedAt = now
+	s.store.SaveTurn(turn)
 	initializeInvestigationPhases(job, time.Now().UTC())
 	s.store.SaveJob(job)
 	s.publishJob(sessionID, job.ID)
@@ -827,6 +886,97 @@ func (s *Service) SubmitMessageWithArtifacts(ctx context.Context, sessionID, con
 	return job, snapshot, nil
 }
 
+func (s *Service) resolveTurn(ctx context.Context, request PlanningRequest) (*TurnResolveResult, error) {
+	if s.answerer == nil {
+		return normalizeTurnResolveResult(request, buildFallbackTurnResolveResult(request)), nil
+	}
+	resolved, err := s.answerer.ResolveTurn(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeTurnResolveResult(request, resolved), nil
+}
+
+func selectTurnResultRefsFromDecision(result *TurnResolveResult) []models.TurnResultRef {
+	if result == nil || len(result.ResultRefs) == 0 {
+		return nil
+	}
+	return uniqueTurnResultRefs(result.ResultRefs)
+}
+
+func (s *Service) syncTurnResultRefs(sessionID string, turn *models.Turn, job *models.Job, updatedAt time.Time) {
+	if s == nil || turn == nil || job == nil {
+		return
+	}
+	snapshot, err := s.store.Snapshot(sessionID)
+	if err != nil {
+		return
+	}
+	turn.ResultRefs = deriveTurnResultRefsFromSnapshot(turn, job, snapshot)
+	turn.UpdatedAt = updatedAt
+	s.store.SaveTurn(turn)
+}
+
+func defaultTurnExecutionSummary(turn *models.Turn) string {
+	if turn == nil {
+		return "当前需要进一步执行后才能完成请求。"
+	}
+	if strings.TrimSpace(turn.Summary) != "" {
+		return strings.TrimSpace(turn.Summary)
+	}
+	switch turn.Contract.DeliverableKind {
+	case models.TurnDeliverablePlot:
+		return "当前需要生成图像结果后才能完成请求。"
+	case models.TurnDeliverableFile:
+		return "当前需要生成导出文件后才能完成请求。"
+	case models.TurnDeliverableTable:
+		return "当前需要生成表格结果后才能完成请求。"
+	case models.TurnDeliverableObject:
+		return "当前需要生成新的对象结果后才能完成请求。"
+	default:
+		return "当前需要进一步执行后才能完成请求。"
+	}
+}
+
+func (s *Service) finishTurnWithoutJob(sessionRecord *models.Session, turn *models.Turn, answer string, resultRefs []models.TurnResultRef, status models.TurnStatus) *models.SessionSnapshot {
+	if sessionRecord == nil || turn == nil {
+		return nil
+	}
+	finishedAt := time.Now().UTC()
+	assistant := &models.Message{
+		ID:        s.store.NextID("msg"),
+		SessionID: sessionRecord.ID,
+		TurnID:    turn.ID,
+		Role:      models.MessageAssistant,
+		Content:   strings.TrimSpace(answer),
+		CreatedAt: finishedAt,
+	}
+
+	turn.AssistantMessageID = assistant.ID
+	turn.Status = status
+	turn.ResultRefs = uniqueTurnResultRefs(resultRefs)
+	if status == models.TurnFulfilled || status == models.TurnFailed || status == models.TurnCanceled {
+		turn.FinishedAt = &finishedAt
+	}
+	turn.UpdatedAt = finishedAt
+	if strings.TrimSpace(turn.Summary) == "" {
+		turn.Summary = strings.TrimSpace(answer)
+	}
+	s.store.SaveTurn(turn)
+	s.store.AddMessage(assistant)
+
+	sessionRecord.UpdatedAt = finishedAt
+	sessionRecord.LastAccessedAt = finishedAt
+	s.store.SaveSession(sessionRecord)
+
+	s.publishSnapshot(sessionRecord.ID)
+	snapshot, err := s.store.Snapshot(sessionRecord.ID)
+	if err != nil {
+		return nil
+	}
+	return snapshot
+}
+
 func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, inputArtifacts []*models.Artifact) {
 	defer s.clearJobCancel(jobID)
 	if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
@@ -837,6 +987,7 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 	if !ok {
 		return
 	}
+	turn, _ := s.store.GetTurn(job.TurnID)
 	sessionRecord, ok := s.store.GetSession(sessionID)
 	if !ok {
 		return
@@ -1036,11 +1187,24 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 			s.store.SaveArtifact(record)
 			stepResult.ArtifactIDs = append(stepResult.ArtifactIDs, record.ID)
 		}
+		if len(stepResult.ArtifactIDs) > 0 {
+			if stepResult.Metadata == nil {
+				stepResult.Metadata = make(map[string]any, 1)
+			}
+			stepResult.Metadata["artifact_ids"] = append([]string(nil), stepResult.ArtifactIDs...)
+		}
 
 		stepResult.Status = models.JobSucceeded
 		stepResult.Summary = response.Summary
 		stepResult.Facts = cloneParams(response.Facts)
-		stepResult.Metadata = response.Metadata
+		if len(response.Metadata) > 0 {
+			if stepResult.Metadata == nil {
+				stepResult.Metadata = make(map[string]any, len(response.Metadata))
+			}
+			for key, value := range response.Metadata {
+				stepResult.Metadata[key] = value
+			}
+		}
 		finishedAt := time.Now().UTC()
 		stepResult.FinishedAt = &finishedAt
 		job.Steps = append(job.Steps, stepResult)
@@ -1053,6 +1217,12 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 		workspaceRecord.UpdatedAt = finishedAt
 		workspaceRecord.LastAccessedAt = finishedAt
 		s.store.SaveWorkspace(workspaceRecord)
+		if turn != nil {
+			if strings.TrimSpace(turn.Summary) == "" && strings.TrimSpace(response.Summary) != "" {
+				turn.Summary = strings.TrimSpace(response.Summary)
+			}
+			s.syncTurnResultRefs(sessionID, turn, job, finishedAt)
+		}
 		if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
 			return
 		}
@@ -1181,6 +1351,13 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 		job.Status = models.JobSucceeded
 		job.Summary = strings.Join(stepSummaries, " ")
 	}
+	if turn != nil {
+		s.syncTurnResultRefs(sessionID, turn, job, finishedAt)
+		if strings.TrimSpace(turn.Summary) == "" {
+			turn.Summary = strings.TrimSpace(job.Summary)
+		}
+		s.store.SaveTurn(turn)
+	}
 	completeJobPhase(job, models.JobPhaseInvestigate, defaultPhaseCompletionSummary(job))
 	startJobPhase(job, models.JobPhaseRespond, "正在确认收集结果并生成最终回答。", nil)
 	if s.finishCanceledJobIfNeeded(ctx, sessionID, jobID) {
@@ -1215,14 +1392,33 @@ func (s *Service) runJob(ctx context.Context, sessionID, jobID, message string, 
 	completeJobPhase(job, models.JobPhaseRespond, "已根据收集到的信息生成最终回答。")
 	s.store.SaveJob(job)
 
-	s.store.AddMessage(&models.Message{
+	assistantMessage := &models.Message{
 		ID:        s.store.NextID("msg"),
 		SessionID: sessionID,
+		TurnID:    job.TurnID,
 		JobID:     jobID,
 		Role:      models.MessageAssistant,
 		Content:   finalAnswer,
 		CreatedAt: finishedAt,
-	})
+	}
+	s.store.AddMessage(assistantMessage)
+
+	if turn != nil {
+		turn.AssistantMessageID = assistantMessage.ID
+		s.syncTurnResultRefs(sessionID, turn, job, finishedAt)
+		turn.FinishedAt = &finishedAt
+		if turnMeetsCompletionCriteria(turn, turn.ResultRefs) {
+			turn.Status = models.TurnFulfilled
+		} else {
+			turn.Status = models.TurnFailed
+		}
+		if strings.TrimSpace(job.Summary) != "" {
+			turn.Summary = strings.TrimSpace(job.Summary)
+		} else if strings.TrimSpace(finalAnswer) != "" {
+			turn.Summary = strings.TrimSpace(finalAnswer)
+		}
+		s.store.SaveTurn(turn)
+	}
 
 	sessionRecord.UpdatedAt = finishedAt
 	sessionRecord.LastAccessedAt = finishedAt
@@ -1302,14 +1498,25 @@ func (s *Service) cancelJobExecution(sessionID, jobID string) {
 	s.appendJobCheckpoint(job, "execution", "muted", "任务已停止", "已取消", "用户已停止当前任务。")
 	s.store.SaveJob(job)
 
-	s.store.AddMessage(&models.Message{
+	assistantMessage := &models.Message{
 		ID:        s.store.NextID("msg"),
 		SessionID: sessionID,
+		TurnID:    job.TurnID,
 		JobID:     jobID,
 		Role:      models.MessageAssistant,
 		Content:   summary,
 		CreatedAt: finishedAt,
-	})
+	}
+	s.store.AddMessage(assistantMessage)
+
+	if turn, ok := s.store.GetTurn(job.TurnID); ok {
+		turn.Status = models.TurnCanceled
+		turn.AssistantMessageID = assistantMessage.ID
+		turn.UpdatedAt = finishedAt
+		turn.FinishedAt = &finishedAt
+		turn.Summary = summary
+		s.store.SaveTurn(turn)
+	}
 
 	if sessionRecord, ok := s.store.GetSession(sessionID); ok {
 		sessionRecord.UpdatedAt = finishedAt
@@ -1341,14 +1548,25 @@ func (s *Service) failJob(sessionID, jobID string, err error) {
 	})
 	s.store.SaveJob(job)
 
-	s.store.AddMessage(&models.Message{
+	assistantMessage := &models.Message{
 		ID:        s.store.NextID("msg"),
 		SessionID: sessionID,
+		TurnID:    job.TurnID,
 		JobID:     jobID,
 		Role:      models.MessageAssistant,
 		Content:   publicError,
 		CreatedAt: finishedAt,
-	})
+	}
+	s.store.AddMessage(assistantMessage)
+
+	if turn, ok := s.store.GetTurn(job.TurnID); ok {
+		turn.Status = models.TurnFailed
+		turn.AssistantMessageID = assistantMessage.ID
+		turn.UpdatedAt = finishedAt
+		turn.FinishedAt = &finishedAt
+		turn.Summary = publicError
+		s.store.SaveTurn(turn)
+	}
 
 	s.publishJob(sessionID, jobID)
 	s.publishSnapshot(sessionID)
@@ -1759,16 +1977,25 @@ func objectID(object *models.ObjectMeta) string {
 }
 
 func (s *Service) buildPlanningRequest(sessionRecord *models.Session, message string) (PlanningRequest, error) {
-	return s.buildPlanningRequestWithInputs(sessionRecord, message, nil)
+	return s.buildPlanningRequestWithInputsAndTurn(sessionRecord, message, nil, nil)
 }
 
 func (s *Service) buildPlanningRequestWithInputs(sessionRecord *models.Session, message string, inputArtifacts []*models.Artifact) (PlanningRequest, error) {
+	return s.buildPlanningRequestWithInputsAndTurn(sessionRecord, message, inputArtifacts, nil)
+}
+
+func (s *Service) buildPlanningRequestWithInputsAndTurn(sessionRecord *models.Session, message string, inputArtifacts []*models.Artifact, currentTurn *models.Turn) (PlanningRequest, error) {
 	snapshot, err := s.store.Snapshot(sessionRecord.ID)
 	if err != nil {
 		return PlanningRequest{}, err
 	}
 
 	resolvedObjects := resolveObjectRoles(snapshot.Session, snapshot.Objects)
+	currentTurnCopy := cloneTurnForPlanning(currentTurn)
+	currentTurnID := ""
+	if currentTurnCopy != nil {
+		currentTurnID = currentTurnCopy.ID
+	}
 
 	return PlanningRequest{
 		Message:         message,
@@ -1782,12 +2009,18 @@ func (s *Service) buildPlanningRequestWithInputs(sessionRecord *models.Session, 
 		RecentMessages:  trimRecentMessages(snapshot.Messages, message, 6),
 		RecentJobs:      trimRecentJobs(snapshot.Jobs, 3),
 		RecentArtifacts: trimRecentArtifacts(snapshot.Artifacts, 4),
+		RecentTurns:     trimRecentTurns(snapshot.Turns, currentTurnID, 4),
+		CurrentTurn:     currentTurnCopy,
 		WorkingMemory:   snapshot.WorkingMemory,
 	}, nil
 }
 
 func (s *Service) buildExecutionPlanningRequest(sessionRecord *models.Session, message string, currentJob *models.Job, inputArtifacts []*models.Artifact) (PlanningRequest, error) {
-	request, err := s.buildPlanningRequestWithInputs(sessionRecord, message, inputArtifacts)
+	var currentTurn *models.Turn
+	if currentJob != nil && currentJob.TurnID != "" {
+		currentTurn, _ = s.store.GetTurn(currentJob.TurnID)
+	}
+	request, err := s.buildPlanningRequestWithInputsAndTurn(sessionRecord, message, inputArtifacts, currentTurn)
 	if err != nil {
 		return PlanningRequest{}, err
 	}
@@ -1815,7 +2048,9 @@ func (s *Service) buildEvaluationRequest(sessionRecord *models.Session, message 
 		RecentMessages:  request.RecentMessages,
 		RecentJobs:      request.RecentJobs,
 		RecentArtifacts: request.RecentArtifacts,
+		RecentTurns:     request.RecentTurns,
 		CurrentJob:      cloneJobForPlanning(currentJob),
+		CurrentTurn:     cloneTurnForPlanning(request.CurrentTurn),
 		WorkingMemory:   request.WorkingMemory,
 	}, nil
 }
@@ -1837,7 +2072,9 @@ func (s *Service) buildResponseComposeRequest(sessionRecord *models.Session, mes
 		RecentMessages:  request.RecentMessages,
 		RecentJobs:      request.RecentJobs,
 		RecentArtifacts: request.RecentArtifacts,
+		RecentTurns:     request.RecentTurns,
 		CurrentJob:      cloneJobForPlanning(currentJob),
+		CurrentTurn:     cloneTurnForPlanning(request.CurrentTurn),
 		WorkingMemory:   request.WorkingMemory,
 	}, nil
 }
@@ -1925,6 +2162,30 @@ func trimRecentArtifacts(artifacts []*models.Artifact, limit int) []*models.Arti
 		start = 0
 	}
 	return artifacts[start:]
+}
+
+func trimRecentTurns(turns []*models.Turn, currentTurnID string, limit int) []*models.Turn {
+	if len(turns) == 0 || limit <= 0 {
+		return nil
+	}
+
+	end := len(turns)
+	if currentTurnID != "" && turns[end-1] != nil && turns[end-1].ID == currentTurnID {
+		end--
+	}
+	if end <= 0 {
+		return nil
+	}
+
+	start := end - limit
+	if start < 0 {
+		start = 0
+	}
+	result := make([]*models.Turn, 0, end-start)
+	for _, turn := range turns[start:end] {
+		result = append(result, cloneTurnForPlanning(turn))
+	}
+	return result
 }
 
 func clonePlan(in models.Plan) models.Plan {

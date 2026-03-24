@@ -20,6 +20,7 @@ type Store struct {
 	workspaces  map[string]*models.Workspace
 	sessions    map[string]*models.Session
 	objects     map[string]*models.ObjectMeta
+	turns       map[string]*models.Turn
 	jobs        map[string]*models.Job
 	artifacts   map[string]*models.Artifact
 	messages    map[string][]*models.Message
@@ -33,6 +34,7 @@ func NewStore() *Store {
 			workspaces:  make(map[string]*models.Workspace),
 			sessions:    make(map[string]*models.Session),
 			objects:     make(map[string]*models.ObjectMeta),
+			turns:       make(map[string]*models.Turn),
 			jobs:        make(map[string]*models.Job),
 			artifacts:   make(map[string]*models.Artifact),
 			messages:    make(map[string][]*models.Message),
@@ -52,6 +54,7 @@ func newStore(persistence statePersistence) (*Store, error) {
 		workspaces:  make(map[string]*models.Workspace),
 		sessions:    make(map[string]*models.Session),
 		objects:     make(map[string]*models.ObjectMeta),
+		turns:       make(map[string]*models.Turn),
 		jobs:        make(map[string]*models.Job),
 		artifacts:   make(map[string]*models.Artifact),
 		messages:    make(map[string][]*models.Message),
@@ -185,6 +188,38 @@ func (s *Store) SaveJob(job *models.Job) {
 	s.persistLocked()
 }
 
+func (s *Store) SaveTurn(turn *models.Turn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.turns[turn.ID] = cloneTurn(turn)
+	s.persistLocked()
+}
+
+func (s *Store) GetTurn(id string) (*models.Turn, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	turn, ok := s.turns[id]
+	if !ok {
+		return nil, false
+	}
+	return cloneTurn(turn), true
+}
+
+func (s *Store) ListSessionTurns(sessionID string) []*models.Turn {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	turns := make([]*models.Turn, 0)
+	for _, turn := range s.turns {
+		if turn.SessionID == sessionID {
+			turns = append(turns, cloneTurn(turn))
+		}
+	}
+	slices.SortFunc(turns, func(a, b *models.Turn) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
+	})
+	return turns
+}
+
 func (s *Store) GetJob(id string) (*models.Job, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -270,6 +305,13 @@ func (s *Store) DeleteJob(jobID string) {
 	s.persistLocked()
 }
 
+func (s *Store) DeleteTurn(turnID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.turns, turnID)
+	s.persistLocked()
+}
+
 func (s *Store) Snapshot(sessionID string) (*models.SessionSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -321,6 +363,16 @@ func (s *Store) Snapshot(sessionID string) (*models.SessionSnapshot, error) {
 		return a.CreatedAt.Compare(b.CreatedAt)
 	})
 
+	turns := make([]*models.Turn, 0)
+	for _, turn := range s.turns {
+		if turn.SessionID == sessionID {
+			turns = append(turns, cloneTurn(turn))
+		}
+	}
+	slices.SortFunc(turns, func(a, b *models.Turn) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
+	})
+
 	messages := make([]*models.Message, 0, len(s.messages[sessionID]))
 	for _, message := range s.messages[sessionID] {
 		messages = append(messages, cloneMessage(message))
@@ -332,6 +384,7 @@ func (s *Store) Snapshot(sessionID string) (*models.SessionSnapshot, error) {
 		Objects:       objects,
 		Jobs:          jobs,
 		Artifacts:     artifacts,
+		Turns:         turns,
 		Messages:      messages,
 		WorkingMemory: buildWorkingMemory(sessionCopy, objects, jobs, artifacts),
 	}, nil
@@ -426,6 +479,11 @@ func (s *Store) DeleteSession(sessionID string) error {
 			delete(s.jobs, id)
 		}
 	}
+	for id, turn := range s.turns {
+		if turn.SessionID == sessionID {
+			delete(s.turns, id)
+		}
+	}
 	for id, object := range s.objects {
 		if object.SessionID == sessionID && object.WorkspaceID == "" {
 			delete(s.objects, id)
@@ -463,6 +521,11 @@ func (s *Store) DeleteWorkspace(workspaceID string) error {
 	for id, job := range s.jobs {
 		if _, ok := sessionIDs[job.SessionID]; ok {
 			delete(s.jobs, id)
+		}
+	}
+	for id, turn := range s.turns {
+		if _, ok := sessionIDs[turn.SessionID]; ok {
+			delete(s.turns, id)
 		}
 	}
 	for id, object := range s.objects {
@@ -590,6 +653,18 @@ func cloneArtifact(in *models.Artifact) *models.Artifact {
 	return &out
 }
 
+func cloneTurn(in *models.Turn) *models.Turn {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Contract = cloneTurnContract(in.Contract)
+	if len(in.ResultRefs) > 0 {
+		out.ResultRefs = append([]models.TurnResultRef(nil), in.ResultRefs...)
+	}
+	return &out
+}
+
 func cloneJob(in *models.Job) *models.Job {
 	if in == nil {
 		return nil
@@ -673,6 +748,14 @@ func cloneJobPhase(in models.JobPhase) models.JobPhase {
 	return out
 }
 
+func cloneTurnContract(in models.TurnContract) models.TurnContract {
+	out := in
+	if len(in.CompletionCriteria) > 0 {
+		out.CompletionCriteria = append([]models.TurnCompletionCriterion(nil), in.CompletionCriteria...)
+	}
+	return out
+}
+
 func objectInWorkspace(object *models.ObjectMeta, workspaceID, sessionID string) bool {
 	return object != nil && (object.WorkspaceID == workspaceID || (object.WorkspaceID == "" && object.SessionID == sessionID))
 }
@@ -703,6 +786,7 @@ func (s *Store) snapshotLocked() *persistedState {
 		Workspaces: make([]*models.Workspace, 0, len(s.workspaces)),
 		Sessions:   make([]*models.Session, 0, len(s.sessions)),
 		Objects:    make([]*models.ObjectMeta, 0, len(s.objects)),
+		Turns:      make([]*models.Turn, 0, len(s.turns)),
 		Jobs:       make([]*models.Job, 0, len(s.jobs)),
 		Artifacts:  make([]*models.Artifact, 0, len(s.artifacts)),
 		Messages:   make([]*models.Message, 0),
@@ -716,6 +800,9 @@ func (s *Store) snapshotLocked() *persistedState {
 	}
 	for _, object := range s.objects {
 		state.Objects = append(state.Objects, cloneObject(object))
+	}
+	for _, turn := range s.turns {
+		state.Turns = append(state.Turns, cloneTurn(turn))
 	}
 	for _, job := range s.jobs {
 		state.Jobs = append(state.Jobs, cloneJob(job))
@@ -736,6 +823,9 @@ func (s *Store) snapshotLocked() *persistedState {
 		return compareTimes(a.LastAccessedAt, b.LastAccessedAt, a.CreatedAt, b.CreatedAt)
 	})
 	slices.SortFunc(state.Objects, func(a, b *models.ObjectMeta) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
+	})
+	slices.SortFunc(state.Turns, func(a, b *models.Turn) int {
 		return a.CreatedAt.Compare(b.CreatedAt)
 	})
 	slices.SortFunc(state.Jobs, func(a, b *models.Job) int {
@@ -769,6 +859,11 @@ func (s *Store) restore(state *persistedState) {
 	for _, object := range state.Objects {
 		if object != nil {
 			s.objects[object.ID] = cloneObject(object)
+		}
+	}
+	for _, turn := range state.Turns {
+		if turn != nil {
+			s.turns[turn.ID] = cloneTurn(turn)
 		}
 	}
 	for _, job := range state.Jobs {
@@ -830,6 +925,15 @@ func deriveCounter(state *persistedState) uint64 {
 		if job != nil {
 			collect(job.ID)
 			collect(job.MessageID)
+			collect(job.TurnID)
+		}
+	}
+	for _, turn := range state.Turns {
+		if turn != nil {
+			collect(turn.ID)
+			collect(turn.UserMessageID)
+			collect(turn.AssistantMessageID)
+			collect(turn.JobID)
 		}
 	}
 	for _, artifact := range state.Artifacts {
@@ -842,6 +946,7 @@ func deriveCounter(state *persistedState) uint64 {
 	for _, message := range state.Messages {
 		if message != nil {
 			collect(message.ID)
+			collect(message.TurnID)
 			collect(message.JobID)
 		}
 	}

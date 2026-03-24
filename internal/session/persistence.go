@@ -14,7 +14,7 @@ import (
 	"scagent/internal/models"
 )
 
-const persistenceSchemaVersion = "2"
+const persistenceSchemaVersion = "3"
 
 type statePersistence interface {
 	Load() (*persistedState, error)
@@ -26,6 +26,7 @@ type persistedState struct {
 	Workspaces []*models.Workspace  `json:"workspaces"`
 	Sessions   []*models.Session    `json:"sessions"`
 	Objects    []*models.ObjectMeta `json:"objects"`
+	Turns      []*models.Turn       `json:"turns"`
 	Jobs       []*models.Job        `json:"jobs"`
 	Artifacts  []*models.Artifact   `json:"artifacts"`
 	Messages   []*models.Message    `json:"messages"`
@@ -86,6 +87,9 @@ func (p *sqlitePersistence) Load() (*persistedState, error) {
 		return nil, err
 	}
 	if state.Objects, err = queryJSONList[models.ObjectMeta](db, `SELECT payload FROM objects ORDER BY created_at ASC, id ASC`); err != nil {
+		return nil, err
+	}
+	if state.Turns, err = queryJSONList[models.Turn](db, `SELECT payload FROM turns ORDER BY created_at ASC, id ASC`); err != nil {
 		return nil, err
 	}
 	if state.Jobs, err = queryJSONList[models.Job](db, `SELECT payload FROM jobs ORDER BY created_at ASC, id ASC`); err != nil {
@@ -156,6 +160,14 @@ func (p *sqlitePersistence) Save(state *persistedState) error {
 		return err
 	}
 	if err := syncPayloadTable(tx, "objects", []string{"id", "workspace_id", "session_id", "created_at", "payload"}, objects); err != nil {
+		return err
+	}
+
+	turns, err := turnRows(state.Turns)
+	if err != nil {
+		return err
+	}
+	if err := syncPayloadTable(tx, "turns", []string{"id", "session_id", "created_at", "payload"}, turns); err != nil {
 		return err
 	}
 
@@ -231,6 +243,12 @@ func (p *sqlitePersistence) open() (*sql.DB, error) {
 			id TEXT PRIMARY KEY,
 			workspace_id TEXT,
 			session_id TEXT,
+			created_at TEXT NOT NULL,
+			payload TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS turns (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
 			created_at TEXT NOT NULL,
 			payload TEXT NOT NULL
 		)`,
@@ -314,6 +332,21 @@ func objectRows(items []*models.ObjectMeta) ([]payloadRow, error) {
 	return rows, nil
 }
 
+func turnRows(items []*models.Turn) ([]payloadRow, error) {
+	rows := make([]payloadRow, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		row, err := marshalPayloadRow(item.ID, item, item.SessionID, item.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
 func jobRows(items []*models.Job) ([]payloadRow, error) {
 	rows := make([]payloadRow, 0, len(items))
 	for _, item := range items {
@@ -380,7 +413,7 @@ func marshalPayloadRow(id string, payload any, values ...any) (payloadRow, error
 }
 
 func persistedStateHasData(db *sql.DB) (bool, error) {
-	for _, table := range []string{"workspaces", "sessions", "objects", "jobs", "artifacts", "messages"} {
+	for _, table := range []string{"workspaces", "sessions", "objects", "turns", "jobs", "artifacts", "messages"} {
 		value, err := querySingleString(db, fmt.Sprintf(`SELECT COUNT(1) FROM %s`, table))
 		if err != nil {
 			return false, err
@@ -403,6 +436,7 @@ func resetPersistedState(db *sql.DB) error {
 		`DELETE FROM workspaces`,
 		`DELETE FROM sessions`,
 		`DELETE FROM objects`,
+		`DELETE FROM turns`,
 		`DELETE FROM jobs`,
 		`DELETE FROM artifacts`,
 		`DELETE FROM messages`,

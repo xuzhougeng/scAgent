@@ -114,6 +114,7 @@ type scriptedAnswerer struct {
 	directAnswer string
 	directOK     bool
 	directErr    error
+	resolvedTurn *TurnResolveResult
 	response     *ResponseComposeResult
 	requests     []PlanningRequest
 }
@@ -132,6 +133,34 @@ func (e *scriptedEvaluator) Evaluate(_ context.Context, request EvaluationReques
 
 func (e *scriptedEvaluator) Mode() string {
 	return "fake"
+}
+
+func (a *scriptedAnswerer) ResolveTurn(_ context.Context, request PlanningRequest) (*TurnResolveResult, error) {
+	a.requests = append(a.requests, request)
+	if a.directErr != nil {
+		return nil, a.directErr
+	}
+	if a.resolvedTurn != nil {
+		return normalizeTurnResolveResult(request, a.resolvedTurn), nil
+	}
+	if a.directOK {
+		return &TurnResolveResult{
+			Strategy: models.TurnStrategyAnswerText,
+			Contract: models.TurnContract{
+				DeliverableKind: models.TurnDeliverableText,
+				CompletionCriteria: []models.TurnCompletionCriterion{{
+					Kind: models.TurnCompletionTextAnswer,
+				}},
+			},
+			Answer:  a.directAnswer,
+			Summary: a.directAnswer,
+			ResultRefs: []models.TurnResultRef{{
+				Kind: models.TurnResultText,
+				Text: a.directAnswer,
+			}},
+		}, nil
+	}
+	return normalizeTurnResolveResult(request, buildFallbackTurnResolveResult(request)), nil
 }
 
 func (a *scriptedAnswerer) BuildDirectAnswer(_ context.Context, request PlanningRequest) (string, bool, error) {
@@ -574,6 +603,27 @@ func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
 		Summary:   "prepared_pbmc3k 的真实 UMAP 散点图。",
 		CreatedAt: now.Add(time.Second),
 	})
+	store.SaveTurn(&models.Turn{
+		ID:        "turn_prev",
+		SessionID: sessionRecord.ID,
+		Status:    models.TurnFulfilled,
+		Strategy:  models.TurnStrategyExecute,
+		Summary:   "已生成上一张 UMAP 图。",
+		Contract: models.TurnContract{
+			DeliverableKind: models.TurnDeliverablePlot,
+			CompletionCriteria: []models.TurnCompletionCriterion{{
+				Kind:         models.TurnCompletionArtifactKind,
+				ArtifactKind: models.ArtifactPlot,
+			}},
+		},
+		ResultRefs: []models.TurnResultRef{{
+			Kind:         models.TurnResultArtifact,
+			ArtifactID:   "art_prev",
+			ArtifactKind: models.ArtifactPlot,
+		}},
+		CreatedAt: now,
+		UpdatedAt: now.Add(time.Second),
+	})
 
 	request, err := service.buildPlanningRequest(sessionRecord, "把这个图改一下")
 	if err != nil {
@@ -594,6 +644,9 @@ func TestBuildPlanningRequestIncludesRecentContext(t *testing.T) {
 	}
 	if len(request.RecentArtifacts) != 1 || request.RecentArtifacts[0].ID != "art_prev" {
 		t.Fatalf("unexpected recent artifacts: %+v", request.RecentArtifacts)
+	}
+	if len(request.RecentTurns) != 1 || request.RecentTurns[0].ID != "turn_prev" {
+		t.Fatalf("unexpected recent turns: %+v", request.RecentTurns)
 	}
 	if request.WorkingMemory == nil {
 		t.Fatalf("expected working memory in planning request")
@@ -659,6 +712,122 @@ func TestSubmitMessageAnswersSimpleDatasetQuestionWithoutJob(t *testing.T) {
 	}
 	if len(answerer.requests) != 1 {
 		t.Fatalf("expected answerer to receive one semantic direct-answer request, got %d", len(answerer.requests))
+	}
+	if len(snapshot.Turns) != 1 {
+		t.Fatalf("expected one turn in snapshot, got %+v", snapshot.Turns)
+	}
+	turn := snapshot.Turns[0]
+	if turn.Status != models.TurnFulfilled {
+		t.Fatalf("expected fulfilled turn, got %+v", turn)
+	}
+	if turn.Strategy != models.TurnStrategyAnswerText {
+		t.Fatalf("expected answer_text turn strategy, got %+v", turn)
+	}
+	if len(turn.ResultRefs) != 1 || turn.ResultRefs[0].Kind != models.TurnResultText {
+		t.Fatalf("expected text result ref, got %+v", turn.ResultRefs)
+	}
+	if turn.AssistantMessageID == "" || turn.UserMessageID == "" {
+		t.Fatalf("expected turn to link both messages, got %+v", turn)
+	}
+}
+
+func TestSubmitMessageReusesExistingArtifactWithoutJob(t *testing.T) {
+	registry, err := skill.LoadRegistry(skillsRegistryPath())
+	if err != nil {
+		t.Fatalf("load skills registry: %v", err)
+	}
+
+	store := session.NewStore()
+	answerer := &scriptedAnswerer{
+		resolvedTurn: &TurnResolveResult{
+			Strategy: models.TurnStrategyReuseExistingArtifact,
+			Contract: models.TurnContract{
+				DeliverableKind: models.TurnDeliverablePlot,
+				CompletionCriteria: []models.TurnCompletionCriterion{{
+					Kind:         models.TurnCompletionArtifactKind,
+					ArtifactKind: models.ArtifactPlot,
+				}},
+			},
+			Answer:  "在这儿：我把上一张图挂上来了。",
+			Summary: "复用了当前会话里已有的 UMAP 图。",
+			ResultRefs: []models.TurnResultRef{{
+				Kind:       models.TurnResultArtifact,
+				ArtifactID: "art_existing",
+			}},
+		},
+	}
+	service := NewServiceWithComponents(store, registry, nil, NewFakePlanner(), NewFakeEvaluator(), answerer, t.TempDir())
+
+	sessionRecord := store.CreateSession("reuse")
+	now := time.Now().UTC()
+	sessionRecord.FocusObjectID = "obj_active"
+	store.SaveSession(sessionRecord)
+
+	workspaceRecord, ok := store.GetWorkspace(sessionRecord.WorkspaceID)
+	if !ok {
+		t.Fatalf("expected workspace to exist")
+	}
+	workspaceRecord.FocusObjectID = "obj_active"
+	store.SaveWorkspace(workspaceRecord)
+
+	store.SaveObject(&models.ObjectMeta{
+		ID:             "obj_active",
+		WorkspaceID:    sessionRecord.WorkspaceID,
+		SessionID:      sessionRecord.ID,
+		DatasetID:      workspaceRecord.DatasetID,
+		Label:          "pbmc3k",
+		BackendRef:     "py:reuse:adata_1",
+		Kind:           models.ObjectFilteredDataset,
+		NObs:           2638,
+		NVars:          1838,
+		State:          models.ObjectResident,
+		InMemory:       true,
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	})
+	store.SaveArtifact(&models.Artifact{
+		ID:          "art_existing",
+		WorkspaceID: sessionRecord.WorkspaceID,
+		SessionID:   sessionRecord.ID,
+		ObjectID:    "obj_active",
+		Kind:        models.ArtifactPlot,
+		Title:       "pbmc3k 的 UMAP 图",
+		Path:        filepath.Join(t.TempDir(), "pbmc3k_umap.png"),
+		URL:         "/data/fake/pbmc3k_umap.png",
+		ContentType: "image/png",
+		Summary:     "pbmc3k 的真实 UMAP 散点图。",
+		CreatedAt:   now.Add(time.Second),
+	})
+
+	job, snapshot, err := service.SubmitMessage(context.Background(), sessionRecord.ID, "图呢")
+	if err != nil {
+		t.Fatalf("submit message: %v", err)
+	}
+	if job != nil {
+		t.Fatalf("expected no background job for reuse path, got %+v", job)
+	}
+	if len(snapshot.Jobs) != 0 {
+		t.Fatalf("expected no jobs in snapshot, got %+v", snapshot.Jobs)
+	}
+	if len(snapshot.Turns) != 1 {
+		t.Fatalf("expected one turn, got %+v", snapshot.Turns)
+	}
+	turn := snapshot.Turns[0]
+	if turn.Strategy != models.TurnStrategyReuseExistingArtifact {
+		t.Fatalf("expected reuse turn strategy, got %+v", turn)
+	}
+	if turn.Status != models.TurnFulfilled {
+		t.Fatalf("expected fulfilled turn, got %+v", turn)
+	}
+	if len(turn.ResultRefs) != 1 {
+		t.Fatalf("expected one result ref, got %+v", turn.ResultRefs)
+	}
+	if turn.ResultRefs[0].ArtifactID != "art_existing" || turn.ResultRefs[0].ArtifactKind != models.ArtifactPlot {
+		t.Fatalf("expected enriched artifact ref, got %+v", turn.ResultRefs[0])
+	}
+	lastMessage := snapshot.Messages[len(snapshot.Messages)-1]
+	if lastMessage.Role != models.MessageAssistant || lastMessage.TurnID != turn.ID {
+		t.Fatalf("expected assistant message linked to turn, got %+v", lastMessage)
 	}
 }
 
