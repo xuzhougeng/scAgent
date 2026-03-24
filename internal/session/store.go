@@ -135,7 +135,7 @@ func (s *Store) CreateConversation(workspaceID, label string) (*models.Session, 
 		WorkspaceID:    workspaceID,
 		Label:          label,
 		DatasetID:      workspace.DatasetID,
-		FocusObjectID:  workspace.FocusObjectID,
+		FocusObjectID:  s.preferredConversationFocusObjectIDLocked(workspace),
 		Status:         models.SessionActive,
 		CreatedAt:      now,
 		UpdatedAt:      now,
@@ -342,6 +342,17 @@ func (s *Store) Snapshot(sessionID string) (*models.SessionSnapshot, error) {
 	slices.SortFunc(objects, func(a, b *models.ObjectMeta) int {
 		return a.CreatedAt.Compare(b.CreatedAt)
 	})
+
+	objectByID := make(map[string]*models.ObjectMeta, len(objects))
+	for _, object := range objects {
+		if object == nil || object.ID == "" {
+			continue
+		}
+		objectByID[object.ID] = object
+	}
+	if sessionCopy.FocusObjectID == "" || objectByID[sessionCopy.FocusObjectID] == nil {
+		sessionCopy.FocusObjectID = s.preferredConversationFocusObjectIDLocked(workspaceCopy)
+	}
 
 	jobs := make([]*models.Job, 0)
 	for _, job := range s.jobs {
@@ -762,6 +773,142 @@ func objectInWorkspace(object *models.ObjectMeta, workspaceID, sessionID string)
 
 func artifactInWorkspace(artifact *models.Artifact, workspaceID, sessionID string) bool {
 	return artifact != nil && (artifact.WorkspaceID == workspaceID || (artifact.WorkspaceID == "" && artifact.SessionID == sessionID))
+}
+
+func (s *Store) preferredConversationFocusObjectIDLocked(workspace *models.Workspace) string {
+	if workspace == nil {
+		return ""
+	}
+
+	objectByID := make(map[string]*models.ObjectMeta)
+	for _, object := range s.objects {
+		if object == nil || object.WorkspaceID != workspace.ID || object.ID == "" {
+			continue
+		}
+		objectByID[object.ID] = object
+	}
+	if len(objectByID) == 0 {
+		return ""
+	}
+
+	if focus := objectByID[workspace.FocusObjectID]; focus != nil {
+		if root := lineageRootObjectLocked(focus, objectByID); root != nil {
+			if workspace.DatasetID == "" || root.DatasetID == "" || root.DatasetID == workspace.DatasetID {
+				return root.ID
+			}
+		}
+	}
+
+	if root := preferredWorkspaceRootObjectLocked(workspace.DatasetID, objectByID); root != nil {
+		return root.ID
+	}
+
+	if focus := objectByID[workspace.FocusObjectID]; focus != nil {
+		if root := lineageRootObjectLocked(focus, objectByID); root != nil {
+			return root.ID
+		}
+		return focus.ID
+	}
+
+	if root := preferredWorkspaceRootObjectLocked("", objectByID); root != nil {
+		return root.ID
+	}
+
+	return ""
+}
+
+func preferredWorkspaceRootObjectLocked(datasetID string, objectByID map[string]*models.ObjectMeta) *models.ObjectMeta {
+	if len(objectByID) == 0 {
+		return nil
+	}
+
+	roots := make(map[string]*models.ObjectMeta)
+	for _, object := range objectByID {
+		root := lineageRootObjectLocked(object, objectByID)
+		if root == nil || root.ID == "" {
+			continue
+		}
+		if datasetID != "" && root.DatasetID != datasetID {
+			continue
+		}
+		roots[root.ID] = root
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+
+	var best *models.ObjectMeta
+	for _, candidate := range roots {
+		if best == nil || compareConversationRootPriority(candidate, best) < 0 {
+			best = candidate
+		}
+	}
+	return best
+}
+
+func lineageRootObjectLocked(object *models.ObjectMeta, objectByID map[string]*models.ObjectMeta) *models.ObjectMeta {
+	if object == nil {
+		return nil
+	}
+
+	current := object
+	seen := map[string]struct{}{}
+	for current != nil && current.ParentID != "" {
+		if _, ok := seen[current.ID]; ok {
+			break
+		}
+		seen[current.ID] = struct{}{}
+		parent := objectByID[current.ParentID]
+		if parent == nil {
+			break
+		}
+		current = parent
+	}
+	return current
+}
+
+func compareConversationRootPriority(left, right *models.ObjectMeta) int {
+	leftScore := conversationRootPriority(left)
+	rightScore := conversationRootPriority(right)
+	if leftScore != rightScore {
+		if leftScore > rightScore {
+			return -1
+		}
+		return 1
+	}
+	if left == nil || right == nil {
+		return 0
+	}
+	if left.CreatedAt.After(right.CreatedAt) {
+		return -1
+	}
+	if right.CreatedAt.After(left.CreatedAt) {
+		return 1
+	}
+	if left.LastAccessedAt.After(right.LastAccessedAt) {
+		return -1
+	}
+	if right.LastAccessedAt.After(left.LastAccessedAt) {
+		return 1
+	}
+	return strings.Compare(left.ID, right.ID)
+}
+
+func conversationRootPriority(object *models.ObjectMeta) int {
+	if object == nil {
+		return -1
+	}
+
+	switch object.Kind {
+	case models.ObjectRawDataset:
+		return 30
+	case models.ObjectFilteredDataset:
+		return 20
+	case models.ObjectUnknown:
+		return 10
+	default:
+		return 0
+	}
 }
 
 func compareTimes(primaryA, primaryB, fallbackA, fallbackB time.Time) int {

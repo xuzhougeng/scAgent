@@ -186,3 +186,65 @@ func TestPersistentStoreRestoresWorkspaceConversationState(t *testing.T) {
 		t.Fatalf("expected reloaded counter to advance beyond existing conversation id")
 	}
 }
+
+func TestCreateConversationStartsFromWorkspaceRootObject(t *testing.T) {
+	store := NewStore()
+	workspace := store.CreateWorkspace("pbmc3k")
+	conversation, err := store.CreateConversation(workspace.ID, "subset analysis")
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	now := time.Now().UTC()
+	root := &models.ObjectMeta{
+		ID:             store.NextID("obj"),
+		WorkspaceID:    workspace.ID,
+		SessionID:      conversation.ID,
+		DatasetID:      workspace.DatasetID,
+		Kind:           models.ObjectRawDataset,
+		Label:          "pbmc3k",
+		BackendRef:     "py:sess_1:adata_1",
+		State:          models.ObjectResident,
+		InMemory:       true,
+		CreatedAt:      now,
+		LastAccessedAt: now,
+	}
+	subset := &models.ObjectMeta{
+		ID:             store.NextID("obj"),
+		WorkspaceID:    workspace.ID,
+		SessionID:      conversation.ID,
+		DatasetID:      workspace.DatasetID,
+		ParentID:       root.ID,
+		Kind:           models.ObjectSubset,
+		Label:          "t_cells",
+		BackendRef:     "py:sess_1:adata_2",
+		State:          models.ObjectResident,
+		InMemory:       true,
+		CreatedAt:      now.Add(time.Second),
+		LastAccessedAt: now.Add(time.Second),
+	}
+	store.SaveObject(root)
+	store.SaveObject(subset)
+
+	workspace.FocusObjectID = subset.ID
+	store.SaveWorkspace(workspace)
+
+	conversation.FocusObjectID = subset.ID
+	store.SaveSession(conversation)
+
+	followup, err := store.CreateConversation(workspace.ID, "fresh thread")
+	if err != nil {
+		t.Fatalf("create followup conversation: %v", err)
+	}
+	if followup.FocusObjectID != root.ID {
+		t.Fatalf("expected new conversation to reset focus to root object %q, got %q", root.ID, followup.FocusObjectID)
+	}
+
+	snapshot, err := store.Snapshot(followup.ID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if snapshot.Session.FocusObjectID != root.ID {
+		t.Fatalf("expected snapshot focus to point at root object %q, got %q", root.ID, snapshot.Session.FocusObjectID)
+	}
+}

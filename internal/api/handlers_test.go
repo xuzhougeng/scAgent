@@ -592,6 +592,114 @@ func TestWorkspaceConversationSeesSharedObjectsAndArtifacts(t *testing.T) {
 	}
 }
 
+func TestNewConversationResetsFocusToWorkspaceRootObject(t *testing.T) {
+	service := newTestService(t, orchestrator.NewFakePlanner(), &fakeRuntime{})
+	handler := NewHandler(service, docsPath())
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	createSessionRecorder := httptest.NewRecorder()
+	createSessionRequest := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewBufferString(`{"label":"root reset workspace"}`))
+	createSessionRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(createSessionRecorder, createSessionRequest)
+	if createSessionRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", createSessionRecorder.Code, createSessionRecorder.Body.String())
+	}
+
+	var firstSnapshot models.SessionSnapshot
+	if err := json.Unmarshal(createSessionRecorder.Body.Bytes(), &firstSnapshot); err != nil {
+		t.Fatalf("decode first snapshot: %v", err)
+	}
+	rootObjectID := firstSnapshot.Session.FocusObjectID
+
+	messageRecorder := httptest.NewRecorder()
+	messageRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/api/messages",
+		bytes.NewBufferString(`{"session_id":"`+firstSnapshot.Session.ID+`","message":"把 T 细胞拿出来重新聚类，然后画一下 marker"}`),
+	)
+	messageRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(messageRecorder, messageRequest)
+	if messageRecorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", messageRecorder.Code, messageRecorder.Body.String())
+	}
+
+	var firstFinal models.SessionSnapshot
+	var succeeded bool
+	for range 50 {
+		time.Sleep(10 * time.Millisecond)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/sessions/"+firstSnapshot.Session.ID, nil)
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected 200 on snapshot read, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &firstFinal); err != nil {
+			t.Fatalf("decode first final snapshot: %v", err)
+		}
+		if len(firstFinal.Jobs) > 0 && firstFinal.Jobs[0].Status == models.JobSucceeded {
+			succeeded = true
+			break
+		}
+	}
+	if !succeeded {
+		t.Fatalf("job did not succeed: %+v", firstFinal.Jobs)
+	}
+	if firstFinal.Session.FocusObjectID == rootObjectID {
+		t.Fatalf("expected first conversation focus to move away from root after analysis")
+	}
+
+	createConversationRecorder := httptest.NewRecorder()
+	createConversationRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/api/workspaces/"+firstSnapshot.Workspace.ID+"/conversations",
+		bytes.NewBufferString(`{"label":"fresh analysis thread"}`),
+	)
+	createConversationRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(createConversationRecorder, createConversationRequest)
+	if createConversationRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", createConversationRecorder.Code, createConversationRecorder.Body.String())
+	}
+
+	var secondSnapshot models.SessionSnapshot
+	if err := json.Unmarshal(createConversationRecorder.Body.Bytes(), &secondSnapshot); err != nil {
+		t.Fatalf("decode second snapshot: %v", err)
+	}
+	if secondSnapshot.Session.FocusObjectID != rootObjectID {
+		t.Fatalf("expected new conversation focus to reset to root object %q, got %q", rootObjectID, secondSnapshot.Session.FocusObjectID)
+	}
+
+	previewRecorder := httptest.NewRecorder()
+	previewRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/api/sessions/"+secondSnapshot.Session.ID+"/planner-preview",
+		bytes.NewBufferString(`{"message":"检查当前数据"}`),
+	)
+	previewRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(previewRecorder, previewRequest)
+	if previewRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 on planner preview, got %d: %s", previewRecorder.Code, previewRecorder.Body.String())
+	}
+
+	var preview struct {
+		PlanningRequest struct {
+			FocusObject struct {
+				ID    string `json:"id"`
+				Label string `json:"label"`
+			} `json:"focus_object"`
+		} `json:"planning_request"`
+	}
+	if err := json.Unmarshal(previewRecorder.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("decode planner preview: %v", err)
+	}
+	if preview.PlanningRequest.FocusObject.ID != rootObjectID {
+		t.Fatalf("expected planner preview to resolve root focus object %q, got %+v", rootObjectID, preview.PlanningRequest.FocusObject)
+	}
+	if preview.PlanningRequest.FocusObject.Label != "pbmc3k" {
+		t.Fatalf("expected planner preview to use root dataset label, got %+v", preview.PlanningRequest.FocusObject)
+	}
+}
+
 func TestUploadH5ADFlow(t *testing.T) {
 	service := newTestService(t, orchestrator.NewFakePlanner(), &fakeRuntime{})
 	handler := NewHandler(service, docsPath())
