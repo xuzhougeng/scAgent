@@ -11,6 +11,8 @@ from typing import Any
 
 import h5py
 
+from i18n import t
+
 MAX_CATEGORY_SCAN = 50000
 
 ENVIRONMENT_PACKAGES: list[tuple[str, str, str]] = [
@@ -77,7 +79,7 @@ def build_environment_report(sample_path: Path) -> dict[str, Any]:
                 {
                     "name": "sample_h5ad",
                     "ok": True,
-                    "detail": f"{sample_path}（{sample_summary['n_obs']} 个细胞，{sample_summary['n_vars']} 个基因）",
+                    "detail": t("diag.sampleH5adDetail", path=sample_path, n_obs=sample_summary['n_obs'], n_vars=sample_summary['n_vars']),
                 }
             )
         except Exception as exc:  # pragma: no cover - diagnostic path
@@ -93,7 +95,7 @@ def build_environment_report(sample_path: Path) -> dict[str, Any]:
             {
                 "name": "sample_h5ad",
                 "ok": False,
-                "detail": f"缺少样例文件：{sample_path}",
+                "detail": t("diag.missingSampleFile", path=sample_path),
             }
         )
 
@@ -382,21 +384,27 @@ def build_dataset_assessment(metadata: dict[str, Any]) -> dict[str, Any]:
 
     missing_requirements = []
     if not has_pca:
-        missing_requirements.append("未发现 PCA 嵌入（`obsm['X_pca']`）。")
+        missing_requirements.append(t("diag.missingPCA"))
     if not has_neighbors:
-        missing_requirements.append("未发现邻接图（`uns['neighbors']`）。")
+        missing_requirements.append(t("diag.missingNeighbors"))
     if not has_umap:
-        missing_requirements.append("未发现 UMAP 嵌入（`obsm['X_umap']`）。")
+        missing_requirements.append(t("diag.missingUMAP"))
 
     suggested_next_steps = []
     if not has_pca:
-        suggested_next_steps.extend(["过滤低质量细胞", "总表达归一化", "log1p 转换", "选择高变基因", "运行 PCA"])
+        suggested_next_steps.extend([
+            t("diag.stepFilterCells"),
+            t("diag.stepNormalize"),
+            t("diag.stepLog1p"),
+            t("diag.stepSelectHVG"),
+            t("diag.stepRunPCA"),
+        ])
     if has_pca and not has_neighbors:
-        suggested_next_steps.append("计算邻接图")
+        suggested_next_steps.append(t("diag.stepComputeNeighbors"))
     if (has_pca or has_neighbors) and not has_umap:
-        suggested_next_steps.append("运行 UMAP")
+        suggested_next_steps.append(t("diag.stepRunUMAP"))
     if has_umap:
-        suggested_next_steps.append("绘制基因 UMAP")
+        suggested_next_steps.append(t("diag.stepPlotGeneUMAP"))
 
     return {
         "preprocessing_state": preprocessing_state,
@@ -423,15 +431,25 @@ def dedupe_list(values: list[str]) -> list[str]:
 
 def format_list_zh(values: list[str]) -> str:
     if not values:
-        return "无"
-    return "、".join(values)
+        return t("ui.listEmpty")
+    return t("ui.listSeparator").join(values)
+
+
+# Keep old name as alias for backward compatibility during transition
+format_list = format_list_zh
 
 
 def format_object_state_zh(state: str) -> str:
-    return {
-        "resident": "常驻",
-        "materialized": "已落盘",
-    }.get(state, state)
+    key = f"ui.objectState.{state}"
+    translated = t(key)
+    # If translation is missing (returns the key itself), fall back to raw state string
+    if translated == key:
+        return state
+    return translated
+
+
+# Keep old name as alias for backward compatibility during transition
+format_object_state = format_object_state_zh
 
 
 def describe_annotation_summary(metadata: dict[str, Any]) -> str:
@@ -442,21 +460,21 @@ def describe_annotation_summary(metadata: dict[str, Any]) -> str:
 
     if cell_type:
         parts.append(
-            f"检测到疑似细胞类型字段 `{cell_type['field']}`，共 {cell_type['n_categories']} 个类别。"
+            t("diag.cellTypeFieldDetected", field=cell_type['field'], n_categories=cell_type['n_categories'])
         )
     elif cluster:
         parts.append(
-            f"未检测到高置信度细胞类型字段；发现聚类字段 `{cluster['field']}`，共 {cluster['n_categories']} 组。"
+            t("diag.clusterFieldDetected", field=cluster['field'], n_categories=cluster['n_categories'])
         )
     else:
-        parts.append("未检测到高置信度的细胞类型或聚类注释。")
+        parts.append(t("diag.noAnnotationDetected"))
 
     if assessment.get("preprocessing_state"):
-        parts.append(f"数据集状态为 `{assessment['preprocessing_state']}`。")
+        parts.append(t("diag.datasetState", state=assessment['preprocessing_state']))
 
     missing = assessment.get("missing_requirements", [])
     if missing:
-        parts.append(f"缺失条件：{missing[0]}")
+        parts.append(t("diag.missingCondition", condition=missing[0]))
 
     return " ".join(parts)
 
@@ -527,10 +545,10 @@ def default_custom_analysis_summary(*, target_label: str, output_label: str, fac
     if facts.get("result_value") is not None:
         return f"{output_label} = {format_scalar_value(facts['result_value'])}。"
     if facts.get("table_generated"):
-        return f"已完成针对 {target_label} 的自定义 Python 分析，并生成结果表 {output_label}。"
+        return t("runtime.customAnalysisWithTable", target_label=target_label, output_label=output_label)
     if generated_object:
-        return f"已完成针对 {target_label} 的自定义 Python 分析，并生成对象 {output_label}。"
-    return f"已完成针对 {target_label} 的自定义 Python 分析。"
+        return t("runtime.customAnalysisWithObject", target_label=target_label, output_label=output_label)
+    return t("runtime.customAnalysisDone", target_label=target_label)
 
 
 def normalize_custom_scalar(value: Any) -> Any:

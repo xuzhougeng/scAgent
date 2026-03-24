@@ -1,5 +1,13 @@
+import { t, getLocale } from "./i18n.mjs";
+
 export async function fetchJSON(url, options) {
-  const response = await fetch(url, options);
+  const merged = { ...options };
+  merged.headers = new Headers(merged.headers || {});
+  if (!merged.headers.has("Accept-Language")) {
+    merged.headers.set("Accept-Language", getLocale());
+  }
+
+  const response = await fetch(url, merged);
   const contentType = response.headers.get("Content-Type") || "";
 
   if (!response.ok) {
@@ -10,7 +18,7 @@ export async function fetchJSON(url, options) {
     } else {
       message = await response.text();
     }
-    throw new Error(message || `请求失败：${response.status}`);
+    throw new Error(message || t("ui.requestFailed", { status: response.status }));
   }
 
   if (contentType.includes("application/json")) {

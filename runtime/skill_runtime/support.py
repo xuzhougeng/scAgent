@@ -8,6 +8,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from i18n import t
+
 from .base import SkillExecutionContext
 from .plugins import execute_plugin_skill
 
@@ -18,7 +20,7 @@ class SkillRuntimeSupport:
 
     def _require_target(self, target: Any | None, skill: str) -> Any:
         if target is None:
-            raise RuntimeError(f"{skill} 需要一个目标对象")
+            raise RuntimeError(t("error.skillRequiresTarget", skill=skill))
         return target
 
     def _load_adata(self, target: Any) -> Any:
@@ -31,7 +33,7 @@ class SkillRuntimeSupport:
         adata = self._load_adata(target)
         if self.matrix_has_negative_values(adata.X):
             if adata.raw is None:
-                raise RuntimeError("当前对象缺少可用于预处理的原始 counts，请先提供原始矩阵或带 raw 的 h5ad。")
+                raise RuntimeError(t("error.missingRawCounts"))
             adata = adata.raw.to_adata()
             adata.var_names_make_unique()
         return adata
@@ -97,7 +99,7 @@ class SkillRuntimeSupport:
             if candidate in adata.obs.columns:
                 return candidate
 
-        raise RuntimeError("当前对象缺少可用的聚类字段。")
+        raise RuntimeError(t("error.missingClusterField"))
 
     def _categorical_field(self, target: Any, adata: Any, requested: str | None = None) -> str:
         if requested and requested in adata.obs.columns:
@@ -126,7 +128,7 @@ class SkillRuntimeSupport:
         _, _, _, np, _ = self.analysis_modules()
         field_name = str(obs_field or "").strip()
         if field_name == "" or field_name not in adata.obs.columns:
-            raise RuntimeError(f"当前对象缺少 obs 字段 `{field_name}`。")
+            raise RuntimeError(t("error.missingObsField", field=field_name))
 
         series = adata.obs[field_name]
         operator = str(op or "eq").strip()
@@ -140,7 +142,7 @@ class SkillRuntimeSupport:
         elif operator == "lt":
             mask = series.astype(float) < float(value)
         else:
-            raise RuntimeError(f"不支持的筛选操作符：{operator}")
+            raise RuntimeError(t("error.unsupportedOperator", operator=operator))
 
         if hasattr(mask, "to_numpy"):
             return mask.to_numpy()
@@ -149,7 +151,7 @@ class SkillRuntimeSupport:
     def _run_subcluster_workflow(self, adata: Any, params: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         _, sc, _, _, _ = self.analysis_modules()
         if adata.n_obs < 3 or adata.n_vars < 3:
-            raise RuntimeError("亚群分析至少需要 3 个细胞和 3 个基因。")
+            raise RuntimeError(t("error.subclusterTooFewCellsGenes"))
 
         n_top_genes = int(params.get("n_top_genes") or 2000)
         n_neighbors = int(params.get("n_neighbors") or 15)
@@ -160,11 +162,11 @@ class SkillRuntimeSupport:
         sc.pp.log1p(adata)
         sc.pp.highly_variable_genes(adata, n_top_genes=n_top_genes, flavor="seurat", subset=True)
         if adata.n_obs < 3 or adata.n_vars < 3:
-            raise RuntimeError("亚群分析后的对象维度过小，无法继续 PCA/邻接图/UMAP。")
+            raise RuntimeError(t("error.subclusterDimensionsTooSmall"))
 
         max_comps = min(30, adata.n_obs - 1, adata.n_vars - 1)
         if max_comps < 2:
-            raise RuntimeError("亚群分析至少需要两个主成分，请检查筛选后的细胞数和基因数。")
+            raise RuntimeError(t("error.subclusterTooFewComponents"))
 
         sc.pp.pca(adata, n_comps=max_comps)
         sc.pp.neighbors(adata, n_neighbors=n_neighbors, n_pcs=min(30, adata.obsm["X_pca"].shape[1]))
@@ -396,8 +398,8 @@ class SkillRuntimeSupport:
 
         if require_at_least_one and not resolved:
             if missing:
-                raise RuntimeError(f"当前对象中未找到请求基因：{self.format_list_zh(missing)}。")
-            raise RuntimeError("至少需要一个基因。")
+                raise RuntimeError(t("error.genesNotFound", genes=self.format_list_zh(missing)))
+            raise RuntimeError(t("error.atLeastOneGeneRequired"))
 
         return requested, resolved, missing
 
@@ -443,15 +445,15 @@ class SkillRuntimeSupport:
     def _resolve_gene_expression(self, adata: Any, gene: str, layer: str | None = None) -> tuple[str, str, Any, str]:
         requested = str(gene or "").strip()
         if requested == "":
-            raise RuntimeError("基因名不能为空。")
+            raise RuntimeError(t("error.geneNameEmpty"))
 
         layer_name = str(layer or "").strip()
         if layer_name:
             if layer_name not in adata.layers:
-                raise RuntimeError(f"当前对象缺少 layer `{layer_name}`。")
+                raise RuntimeError(t("error.missingLayer", layer=layer_name))
             gene_key = self._resolve_gene_var_key(adata, requested)
             if gene_key is None:
-                raise RuntimeError(f"当前对象缺少基因 `{requested}`。")
+                raise RuntimeError(t("error.missingGene", gene=requested))
             expression = self._dense_vector(adata[:, [gene_key]].layers[layer_name])
             return requested, gene_key, expression, f"layer:{layer_name}"
 
@@ -468,7 +470,7 @@ class SkillRuntimeSupport:
                 expression = self._dense_vector(raw_adata[:, [raw_gene_key]].X)
                 return requested, raw_gene_key, expression, "raw"
 
-        raise RuntimeError(f"当前对象缺少基因 `{requested}`。")
+        raise RuntimeError(t("error.missingGene", gene=requested))
 
     def _normalize_legend_loc(self, raw_value: Any) -> str:
         value = str(raw_value or "best").strip().lower().replace("_", " ")
@@ -596,7 +598,7 @@ class SkillRuntimeSupport:
         _, _, plt, np, _ = self.analysis_modules()
         coords = adata.obsm.get("X_umap")
         if coords is None or len(coords.shape) != 2 or coords.shape[1] < 2:
-            raise RuntimeError("当前对象缺少 `X_umap`，请先执行 run_umap。")
+            raise RuntimeError(t("error.missingUMAPForPlot"))
 
         legend_loc = self._normalize_legend_loc(legend_loc)
         point_size = self._coerce_positive_float(point_size, 8.0)
@@ -651,7 +653,7 @@ class SkillRuntimeSupport:
         _, _, plt, np, _ = self.analysis_modules()
         coords = adata.obsm.get("X_umap")
         if coords is None or len(coords.shape) != 2 or coords.shape[1] < 2:
-            raise RuntimeError("当前对象缺少 `X_umap`，请先执行 run_umap。")
+            raise RuntimeError(t("error.missingUMAPForPlot"))
 
         point_size = self._coerce_positive_float(point_size, 8.0)
         figure_width = self._coerce_positive_float(figure_width, 6.2)
@@ -937,7 +939,7 @@ class SkillRuntimeSupport:
             path = Path(str(candidate or "").strip())
             if path.exists() and path.is_file():
                 return path
-        raise RuntimeError(f"当前结果对象 `{target.label}` 缺少可导出的表文件。")
+        raise RuntimeError(t("error.missingExportableTable", label=target.label))
 
     def _latest_marker_artifact_path(self, workspace_root: Path, target: Any | None = None) -> Path | None:
         artifacts_dir = workspace_root / "artifacts"
@@ -984,7 +986,7 @@ class SkillRuntimeSupport:
         ctx = SkillExecutionContext.from_payload(payload, target)
 
         if not self.skill_enabled(ctx.skill):
-            raise RuntimeError(f"技能 `{ctx.skill}` 当前已在 Skill Hub 中停用。")
+            raise RuntimeError(t("error.skillDisabled", skill=ctx.skill))
 
         builtin_response = self.skill_registry.execute_builtin(self, ctx)
         if builtin_response is not None:
@@ -994,7 +996,7 @@ class SkillRuntimeSupport:
         if plugin_response is not None:
             return plugin_response
 
-        raise RuntimeError(f"暂不支持的技能：{ctx.skill}")
+        raise RuntimeError(t("error.unsupportedSkill", skill=ctx.skill))
 
     def _generate_methods_section(
         self,

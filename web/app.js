@@ -19,6 +19,7 @@ async function startApp() {
       renderQuickActions,
       renderSessionMeta,
     },
+    { t, initI18n, setLocale, getLocale, translateDOM },
   ] = await Promise.all([
     import("/js/api.mjs"),
     import("/js/format.mjs"),
@@ -26,7 +27,11 @@ async function startApp() {
     import("/js/modals.mjs"),
     import("/js/state.mjs"),
     import("/js/render.mjs"),
+    import("/js/i18n.mjs"),
   ]);
+
+  await initI18n();
+  translateDOM();
 
   configureRenderActions({
     createConversation,
@@ -51,6 +56,7 @@ async function startApp() {
   bindPlannerPreviewModal();
   bindStatusOverviewModal();
   bindWorkspaceFilesModal();
+  bindLanguageSwitcher();
   renderQuickActions();
   await bootstrap();
 
@@ -58,7 +64,7 @@ async function startApp() {
     await refreshCapabilityState();
     const restored = await restoreContext();
     if (!restored) {
-      const snapshot = await createWorkspaceWithLabel("PBMC3K 测试会话");
+      const snapshot = await createWorkspaceWithLabel(t("ui.defaultTestSession"));
       syncSnapshot(snapshot);
       await refreshWorkspaceSnapshot();
     }
@@ -101,18 +107,18 @@ async function startApp() {
     const isStopping =
       activeJob &&
       (appState.cancelPendingJobId === activeJob.id ||
-        activeJob.summary === "正在停止当前任务...");
+        activeJob.summary === t("ui.stoppingTask"));
     const isSubmitting = Boolean(appState.composerPending);
     const isEditing = Boolean(appState.composerEditJobId);
 
     button.classList.toggle("is-stop", Boolean(activeJob));
     if (activeJob) {
-      button.textContent = isStopping ? "停止中..." : "停止";
+      button.textContent = isStopping ? t("ui.stopping") : t("ui.stop");
       button.disabled = Boolean(isStopping);
       return;
     }
 
-    button.textContent = isSubmitting ? (isEditing ? "重发中..." : "提交中...") : isEditing ? "重发" : "运行";
+    button.textContent = isSubmitting ? (isEditing ? t("ui.resending") : t("ui.submitting")) : isEditing ? t("ui.resend") : t("ui.run");
     button.disabled = isSubmitting || !appState.sessionId;
   }
 
@@ -130,16 +136,16 @@ async function startApp() {
 
     container.classList.remove("hidden");
     container.innerHTML = `
-      <div class="composer-mode-copy">
-        <strong>编辑并重发</strong>
-        <p class="muted">修改后点击“重发”。提交成功后，这条旧请求及其结果会被替换。</p>
+      <div class=”composer-mode-copy”>
+        <strong>${t(“ui.editAndResend”)}</strong>
+        <p class=”muted”>${t(“ui.editAndResendHint”)}</p>
       </div>
-      <button id="composerModeCancelButton" type="button">取消</button>
+      <button id=”composerModeCancelButton” type=”button”>${t(“ui.cancel”)}</button>
     `;
 
     container.querySelector("#composerModeCancelButton")?.addEventListener("click", () => {
       clearComposerEditState();
-      appState.workspaceStatus = "已取消编辑并重发。";
+      appState.workspaceStatus = t("ui.cancelledEditResend");
       renderApp();
     });
   }
@@ -278,7 +284,7 @@ async function startApp() {
   }
 
   function defaultWorkspaceLabel() {
-    return `分析工作区 ${(appState.workspaceList?.length || 0) + 1}`;
+    return `${t("ui.defaultWorkspaceLabel", { index: (appState.workspaceList?.length || 0) + 1 })}`;
   }
 
   function preferredConversation(workspaceSnapshot, preferredSessionId = "") {
@@ -306,7 +312,7 @@ async function startApp() {
   async function activateWorkspaceSnapshot(workspaceSnapshot, preferredSessionId = "") {
     const conversation = preferredConversation(workspaceSnapshot, preferredSessionId);
     if (!conversation) {
-      throw new Error("目标 workspace 暂无可用对话。");
+      throw new Error(t("ui.targetWorkspaceNoConversation"));
     }
     appState.workspaceSnapshot = workspaceSnapshot;
     const snapshot = await activateConversation(conversation.id);
@@ -352,14 +358,14 @@ async function startApp() {
       return;
     }
 
-    appState.workspaceStatus = "正在切换对话...";
+    appState.workspaceStatus = t("ui.switchingConversation");
     renderSessionMeta();
 
     try {
       clearComposerEditState();
       const snapshot = await activateConversation(sessionId);
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
-      appState.workspaceStatus = `已切换到 ${formatConversationLabel(snapshot.session)}。`;
+      appState.workspaceStatus = t("ui.switchedTo", { label: formatConversationLabel(snapshot.session) });
       renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
@@ -374,7 +380,7 @@ async function startApp() {
     }
 
     const nextIndex = (appState.workspaceSnapshot?.conversations?.length || 0) + 1;
-    appState.workspaceStatus = "正在创建新对话...";
+    appState.workspaceStatus = t("ui.creatingConversation");
     renderSessionMeta();
 
     try {
@@ -382,12 +388,12 @@ async function startApp() {
       const snapshot = await fetchJSON(`/api/workspaces/${appState.workspaceId}/conversations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: `分析对话 ${nextIndex}` }),
+        body: JSON.stringify({ label: t("ui.conversationLabel", { index: nextIndex }) }),
       });
       appState.plannerPreview = null;
       syncSnapshot(snapshot);
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
-      appState.workspaceStatus = `已创建并切换到 ${formatConversationLabel(snapshot.session)}。`;
+      appState.workspaceStatus = t("ui.createdSwitchedTo", { label: formatConversationLabel(snapshot.session) });
       connectEvents();
       renderApp();
     } catch (error) {
@@ -402,12 +408,12 @@ async function startApp() {
       return;
     }
     if (workspaceId === appState.workspaceId) {
-      appState.workspaceStatus = "当前已在该 workspace。";
+      appState.workspaceStatus = t("ui.alreadyInWorkspace");
       renderSessionMeta();
       return;
     }
 
-    appState.workspaceStatus = "正在切换 workspace...";
+    appState.workspaceStatus = t("ui.switchingWorkspace");
     renderSessionMeta();
 
     try {
@@ -415,7 +421,7 @@ async function startApp() {
       clearComposerEditState();
       const { snapshot } = await activateWorkspaceSnapshot(workspaceSnapshot);
       await refreshWorkspaceList();
-      appState.workspaceStatus = `已切换到 ${workspaceSnapshot.workspace?.label || workspaceId}。`;
+      appState.workspaceStatus = t("ui.switchedToWorkspace", { label: workspaceSnapshot.workspace?.label || workspaceId });
       renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
@@ -425,7 +431,7 @@ async function startApp() {
   }
 
   async function createWorkspace() {
-    appState.workspaceStatus = "正在创建 workspace...";
+    appState.workspaceStatus = t("ui.creatingWorkspace");
     renderSessionMeta();
 
     try {
@@ -434,7 +440,7 @@ async function startApp() {
       appState.plannerPreview = null;
       syncSnapshot(snapshot);
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
-      appState.workspaceStatus = `已创建 ${snapshot.workspace?.label || "新 workspace"}。`;
+      appState.workspaceStatus = t("ui.createdWorkspace", { label: snapshot.workspace?.label || t("ui.newWorkspace") });
       connectEvents();
       renderApp();
     } catch (error) {
@@ -449,14 +455,14 @@ async function startApp() {
       return;
     }
     if (currentActiveJob()) {
-      appState.workspaceStatus = "请先等待当前任务完成，或先停止当前任务。";
+      appState.workspaceStatus = t("ui.waitForTaskComplete");
       renderApp();
       return;
     }
 
     const job = (appState.snapshot?.jobs || []).find((item) => item.id === jobId);
     if (!job) {
-      appState.workspaceStatus = "未找到原始任务。";
+      appState.workspaceStatus = t("ui.jobNotFound");
       renderApp();
       return;
     }
@@ -465,7 +471,7 @@ async function startApp() {
       (item) => item.id === job.message_id && item.role === "user",
     );
     if (!message) {
-      appState.workspaceStatus = "未找到原始消息。";
+      appState.workspaceStatus = t("ui.messageNotFound");
       renderApp();
       return;
     }
@@ -477,7 +483,7 @@ async function startApp() {
     input.value = message.content || "";
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
-    appState.workspaceStatus = "已载入原请求，请修改后点击“重发”。";
+    appState.workspaceStatus = t(“ui.loadedEditRequest”);
     renderApp();
   }
 
@@ -503,7 +509,7 @@ async function startApp() {
         body: JSON.stringify({ label }),
       });
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
-      appState.workspaceStatus = `已将工作区重命名为 ${label}。`;
+      appState.workspaceStatus = t("ui.renamedWorkspace", { label });
       renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
@@ -520,7 +526,7 @@ async function startApp() {
       });
       syncSnapshot(snapshot);
       await refreshWorkspaceSnapshot();
-      appState.workspaceStatus = `已将对话重命名为 ${label}。`;
+      appState.workspaceStatus = t("ui.renamedConversation", { label });
       renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
@@ -535,7 +541,7 @@ async function startApp() {
 
     const isCurrentConversation = sessionId === appState.sessionId;
     if (isCurrentConversation && currentActiveJob()) {
-      appState.workspaceStatus = "请先停止当前任务，再删除当前对话。";
+      appState.workspaceStatus = t("ui.stopBeforeDeleteConversation");
       renderApp();
       return;
     }
@@ -549,7 +555,7 @@ async function startApp() {
           .sort(compareConversationCreatedAt)[0] || null
       : null;
 
-    appState.workspaceStatus = "正在删除对话...";
+    appState.workspaceStatus = t("ui.deletingConversation");
     renderSessionMeta();
 
     try {
@@ -563,12 +569,12 @@ async function startApp() {
       await Promise.all([refreshWorkspaceSnapshot(), refreshWorkspaceList()]);
       if (isCurrentConversation) {
         if (!fallbackConversation?.id) {
-          throw new Error("删除后未找到可切换的对话。");
+          throw new Error(t("ui.noFallbackConversation"));
         }
         await activateConversation(fallbackConversation.id);
         await refreshWorkspaceSnapshot();
       }
-      appState.workspaceStatus = `已删除 ${formatConversationLabel(conversation || { id: sessionId })}。`;
+      appState.workspaceStatus = t("ui.deletedConversation", { label: formatConversationLabel(conversation || { id: sessionId }) });
       renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
@@ -583,7 +589,7 @@ async function startApp() {
 
     const isCurrentWorkspace = workspaceId === appState.workspaceId;
     if (isCurrentWorkspace && currentActiveJob()) {
-      appState.workspaceStatus = "请先停止当前任务，再删除当前工作区。";
+      appState.workspaceStatus = t("ui.stopBeforeDeleteWorkspace");
       renderApp();
       return;
     }
@@ -593,7 +599,7 @@ async function startApp() {
       (appState.workspaceSnapshot?.workspace?.id === workspaceId ? appState.workspaceSnapshot.workspace : null) ||
       (appState.snapshot?.workspace?.id === workspaceId ? appState.snapshot.workspace : null);
 
-    appState.workspaceStatus = "正在删除工作区...";
+    appState.workspaceStatus = t("ui.deletingWorkspace");
     renderSessionMeta();
 
     try {
@@ -621,7 +627,7 @@ async function startApp() {
         }
       }
 
-      appState.workspaceStatus = `已删除工作区 ${workspace?.label || workspaceId}。`;
+      appState.workspaceStatus = t("ui.deletedWorkspace", { label: workspace?.label || workspaceId });
       renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
@@ -656,7 +662,7 @@ async function startApp() {
         method: "POST",
       });
       syncSnapshot(response.snapshot);
-      appState.workspaceStatus = "已发送停止请求。";
+      appState.workspaceStatus = t("ui.stopRequestSent");
       renderApp();
     } catch (error) {
       appState.workspaceStatus = error.message;
@@ -700,7 +706,7 @@ async function startApp() {
     if (activeJob) {
       if (
         appState.cancelPendingJobId === activeJob.id ||
-        activeJob.summary === "正在停止当前任务..."
+        activeJob.summary === t("ui.stoppingTask")
       ) {
         return;
       }
@@ -756,7 +762,7 @@ async function startApp() {
           });
       if (isEditRetry) {
         clearComposerEditState();
-        appState.workspaceStatus = "已重发编辑后的请求。";
+        appState.workspaceStatus = t("ui.editResendDone");
       }
       syncSnapshot(response.snapshot);
       renderApp();
@@ -786,13 +792,13 @@ async function startApp() {
     async function doUpload() {
       const file = input.files?.[0];
       if (!file || !appState.sessionId) {
-        status.textContent = "请先选择一个 .h5ad 文件。";
+        status.textContent = t("ui.selectH5adFile");
         return;
       }
 
       fileNameEl.textContent = file.name;
       fileNameEl.classList.add("has-file");
-      status.textContent = `正在上传 ${file.name}...`;
+      status.textContent = t("ui.uploading", { name: file.name });
 
       try {
         const formData = new FormData();
@@ -804,14 +810,14 @@ async function startApp() {
         syncSnapshot(response.snapshot);
         appState.focusObjectId = response.object.id;
         appState.selectedResourceKey = `object:${response.object.id}`;
-        status.textContent = `${file.name} 已作为 ${response.object.label} 附加到当前 workspace。`;
+        status.textContent = t("ui.uploadSuccess", { name: file.name, label: response.object.label });
         input.value = "";
-        fileNameEl.textContent = "选择文件后将自动上传";
+        fileNameEl.textContent = t("ui.selectFileAutoUpload");
         fileNameEl.classList.remove("has-file");
         renderApp();
       } catch (error) {
         status.textContent = error.message;
-        fileNameEl.textContent = "上传失败，请重试";
+        fileNameEl.textContent = t("ui.uploadFailed");
         fileNameEl.classList.remove("has-file");
         input.value = "";
       }
@@ -836,17 +842,17 @@ async function startApp() {
 
     button.addEventListener("click", async () => {
       if (!appState.sessionId) {
-        status.textContent = "会话尚未就绪。";
+        status.textContent = t("ui.sessionNotReady");
         return;
       }
 
       const message = input.value.trim();
       if (!message) {
-        status.textContent = "请先输入一条消息。";
+        status.textContent = t("ui.enterMessageFirst");
         return;
       }
 
-      status.textContent = "正在生成规划预览...";
+      status.textContent = t("ui.generatingPreview");
       try {
         appState.plannerPreview = await fetchJSON(
           `/api/sessions/${appState.sessionId}/planner-preview`,
@@ -856,12 +862,24 @@ async function startApp() {
             body: JSON.stringify({ message }),
           },
         );
-        status.textContent = `规划预览已生成，当前规划器为 ${formatPlannerMode(appState.plannerPreview.planner_mode)}。`;
+        status.textContent = t("ui.previewGenerated", { mode: formatPlannerMode(appState.plannerPreview.planner_mode) });
         renderPlannerPreview();
         openPlannerPreviewModal();
       } catch (error) {
         status.textContent = error.message;
       }
+    });
+  }
+
+  function bindLanguageSwitcher() {
+    const switcher = document.getElementById("languageSwitcher");
+    if (!switcher) {
+      return;
+    }
+    switcher.value = getLocale();
+    switcher.addEventListener("change", async () => {
+      await setLocale(switcher.value);
+      renderApp();
     });
   }
 

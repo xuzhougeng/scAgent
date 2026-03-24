@@ -1,3 +1,5 @@
+import { t } from "./i18n.mjs";
+
 let confirmModalResolver = null;
 
 export function bindImageModal() {
@@ -28,9 +30,9 @@ export function openImageModal(url, title) {
   const openLink = document.getElementById("imageModalOpen");
   const downloadLink = document.getElementById("imageModalDownload");
 
-  titleNode.textContent = title || "结果预览";
+  titleNode.textContent = title || t("html.imagePreviewTitle");
   image.src = url;
-  image.alt = title || "结果预览";
+  image.alt = title || t("html.imagePreviewTitle");
   openLink.href = url;
   downloadLink.href = url;
   downloadLink.setAttribute("download", "");
@@ -187,11 +189,11 @@ export function bindConfirmModal() {
 }
 
 export function openConfirmModal({
-  eyebrow = "确认操作",
-  title = "确认执行这个操作？",
+  eyebrow = t("html.confirmEyebrow"),
+  title = t("html.confirmTitle"),
   message = "",
-  confirmLabel = "确认",
-  cancelLabel = "取消",
+  confirmLabel = t("html.confirmOk"),
+  cancelLabel = t("html.confirmCancel"),
   danger = false,
 } = {}) {
   if (confirmModalResolver) {

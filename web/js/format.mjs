@@ -1,19 +1,5 @@
-import {
-  analysisStateLabels,
-  annotationRoleLabels,
-  appState,
-  artifactKindLabels,
-  jobPhaseStatusLabels,
-  jobStatusLabels,
-  objectKindLabels,
-  objectStateLabels,
-  plannerModeLabels,
-  roleLabels,
-  runtimeModeLabels,
-  skillLabels,
-  skillPrompts,
-  systemModeLabels,
-} from "./state.mjs";
+import { appState } from "./state.mjs";
+import { t, tLabel } from "./i18n.mjs";
 
 export function escapeHTML(value) {
   return String(value)
@@ -26,26 +12,26 @@ export function escapeAttribute(value) {
   return escapeHTML(value).replaceAll('"', "&quot;");
 }
 
-export function translateLabel(value, labels, fallback = "未知") {
+export function translateLabel(value, domain, fallback) {
   if (value === null || value === undefined || value === "") {
-    return fallback;
+    return fallback || t("ui.unknown");
   }
-  return labels[value] || String(value);
+  return tLabel(value, domain, fallback);
 }
 
 export function formatList(values) {
   if (!values || !values.length) {
-    return "无";
+    return t("ui.none");
   }
-  return values.join("、");
+  return values.join(t("ui.listSeparator"));
 }
 
 export function formatMemoryValue(value) {
   if (value === null || value === undefined || value === "") {
-    return "无";
+    return t("ui.none");
   }
   if (Array.isArray(value)) {
-    return value.join("、");
+    return value.join(t("ui.listSeparator"));
   }
   if (typeof value === "object") {
     return JSON.stringify(value);
@@ -55,9 +41,9 @@ export function formatMemoryValue(value) {
 
 export function formatSkillList(values) {
   if (!values || !values.length) {
-    return "无";
+    return t("ui.none");
   }
-  return values.map((value) => formatSkillName(value)).join("、");
+  return values.map((value) => formatSkillName(value)).join(t("ui.listSeparator"));
 }
 
 export function objectLabel(objectId) {
@@ -67,75 +53,77 @@ export function objectLabel(objectId) {
 
 export function formatPlanTarget(targetObjectId) {
   if (!targetObjectId || targetObjectId === "$active") {
-    return "当前对象";
+    return t("ui.currentObject");
   }
   if (targetObjectId === "$prev") {
-    return "上一步输出";
+    return t("ui.prevOutput");
   }
   return objectLabel(targetObjectId);
 }
 
 export function formatRole(role) {
-  return roleLabels[role] || role || "未知";
+  return tLabel(role, "role", role || t("ui.unknown"));
 }
 
 export function formatConversationLabel(session) {
   if (!session) {
-    return "未命名对话";
+    return t("ui.unnamedConversation");
   }
-  return session.label || session.id || "未命名对话";
+  return session.label || session.id || t("ui.unnamedConversation");
 }
 
 export function formatSkillName(skill) {
-  return translateLabel(skill, skillLabels, skill || "未知技能");
+  return tLabel(skill, "skill", skill || t("ui.unknownSkill"));
 }
 
 export function promptForSkill(skill) {
-  return skillPrompts[skill] || skill || "";
+  const key = `skill.prompt.${skill}`;
+  const result = t(key);
+  return result !== key ? result : skill || "";
 }
 
 export function formatJobStatus(status) {
-  return translateLabel(status, jobStatusLabels, status || "未知");
+  return tLabel(status, "jobStatus", status || t("ui.unknown"));
 }
 
 export function formatSystemMode(mode) {
-  return translateLabel(mode, systemModeLabels, mode || "未知");
+  return tLabel(mode, "systemMode", mode || t("ui.unknown"));
 }
 
 export function formatPlannerMode(mode) {
-  return translateLabel(mode, plannerModeLabels, mode || "未知");
+  return tLabel(mode, "plannerMode", mode || t("ui.unknown"));
 }
 
 export function formatRuntimeMode(mode) {
-  return translateLabel(mode, runtimeModeLabels, mode || "未知");
+  return tLabel(mode, "runtimeMode", mode || t("ui.unknown"));
 }
 
 export function formatObjectKind(kind) {
-  return translateLabel(kind, objectKindLabels, kind || "未知类型");
+  return tLabel(kind, "objectKind", kind || t("ui.unknownType"));
 }
 
 export function formatObjectState(state) {
-  return translateLabel(state, objectStateLabels, state || "未知");
+  return tLabel(state, "objectState", state || t("ui.unknown"));
 }
 
 export function formatArtifactKind(kind) {
-  return translateLabel(kind, artifactKindLabels, kind || "未知类型");
+  return tLabel(kind, "artifactKind", kind || t("ui.unknownType"));
 }
 
 export function formatAnnotationRole(role) {
-  return translateLabel(role, annotationRoleLabels, role || "注释");
+  return tLabel(role, "annotationRole", role || t("ui.annotation"));
 }
 
 export function formatAnalysisState(state) {
-  return translateLabel(state, analysisStateLabels, state || "未知");
+  return tLabel(state, "analysisState", state || t("ui.unknown"));
 }
 
 export function formatAnnotation(annotation) {
   if (!annotation) {
-    return "未识别";
+    return t("ui.unrecognized");
   }
-  const sample = (annotation.sample_values || []).slice(0, 4).join("、");
-  return `${annotation.field} · ${annotation.n_categories} 组${sample ? ` · ${sample}` : ""}`;
+  const sample = (annotation.sample_values || []).slice(0, 4).join(t("ui.listSeparator"));
+  return `${annotation.field} · ${annotation.n_categories} ${t("ui.groups")}${sample ? ` · ${sample}` : ""}`;
 }
 
 export function statusPill(kind, label) {
@@ -160,19 +148,19 @@ export function statusKindForJob(status) {
 }
 
 export function formatJobPhaseStatus(status) {
-  return translateLabel(status, jobPhaseStatusLabels, status || "未知");
+  return tLabel(status, "jobPhaseStatus", status || t("ui.unknown"));
 }
 
 export function formatJobPhaseKind(kind) {
   switch (kind) {
     case "decide":
-      return "快速判断";
+      return t("phase.decide");
     case "investigate":
-      return "信息收集";
+      return t("phase.investigate");
     case "respond":
-      return "确认与回答";
+      return t("phase.respond");
     default:
-      return kind || "阶段";
+      return kind || t("phase.default");
   }
 }
 

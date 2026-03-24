@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from i18n import t
+
 from .base import SkillExecutionContext
 from .common import require_target
 
@@ -11,9 +13,10 @@ def inspect_dataset(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     metadata = target.metadata or {}
     return {
         "summary": (
-            f"{target.label}：{target.n_obs} 个细胞，{target.n_vars} 个基因，"
-            f"状态为 {state.format_object_state_zh(target.state)}。"
-            f"{state.describe_annotation_summary(metadata)}"
+            t("runtime.inspectDatasetSummary",
+              label=target.label, n_obs=target.n_obs, n_vars=target.n_vars,
+              state=state.format_object_state_zh(target.state),
+              annotation_note=state.describe_annotation_summary(metadata))
         ),
         "facts": state.build_inspect_dataset_facts(target),
         "metadata": {
@@ -39,20 +42,20 @@ def summarize_qc(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         "qc_metrics": stats,
     }
 
-    summary_bits = [f"已为 {target.label} 计算 QC 指标。"]
+    summary_bits = [t("runtime.summarizeQcSummary", label=target.label)]
     total_counts_stats = stats.get("total_counts") or {}
     genes_stats = stats.get("n_genes_by_counts") or {}
     mt_stats = stats.get("pct_counts_mt") or {}
     if total_counts_stats:
-        summary_bits.append(f"每细胞 total_counts 中位数为 {total_counts_stats['median']:g}。")
+        summary_bits.append(t("runtime.qcTotalCountsMedian", median=f"{total_counts_stats['median']:g}"))
     if genes_stats:
-        summary_bits.append(f"每细胞检测基因数中位数为 {genes_stats['median']:g}。")
+        summary_bits.append(t("runtime.qcGenesMedian", median=f"{genes_stats['median']:g}"))
     if mt_stats:
-        summary_bits.append(f"线粒体占比中位数为 {mt_stats['median']:g}%。")
+        summary_bits.append(t("runtime.qcMtMedian", median=f"{mt_stats['median']:g}"))
     if qc_info["mt_prefix"]:
-        summary_bits.append(f"线粒体基因前缀识别为 `{qc_info['mt_prefix']}`。")
+        summary_bits.append(t("runtime.qcMtPrefixDetected", prefix=qc_info['mt_prefix']))
     else:
-        summary_bits.append("未识别线粒体基因前缀，pct_counts_mt 按 0 处理。")
+        summary_bits.append(t("runtime.qcMtPrefixNotDetected"))
 
     return {
         "summary": "".join(summary_bits),
@@ -70,20 +73,20 @@ def plot_qc_metrics(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     qc_info = state._ensure_qc_metrics(adata, ctx.params.get("mt_prefix"))
     metrics = state._normalize_qc_metric_names(ctx.params.get("metrics"), qc_info["metrics"])
     if not metrics:
-        raise RuntimeError("plot_qc_metrics 没有可绘制的 QC 指标。")
+        raise RuntimeError(t("error.plotQcMetricsNoMetrics"))
 
     title = str(ctx.params.get("title") or "").strip() or None
     path = state._plot_path(ctx.workspace_root, ctx.skill, target.label, ctx.request_id)
     state._save_qc_metrics_plot(adata, path, metrics, title=title)
     return {
-        "summary": f"已为 {target.label} 生成 QC 分布图（指标：{state.format_list_zh(metrics)}）。",
+        "summary": t("runtime.plotQcMetricsSummary", label=target.label, metrics=state.format_list_zh(metrics)),
         "artifacts": [
             {
                 "kind": "plot",
-                "title": f"{target.label} 的 QC 指标图",
+                "title": t("runtime.plotQcMetricsArtifactTitle", label=target.label),
                 "path": str(path),
                 "content_type": "image/png",
-                "summary": f"{target.label} 的 QC 指标分布图。",
+                "summary": t("runtime.plotQcMetricsArtifactSummary", label=target.label),
             }
         ],
         "metadata": {

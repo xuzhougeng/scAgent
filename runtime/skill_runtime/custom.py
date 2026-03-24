@@ -6,6 +6,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
+from i18n import t
+
 from .base import SkillExecutionContext
 from .common import require_target
 
@@ -19,7 +21,7 @@ def run_python_analysis(state: Any, ctx: SkillExecutionContext) -> dict[str, Any
     counts_adata = state._load_counts_adata(target)
     code = str(ctx.params.get("code") or "").strip()
     if code == "":
-        raise RuntimeError("自定义分析缺少 code。")
+        raise RuntimeError(t("error.customAnalysisMissingCode"))
 
     output_label = str(ctx.params.get("output_label") or f"custom_{target.label}").strip() or f"custom_{target.label}"
     persist_output = bool(ctx.params.get("persist_output"))
@@ -72,10 +74,10 @@ def run_python_analysis(state: Any, ctx: SkillExecutionContext) -> dict[str, Any
         artifacts.append(
             {
                 "kind": "plot",
-                "title": f"{output_label} 的自定义图",
+                "title": t("runtime.customPlotArtifactTitle", label=output_label),
                 "path": str(figure_path),
                 "content_type": "image/png",
-                "summary": "由自定义 Python 分析生成的图。",
+                "summary": t("runtime.customPlotArtifactSummary"),
             }
         )
 
@@ -90,10 +92,10 @@ def run_python_analysis(state: Any, ctx: SkillExecutionContext) -> dict[str, Any
         artifacts.append(
             {
                 "kind": "table",
-                "title": f"{output_label} 的自定义表",
+                "title": t("runtime.customTableArtifactTitle", label=output_label),
                 "path": str(table_path),
                 "content_type": "text/csv",
-                "summary": "由自定义 Python 分析生成的表。",
+                "summary": t("runtime.customTableArtifactSummary"),
             }
         )
 
@@ -135,7 +137,7 @@ def run_python_analysis(state: Any, ctx: SkillExecutionContext) -> dict[str, Any
         )
         response["object"] = persisted["object"]
         if not result_summary and not result_text and facts.get("result_value") is None:
-            response["summary"] = f"已完成针对 {target.label} 的自定义 Python 分析，并生成对象 {output_label}。"
+            response["summary"] = t("runtime.customAnalysisWithObjectFallback", label=target.label, output_label=output_label)
 
     if artifacts:
         response["artifacts"] = artifacts

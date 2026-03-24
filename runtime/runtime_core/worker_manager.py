@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from i18n import t
+
 
 def _log_worker_event(logger: Any, event: str, **fields: Any) -> None:
     payload = {"event": event}
@@ -67,7 +69,7 @@ class SessionWorkerHandle:
             active_operation = self._active_operation
             if proc is None:
                 return {
-                    "summary": "当前 session 没有活跃的运行时 worker。",
+                    "summary": t("runtime.noActiveWorker"),
                     "stopped": False,
                     "isolated": False,
                     "active_request_id": active_request_id,
@@ -80,9 +82,9 @@ class SessionWorkerHandle:
 
         self._close_pipes(proc)
         stopped, exit_signal = self._terminate_process_group(proc, grace_period_sec)
-        summary = "已终止会话执行 worker，后续请求会按需重建运行环境。"
+        summary = t("runtime.workerStopped")
         if not stopped:
-            summary = "已隔离当前会话 worker，但进程仍未退出；后续请求会重建运行环境。"
+            summary = t("runtime.workerIsolated")
         _log_worker_event(
             self._logger,
             "session_worker_stopped",
@@ -266,7 +268,7 @@ class SessionWorkerManager:
             handle = self._workers.pop(session_id, None)
         if handle is None:
             return {
-                "summary": "当前 session 没有可停止的运行时 worker。",
+                "summary": t("runtime.noStoppableWorker"),
                 "stopped": False,
                 "isolated": False,
             }

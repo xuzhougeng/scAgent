@@ -1,3 +1,7 @@
+import { t, initI18n, translateDOM } from "/js/i18n.mjs";
+import { escapeHTML, escapeAttribute, formatSkillName, statusPill } from "/js/format.mjs";
+import { fetchJSON } from "/js/api.mjs";
+
 const hubState = {
   bundles: [],
   skills: [],
@@ -9,10 +13,10 @@ const hubState = {
   detailModalOpen: false,
 };
 
-document.addEventListener("DOMContentLoaded", async () => {
-  bindHub();
-  await refreshHub();
-});
+await initI18n();
+translateDOM();
+bindHub();
+await refreshHub();
 
 function bindHub() {
   const uploadForm = document.getElementById("pluginUploadForm");
@@ -26,13 +30,13 @@ function bindHub() {
     event.preventDefault();
     const file = fileInput.files?.[0];
     if (!file) {
-      setStatus("请先选择一个 zip 插件包。", true);
+      setStatus(t("hub.selectZipFirst"), true);
       return;
     }
 
     const formData = new FormData();
     formData.append("file", file);
-    setStatus(`正在安装 ${file.name}...`);
+    setStatus(t("hub.installing", { name: file.name }));
     try {
       const response = await fetchJSON("/api/plugins", {
         method: "POST",
@@ -42,7 +46,7 @@ function bindHub() {
       hubState.skills = response.skills || [];
       fileInput.value = "";
       reconcileSelection();
-      setStatus(`${response.plugin?.name || file.name} 已安装并完成注册。`);
+      setStatus(t("hub.installed", { name: response.plugin?.name || file.name }));
       render();
     } catch (error) {
       setStatus(error.message, true);
@@ -50,7 +54,7 @@ function bindHub() {
   });
 
   refreshButton.addEventListener("click", async () => {
-    setStatus("正在刷新 Skill Hub...");
+    setStatus(t("hub.refreshing"));
     await refreshHub();
   });
 
@@ -80,7 +84,7 @@ function bindHub() {
 
     hubState.busyBundles.add(bundleID);
     render();
-    setStatus(`${enabled ? "正在启用" : "正在关闭"} ${bundleID}...`);
+    setStatus(enabled ? t("hub.enabling", { id: bundleID }) : t("hub.disabling", { id: bundleID }));
     try {
       const response = await fetchJSON(`/api/plugins/${encodeURIComponent(bundleID)}`, {
         method: "PATCH",
@@ -90,7 +94,9 @@ function bindHub() {
       hubState.bundles = response.bundles || [];
       hubState.skills = response.skills || [];
       reconcileSelection();
-      setStatus(`${response.bundle?.name || bundleID} 已${enabled ? "启用" : "关闭"}。`);
+      setStatus(enabled
+        ? t("hub.enabled", { name: response.bundle?.name || bundleID })
+        : t("hub.disabled", { name: response.bundle?.name || bundleID }));
     } catch (error) {
       setStatus(error.message, true);
     } finally {
@@ -146,7 +152,7 @@ async function refreshHub() {
     hubState.bundles = pluginsResponse.bundles || pluginsResponse.plugins || [];
     hubState.skills = skillsResponse.skills || [];
     reconcileSelection();
-    setStatus("Skill Hub 已刷新。");
+    setStatus(t("hub.refreshed"));
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -191,29 +197,28 @@ function renderSummary() {
     .reduce((count, bundle) => count + (bundle.skills || []).length, 0);
 
   if (badge) {
-    badge.textContent = `${enabledBundles.length}/${bundles.length || 0} 已启用`;
+    badge.textContent = t("hub.enabledBadge", { enabled: enabledBundles.length, total: bundles.length || 0 });
   }
 
   container.innerHTML = `
-    ${summaryCard("技能包总数", String(bundles.length))}
-    ${summaryCard("启用中的技能包", String(enabledBundles.length))}
-    ${summaryCard("外部插件包", String(bundles.filter((bundle) => !bundle.builtin).length))}
-    ${summaryCard("已启用技能数", String(enabledSkills))}
+    ${summaryCard(t("hub.totalBundles"), String(bundles.length))}
+    ${summaryCard(t("hub.enabledBundles"), String(enabledBundles.length))}
+    ${summaryCard(t("hub.externalPlugins"), String(bundles.filter((bundle) => !bundle.builtin).length))}
+    ${summaryCard(t("hub.enabledSkillCount"), String(enabledSkills))}
   `;
 }
 
 function renderBundles() {
   const container = document.getElementById("bundleList");
   if (!hubState.bundles.length) {
-    container.innerHTML = "<section class='empty-state'>当前还没有技能包。上传一个 zip 插件包开始扩展。</section>";
+    container.innerHTML = `<section class='empty-state'>${escapeHTML(t("hub.noBundles"))}</section>`;
     return;
   }
 
   container.innerHTML = hubState.bundles
     .map((bundle) => {
       const isBusy = hubState.busyBundles.has(bundle.id);
-      const actionLabel = bundle.enabled ? "关闭" : "启动";
-      const bundleType = bundle.builtin ? "内置技能包" : "外部插件包";
+      const bundleType = bundle.builtin ? t("hub.builtinBundle") : t("hub.externalBundle");
       const isOpen = hubState.openBundles.has(bundle.id);
       return `
         <details class="bundle-card ${bundle.enabled ? "enabled" : "disabled"}" data-bundle-card="${escapeAttribute(bundle.id)}"${isOpen ? " open" : ""}>
@@ -224,13 +229,13 @@ function renderBundles() {
                 <span class="bundle-version">${escapeHTML(bundle.version || bundle.id)}</span>
               </div>
               <div class="pill-row">
-                ${statusPill(bundle.enabled ? "ok" : "muted", bundle.enabled ? "已启用" : "已关闭")}
+                ${statusPill(bundle.enabled ? "ok" : "muted", bundle.enabled ? t("hub.statusEnabled") : t("hub.statusDisabled"))}
                 ${statusPill(bundle.builtin ? "warn" : "muted", bundleType)}
-                ${statusPill("muted", `${(bundle.skills || []).length} 个技能`)}
+                ${statusPill("muted", t("hub.skillCount", { count: (bundle.skills || []).length }))}
               </div>
             </div>
             <div class="bundle-summary-right">
-              <span class="bundle-expand-hint">展开技能</span>
+              <span class="bundle-expand-hint">${t("hub.expandSkills")}</span>
               <span class="bundle-chevron" aria-hidden="true"></span>
             </div>
           </summary>
@@ -244,7 +249,7 @@ function renderBundles() {
                 data-next-enabled="${bundle.enabled ? "false" : "true"}"
                 ${isBusy ? "disabled" : ""}
               >
-                ${isBusy ? "处理中..." : `${actionLabel}${bundle.builtin ? "技能包" : "插件"}`}
+                ${isBusy ? t("hub.processing") : (bundle.enabled ? (bundle.builtin ? t("hub.disableBundle") : t("hub.disablePlugin")) : (bundle.builtin ? t("hub.enableBundle") : t("hub.enablePlugin")))}
               </button>
             </div>
 
@@ -255,16 +260,16 @@ function renderBundles() {
             }
             ${
               bundle.builtin
-                ? `<p class="bundle-note">关闭后，默认的预处理、UMAP、marker 和导出等内置能力都会从规划器与运行时中移除。</p>`
+                ? `<p class="bundle-note">${escapeHTML(t("hub.builtinNote"))}</p>`
                 : ""
             }
             <div class="bundle-meta">
-              <span>来源：${escapeHTML(bundle.source_path || "Skill Hub")}</span>
+              <span>${t("hub.source", { path: escapeHTML(bundle.source_path || "Skill Hub") })}</span>
             </div>
 
             <div class="bundle-skills-head">
-              <strong>技能列表</strong>
-              <span class="muted">点击某个技能在悬浮窗中查看详细规范</span>
+              <strong>${t("hub.skillList")}</strong>
+              <span class="muted">${t("hub.skillListHint")}</span>
             </div>
             <div class="skill-button-grid ${bundle.enabled ? "" : "disabled-skills"}">
               ${(bundle.skills || [])
@@ -313,8 +318,8 @@ function renderSkillDetail() {
   if (!record) {
     container.innerHTML = `
       <section class="detail-empty">
-        <strong>还没有选中技能</strong>
-        <p>在列表中展开一个 bundle，然后点击任意技能，即可通过悬浮窗查看说明、参数规范、输出约定和运行配置。</p>
+        <strong>${t("hub.noSelection")}</strong>
+        <p>${t("hub.noSelectionHint")}</p>
       </section>
     `;
     return;
@@ -331,8 +336,8 @@ function renderSkillDetail() {
       <div class="detail-head">
         <div>
           <div class="pill-row">
-            ${statusPill(bundle.enabled ? "ok" : "muted", bundle.enabled ? "所在技能包已启用" : "所在技能包已关闭")}
-            ${statusPill(bundle.builtin ? "warn" : "muted", bundle.builtin ? "内置技能" : "插件技能")}
+            ${statusPill(bundle.enabled ? "ok" : "muted", bundle.enabled ? t("hub.bundleEnabled") : t("hub.bundleDisabled"))}
+            ${statusPill(bundle.builtin ? "warn" : "muted", bundle.builtin ? t("hub.builtinSkill") : t("hub.pluginSkill"))}
             ${statusPill(skill.support_level === "wired" || !skill.support_level ? "ok" : "muted", skill.support_level || "wired")}
           </div>
           <h4>${escapeHTML(formatSkillName(skill.name))}</h4>
@@ -341,43 +346,43 @@ function renderSkillDetail() {
       </div>
 
       <section class="detail-section">
-        <h5>技能说明</h5>
-        <p>${escapeHTML(skill.description || "暂无说明。")}</p>
+        <h5>${t("hub.skillDescription")}</h5>
+        <p>${escapeHTML(skill.description || t("hub.noDescription"))}</p>
       </section>
 
       <section class="detail-section detail-meta-grid">
         <div class="meta-card">
-          <span class="meta-label">所属技能包</span>
+          <span class="meta-label">${t("hub.ownerBundle")}</span>
           <strong>${escapeHTML(bundle.name || bundle.id)}</strong>
           <p>${escapeHTML(bundle.id)}</p>
         </div>
         <div class="meta-card">
-          <span class="meta-label">适用对象</span>
-          <strong>${targetKinds.length ? escapeHTML(targetKinds.join(", ")) : "不限"}</strong>
-          <p>规划器会按这些对象类型选择该技能。</p>
+          <span class="meta-label">${t("hub.targetObjects")}</span>
+          <strong>${targetKinds.length ? escapeHTML(targetKinds.join(", ")) : t("hub.noRestriction")}</strong>
+          <p>${t("hub.targetObjectsHint")}</p>
         </div>
       </section>
 
       <section class="detail-section">
         <div class="detail-section-head">
-          <h5>输入参数规范</h5>
-          <span class="muted">${inputEntries.length} 项</span>
+          <h5>${t("hub.inputSpec")}</h5>
+          <span class="muted">${t("ui.itemCount", { count: inputEntries.length })}</span>
         </div>
         ${renderInputTable(inputEntries)}
       </section>
 
       <section class="detail-section">
         <div class="detail-section-head">
-          <h5>输出约定</h5>
-          <span class="muted">${outputEntries.length} 项</span>
+          <h5>${t("hub.outputSpec")}</h5>
+          <span class="muted">${t("ui.itemCount", { count: outputEntries.length })}</span>
         </div>
         ${renderOutputList(outputEntries)}
       </section>
 
       <section class="detail-section">
         <div class="detail-section-head">
-          <h5>实现方式与相关配置</h5>
-          <span class="muted">${bundle.builtin ? "内置实现" : "插件入口"}</span>
+          <h5>${t("hub.runtimeSpec")}</h5>
+          <span class="muted">${bundle.builtin ? t("hub.builtinImpl") : t("hub.pluginEntry")}</span>
         </div>
         ${runtimeSpec}
       </section>
@@ -387,27 +392,27 @@ function renderSkillDetail() {
 
 function renderInputTable(entries) {
   if (!entries.length) {
-    return "<p class='muted'>该技能没有额外输入参数，通常只依赖当前目标对象。</p>";
+    return `<p class='muted'>${escapeHTML(t("hub.noInputParams"))}</p>`;
   }
   return `
     <div class="spec-table">
       <div class="spec-row spec-head">
-        <span>字段</span>
-        <span>类型</span>
-        <span>必填</span>
-        <span>说明</span>
+        <span>${t("hub.fieldName")}</span>
+        <span>${t("hub.fieldType")}</span>
+        <span>${t("hub.required")}</span>
+        <span>${t("hub.fieldDescription")}</span>
       </div>
       ${entries
         .map(([name, schema]) => {
           const enumText = Array.isArray(schema.enum) && schema.enum.length
-            ? `可选值：${schema.enum.join(", ")}`
+            ? t("hub.enumValues", { values: schema.enum.join(", ") })
             : "";
-          const description = [schema.description || "暂无说明", enumText].filter(Boolean).join(" ");
+          const description = [schema.description || t("hub.noDescriptionShort"), enumText].filter(Boolean).join(" ");
           return `
             <div class="spec-row">
               <span class="spec-key">${escapeHTML(name)}</span>
               <span>${escapeHTML(schema.type || "any")}</span>
-              <span>${schema.required ? "是" : "否"}</span>
+              <span>${schema.required ? t("hub.yesRequired") : t("hub.noOptional")}</span>
               <span>${escapeHTML(description)}</span>
             </div>
           `;
@@ -419,7 +424,7 @@ function renderInputTable(entries) {
 
 function renderOutputList(entries) {
   if (!entries.length) {
-    return "<p class='muted'>该技能没有显式声明输出字段。</p>";
+    return `<p class='muted'>${escapeHTML(t("hub.noOutputFields"))}</p>`;
   }
   return `
     <div class="output-list">
@@ -441,7 +446,7 @@ function renderRuntimeSpec(bundle, skill) {
   if (skill.runtime && Object.keys(skill.runtime).length > 0) {
     return `
       <div class="runtime-note">
-        <p>该技能通过以下运行配置接入执行器。你可以重点查看入口脚本、调用函数和运行类型。</p>
+        <p>${t("hub.runtimeNote")}</p>
       </div>
       <pre class="spec-code"><code>${escapeHTML(JSON.stringify(skill.runtime, null, 2))}</code></pre>
     `;
@@ -450,13 +455,13 @@ function renderRuntimeSpec(bundle, skill) {
   if (bundle.builtin) {
     return `
       <div class="runtime-note">
-        <p>这是内置技能。当前没有单独暴露 runtime 配置，实际执行由系统内置的规划器和 Python runtime 分发逻辑实现。</p>
-        <p>如果要了解实现规范，优先关注它的输入参数、输出约定、适用对象和 support level。</p>
+        <p>${t("hub.builtinRuntimeNote")}</p>
+        <p>${t("hub.builtinRuntimeHint")}</p>
       </div>
     `;
   }
 
-  return "<p class='muted'>当前没有可展示的 runtime 配置。</p>";
+  return `<p class='muted'>${escapeHTML(t("hub.noRuntimeConfig"))}</p>`;
 }
 
 function syncDetailModal() {
@@ -586,71 +591,4 @@ function setStatus(message, isError = false) {
   }
   status.textContent = message;
   status.className = `status-text ${isError ? "error" : "muted"}`;
-}
-
-function statusPill(kind, label) {
-  return `<span class="status-pill ${kind}">${escapeHTML(label)}</span>`;
-}
-
-function formatSkillName(name) {
-  const labels = {
-    inspect_dataset: "查看数据集",
-    assess_dataset: "评估数据集",
-    summarize_qc: "汇总 QC",
-    plot_qc_metrics: "绘制 QC 指标",
-    filter_cells: "按 QC 过滤细胞",
-    filter_genes: "按阈值过滤基因",
-    normalize_total: "总表达归一化",
-    log1p_transform: "log1p 变换",
-    select_hvg: "选择高变基因",
-    scale_matrix: "缩放表达矩阵",
-    run_pca: "计算 PCA",
-    compute_neighbors: "计算邻接图",
-    run_umap: "计算 UMAP",
-    prepare_umap: "完成常规预处理",
-    subset_cells: "筛选细胞子集",
-    subcluster_from_global: "全局对象亚群分析",
-    score_gene_set: "基因集打分",
-    recluster: "重新聚类",
-    reanalyze_subset: "已提取亚群再分析",
-    subcluster_group: "按群体亚聚类",
-    rename_clusters: "重命名聚类",
-    find_markers: "查找 marker 基因",
-    plot_umap: "绘制 UMAP 图",
-    plot_gene_umap: "绘制基因 UMAP",
-    plot_dotplot: "绘制点图",
-    plot_violin: "绘制小提琴图",
-    plot_heatmap: "绘制热图",
-    plot_celltype_composition: "绘制组成图",
-    run_python_analysis: "执行自定义 Python 分析",
-    export_h5ad: "导出 h5ad",
-    export_markers_csv: "导出 markers CSV",
-  };
-  return labels[name] || name;
-}
-
-async function fetchJSON(url, options) {
-  const response = await fetch(url, options);
-  if (!response.ok) {
-    let message = response.statusText;
-    try {
-      const payload = await response.json();
-      message = payload.error || JSON.stringify(payload);
-    } catch {
-      message = await response.text();
-    }
-    throw new Error(message || `请求失败：${response.status}`);
-  }
-  return response.json();
-}
-
-function escapeHTML(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function escapeAttribute(value) {
-  return escapeHTML(value).replaceAll('"', "&quot;");
 }

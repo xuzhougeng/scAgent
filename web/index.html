@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>scAgent 分析台</title>
+    <title data-i18n="html.appTitle">scAgent 分析台</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -11,8 +11,8 @@
     <div class="shell">
       <aside class="panel explorer">
         <div class="panel-head">
-          <p class="eyebrow">分析导航</p>
-          <h1>工作区与会话</h1>
+          <p class="eyebrow" data-i18n="html.navEyebrow">分析导航</p>
+          <h1 data-i18n="html.navTitle">工作区与会话</h1>
         </div>
         <div id="workspaceNavigator" class="workspace-navigator"></div>
         <div id="sessionMeta" class="session-meta"></div>
@@ -25,18 +25,23 @@
         class="sidebar-resize-handle"
         role="separator"
         aria-orientation="vertical"
+        data-i18n-aria-label="html.adjustLeftPanel"
         aria-label="调整左侧信息栏宽度"
         tabindex="0"
       ></div>
 
       <main class="panel console">
         <div class="panel-head">
-          <p class="eyebrow">对话与指令</p>
+          <p class="eyebrow" data-i18n="html.consoleEyebrow">对话与指令</p>
           <div>
-            <h2>分析控制台</h2>
+            <h2 data-i18n="html.consoleTitle">分析控制台</h2>
             <div class="panel-head-links">
-              <a class="inline-link" href="/plugins.html">插件管理</a>
-              <a class="inline-link" href="/help.html" target="_blank" rel="noreferrer">打开帮助</a>
+              <select id="languageSwitcher" class="language-switcher" aria-label="Language">
+                <option value="zh">中文</option>
+                <option value="en">English</option>
+              </select>
+              <a class="inline-link" href="/plugins.html" data-i18n="html.pluginLink">插件管理</a>
+              <a class="inline-link" href="/help.html" target="_blank" rel="noreferrer" data-i18n="html.helpLink">打开帮助</a>
             </div>
           </div>
         </div>
@@ -44,10 +49,10 @@
         <form id="uploadForm" class="upload-bar">
           <label class="upload-file-trigger" for="fileInput">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            选择并上传 h5ad 文件
+            <span data-i18n="html.uploadLabel">选择并上传 h5ad 文件</span>
           </label>
           <input id="fileInput" name="file" type="file" accept=".h5ad,.ha5d" />
-          <span id="fileName" class="upload-file-name">选择文件后将自动上传</span>
+          <span id="fileName" class="upload-file-name" data-i18n="ui.selectFileAutoUpload">选择文件后将自动上传</span>
         </form>
         <div id="uploadStatus" class="upload-status muted"></div>
         <div id="quickActions" class="quick-actions"></div>
@@ -57,13 +62,14 @@
           <textarea
             id="messageInput"
             rows="3"
+            data-i18n-placeholder="html.composerPlaceholder"
             placeholder="例如：把 T 细胞拿出来重新聚类，然后画一下 marker"
           ></textarea>
-          <button id="composerSubmitButton" type="submit">运行</button>
+          <button id="composerSubmitButton" type="submit" data-i18n="ui.run">运行</button>
         </form>
         <div class="planner-tools">
-          <button id="plannerPreviewButton" type="button" class="ghost-button">预览规划上下文</button>
-          <button id="workspaceFilesButton" type="button" class="ghost-button">查看 Workspace 文件</button>
+          <button id="plannerPreviewButton" type="button" class="ghost-button" data-i18n="html.previewPlannerContext">预览规划上下文</button>
+          <button id="workspaceFilesButton" type="button" class="ghost-button" data-i18n="html.viewWorkspaceFiles">查看 Workspace 文件</button>
           <div id="plannerPreviewStatus" class="muted"></div>
         </div>
       </main>
@@ -73,6 +79,7 @@
         class="sidebar-resize-handle"
         role="separator"
         aria-orientation="vertical"
+        data-i18n-aria-label="html.adjustRightPanel"
         aria-label="调整右侧信息栏宽度"
         tabindex="0"
       >
@@ -80,6 +87,7 @@
           id="rightSidebarToggle"
           type="button"
           class="sidebar-collapse-button"
+          data-i18n-aria-label="html.collapseRightPanel"
           aria-label="收起右侧信息栏"
           aria-controls="rightInspectorPanel"
           aria-expanded="true"
@@ -88,8 +96,8 @@
 
       <aside id="rightInspectorPanel" class="panel inspector">
         <div class="panel-head">
-          <p class="eyebrow">检查器 / 上下文</p>
-          <h2>当前上下文</h2>
+          <p class="eyebrow" data-i18n="html.inspectorEyebrow">检查器 / 上下文</p>
+          <h2 data-i18n="html.inspectorTitle">当前上下文</h2>
         </div>
         <div id="inspector" class="inspector-body"></div>
       </aside>
@@ -106,11 +114,11 @@
       <div id="imageModalBackdrop" class="image-modal-backdrop"></div>
       <div class="image-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="imageModalTitle">
         <div class="image-modal-head">
-          <h3 id="imageModalTitle">结果预览</h3>
+          <h3 id="imageModalTitle" data-i18n="html.imagePreviewTitle">结果预览</h3>
           <div class="image-modal-actions">
-            <a id="imageModalOpen" class="inline-link" target="_blank" rel="noreferrer">打开</a>
-            <a id="imageModalDownload" class="inline-link" download>下载</a>
-            <button id="imageModalClose" type="button" class="ghost-button">关闭</button>
+            <a id="imageModalOpen" class="inline-link" target="_blank" rel="noreferrer" data-i18n="ui.open">打开</a>
+            <a id="imageModalDownload" class="inline-link" download data-i18n="ui.download">下载</a>
+            <button id="imageModalClose" type="button" class="ghost-button" data-i18n="html.close">关闭</button>
           </div>
         </div>
         <div class="image-modal-body">
@@ -124,10 +132,10 @@
       <div class="status-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="statusOverviewModalTitle">
         <div class="status-modal-head">
           <div>
-            <p class="eyebrow">运行概览</p>
-            <h3 id="statusOverviewModalTitle">系统状态、技能与环境</h3>
+            <p class="eyebrow" data-i18n="html.statusOverviewEyebrow">运行概览</p>
+            <h3 id="statusOverviewModalTitle" data-i18n="html.statusOverviewTitle">系统状态、技能与环境</h3>
           </div>
-          <button id="statusOverviewModalClose" type="button" class="ghost-button">关闭</button>
+          <button id="statusOverviewModalClose" type="button" class="ghost-button" data-i18n="html.close">关闭</button>
         </div>
         <div id="statusOverviewModalContent" class="status-modal-body"></div>
       </div>
@@ -138,10 +146,10 @@
       <div class="workspace-files-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="workspaceFilesModalTitle">
         <div class="workspace-files-modal-head">
           <div>
-            <p class="eyebrow">Workspace 文件</p>
-            <h3 id="workspaceFilesModalTitle">当前 Workspace 输出文件</h3>
+            <p class="eyebrow" data-i18n="html.workspaceFilesEyebrow">Workspace 文件</p>
+            <h3 id="workspaceFilesModalTitle" data-i18n="html.workspaceFilesTitle">当前 Workspace 输出文件</h3>
           </div>
-          <button id="workspaceFilesModalClose" type="button" class="ghost-button">关闭</button>
+          <button id="workspaceFilesModalClose" type="button" class="ghost-button" data-i18n="html.close">关闭</button>
         </div>
         <div id="workspaceFilesModalContent" class="workspace-files-modal-body"></div>
       </div>
@@ -152,13 +160,13 @@
       <div class="planner-preview-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="plannerPreviewModalTitle">
         <div class="planner-preview-modal-head">
           <div>
-            <p class="eyebrow">规划预览</p>
-            <h3 id="plannerPreviewModalTitle">当前规划上下文</h3>
+            <p class="eyebrow" data-i18n="html.plannerPreviewEyebrow">规划预览</p>
+            <h3 id="plannerPreviewModalTitle" data-i18n="html.plannerPreviewTitle">当前规划上下文</h3>
           </div>
           <div class="planner-preview-modal-actions">
             <span id="plannerPreviewCopyStatus" class="muted"></span>
-            <button id="plannerPreviewCopyButton" type="button" class="ghost-button">复制规划上下文</button>
-            <button id="plannerPreviewModalClose" type="button" class="ghost-button">关闭</button>
+            <button id="plannerPreviewCopyButton" type="button" class="ghost-button" data-i18n="html.copyPlannerContext">复制规划上下文</button>
+            <button id="plannerPreviewModalClose" type="button" class="ghost-button" data-i18n="html.close">关闭</button>
           </div>
         </div>
         <div id="plannerPreviewModalContent" class="planner-preview planner-preview-modal-body"></div>
@@ -170,16 +178,16 @@
       <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
         <div class="confirm-modal-head">
           <div>
-            <p id="confirmModalEyebrow" class="eyebrow">确认操作</p>
-            <h3 id="confirmModalTitle">确认执行这个操作？</h3>
+            <p id="confirmModalEyebrow" class="eyebrow" data-i18n="html.confirmEyebrow">确认操作</p>
+            <h3 id="confirmModalTitle" data-i18n="html.confirmTitle">确认执行这个操作？</h3>
           </div>
         </div>
         <div class="confirm-modal-body">
           <p id="confirmModalMessage" class="confirm-modal-message"></p>
         </div>
         <div class="confirm-modal-actions">
-          <button id="confirmModalCancel" type="button" class="ghost-button">取消</button>
-          <button id="confirmModalConfirm" type="button" class="confirm-modal-confirm">确认</button>
+          <button id="confirmModalCancel" type="button" class="ghost-button" data-i18n="html.confirmCancel">取消</button>
+          <button id="confirmModalConfirm" type="button" class="confirm-modal-confirm" data-i18n="html.confirmOk">确认</button>
         </div>
       </div>
     </div>

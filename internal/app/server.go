@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"scagent/internal/api"
@@ -97,6 +98,8 @@ func NewServer(config Config) (*Server, error) {
 	mux := http.NewServeMux()
 	handler.Register(mux)
 	mux.Handle("/data/", http.StripPrefix("/data/", http.FileServer(http.Dir(config.DataDir))))
+	localesDir := filepath.Join(config.WebDir, "locales")
+	mux.Handle("/locales/", http.StripPrefix("/locales/", http.FileServer(http.Dir(localesDir))))
 	mux.Handle("/", cacheControl(http.FileServer(http.Dir(config.WebDir))))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -104,10 +107,37 @@ func NewServer(config Config) (*Server, error) {
 	_ = runtimeClient.Health(ctx)
 
 	return &Server{
-		Handler: mux,
+		Handler: withLocale(mux),
 		Service: service,
 		Config:  config,
 	}, nil
+}
+
+func withLocale(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		locale := extractLocale(r)
+		ctx := runtime.ContextWithLocale(r.Context(), locale)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func extractLocale(r *http.Request) string {
+	accept := r.Header.Get("Accept-Language")
+	if accept == "" {
+		return "zh"
+	}
+	lang := strings.SplitN(accept, ",", 2)[0]
+	lang = strings.TrimSpace(lang)
+	if idx := strings.IndexByte(lang, ';'); idx >= 0 {
+		lang = lang[:idx]
+	}
+	lang = strings.TrimSpace(lang)
+	switch lang {
+	case "zh", "en":
+		return lang
+	default:
+		return "zh"
+	}
 }
 
 func cacheControl(next http.Handler) http.Handler {

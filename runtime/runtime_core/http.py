@@ -7,6 +7,8 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
+from i18n import t, set_request_locale
+
 from .diagnostics import dedupe_list
 
 
@@ -22,19 +24,21 @@ def log_runtime_event(logger: Any, event: str, **fields: Any) -> None:
 def build_request_handler(state: Any, logger: Any) -> type[BaseHTTPRequestHandler]:
     class RequestHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            locale = self.headers.get("Accept-Language", "zh").split(",")[0].strip()[:5]
+            set_request_locale(locale if locale in ("zh", "en") else "zh")
             if self.path == "/healthz":
                 plugin_skills = state.load_plugin_skills()
                 executable_skills = dedupe_list(state.builtin_skills() + sorted(plugin_skills.keys()))
                 notes = [
-                    "运行时会读取真实的 h5ad 结构和注释信息。",
-                    "常规预处理链、QC、subset、recluster、marker 和主要图形技能已切到真实 AnnData/Scanpy 执行。",
-                    "当现成 tool 不够时，可通过 run_python_analysis 在内存中的 AnnData 上执行短代码。",
+                    t("runtime.healthNote1"),
+                    t("runtime.healthNote2"),
+                    t("runtime.healthNote3"),
                 ]
                 disabled_bundles = state.load_disabled_bundles()
                 if disabled_bundles:
-                    notes.append(f"Skill Hub 当前停用了 {len(disabled_bundles)} 个技能包，规划器与运行时都会跳过这些技能。")
+                    notes.append(t("runtime.healthDisabledBundles", count=len(disabled_bundles)))
                 if plugin_skills:
-                    notes.append(f"Skill Hub 已加载 {len(plugin_skills)} 个插件技能，可在当前会话中直接调用。")
+                    notes.append(t("runtime.healthPluginSkills", count=len(plugin_skills)))
                 payload = {
                     "status": "ok",
                     "runtime_mode": "live",
@@ -46,9 +50,11 @@ def build_request_handler(state: Any, logger: Any) -> type[BaseHTTPRequestHandle
                 payload.update(state.environment_report)
                 self._write_json(HTTPStatus.OK, payload)
                 return
-            self._write_json(HTTPStatus.NOT_FOUND, {"error": "未找到接口"})
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": t("error.endpointNotFound")})
 
         def do_POST(self) -> None:
+            locale = self.headers.get("Accept-Language", "zh").split(",")[0].strip()[:5]
+            set_request_locale(locale if locale in ("zh", "en") else "zh")
             payload: dict[str, Any] = {}
             started_at = time.perf_counter()
             try:
@@ -177,7 +183,7 @@ def build_request_handler(state: Any, logger: Any) -> type[BaseHTTPRequestHandle
                     )
                     self._write_json(HTTPStatus.OK, response)
                     return
-                self._write_json(HTTPStatus.NOT_FOUND, {"error": "未找到接口"})
+                self._write_json(HTTPStatus.NOT_FOUND, {"error": t("error.endpointNotFound")})
             except Exception as exc:  # noqa: BLE001
                 log_runtime_event(
                     logger,

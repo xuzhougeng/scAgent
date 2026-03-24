@@ -12,6 +12,26 @@ import (
 	"scagent/internal/models"
 )
 
+// ---------- locale helpers ----------
+
+type localeKeyType struct{}
+
+var localeKey = localeKeyType{}
+
+// ContextWithLocale returns a child context carrying the given locale string.
+func ContextWithLocale(ctx context.Context, locale string) context.Context {
+	return context.WithValue(ctx, localeKey, locale)
+}
+
+// LocaleFromContext extracts the locale stored by ContextWithLocale, defaulting
+// to "zh" when none is set.
+func LocaleFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(localeKey).(string); ok && v != "" {
+		return v
+	}
+	return "zh"
+}
+
 type Service interface {
 	Health(ctx context.Context) error
 	Status(ctx context.Context) (*HealthStatus, error)
@@ -223,6 +243,9 @@ func (c *Client) postJSON(ctx context.Context, path string, payload any, out any
 		return fmt.Errorf("create runtime request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
+	if locale := LocaleFromContext(ctx); locale != "" {
+		request.Header.Set("Accept-Language", locale)
+	}
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {

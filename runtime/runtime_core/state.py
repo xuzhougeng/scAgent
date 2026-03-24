@@ -15,7 +15,9 @@ from .diagnostics import (
     default_custom_analysis_summary,
     describe_annotation_summary,
     failing_package_checks,
+    format_list,
     format_list_zh,
+    format_object_state,
     format_object_state_zh,
     inspect_h5ad_metadata,
     inspect_h5ad_shape,
@@ -89,8 +91,16 @@ class RuntimeState(RuntimeObjectStore, SkillRuntimeSupport):
         return SAFE_EXEC_BUILTINS
 
     @staticmethod
+    def format_list(values: list[str]) -> str:
+        return format_list(values)
+
+    @staticmethod
     def format_list_zh(values: list[str]) -> str:
         return format_list_zh(values)
+
+    @staticmethod
+    def format_object_state(state: str) -> str:
+        return format_object_state(state)
 
     @staticmethod
     def format_object_state_zh(state: str) -> str:

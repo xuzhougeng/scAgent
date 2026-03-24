@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from i18n import t
+
 from .base import SkillExecutionContext
 from .common import require_target
 
@@ -11,14 +13,14 @@ def export_h5ad(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     export_path = state._artifact_path(ctx.workspace_root, state.slug(target.label) or "dataset", "h5ad", ctx.request_id)
     state._copy_file_atomic(target.materialized_path, export_path)
     return {
-        "summary": f"已将 {target.label} 导出为 h5ad 文件。",
+        "summary": t("runtime.exportH5adSummary", label=target.label),
         "artifacts": [
             {
                 "kind": "file",
                 "title": f"{target.label}.h5ad",
                 "path": str(export_path),
                 "content_type": "application/octet-stream",
-                "summary": "对象落盘快照文件。",
+                "summary": t("runtime.exportH5adArtifactSummary"),
             }
         ],
     }
@@ -44,14 +46,14 @@ def export_markers_csv(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]
         state._write_table_atomic(table, export_path, index=False)
 
     return {
-        "summary": f"已将 {target.label} 导出为 CSV 文件。",
+        "summary": t("runtime.exportMarkersCsvSummary", label=target.label),
         "artifacts": [
             {
                 "kind": "file",
                 "title": f"{target.label}.csv",
                 "path": str(export_path),
                 "content_type": "text/csv",
-                "summary": "marker / differential expression 结果导出文件。",
+                "summary": t("runtime.exportMarkersCsvArtifactSummary"),
             }
         ],
         "metadata": {

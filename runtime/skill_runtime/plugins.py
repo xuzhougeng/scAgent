@@ -6,6 +6,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
+from i18n import t
+
 from .base import SkillExecutionContext
 from .registry import PluginSkillDefinition
 
@@ -13,7 +15,7 @@ from .registry import PluginSkillDefinition
 def execute_plugin_skill(state: Any, ctx: SkillExecutionContext, plugin: PluginSkillDefinition) -> dict[str, Any]:
     entrypoint = Path(plugin.entrypoint)
     if not entrypoint.exists():
-        raise RuntimeError(f"插件技能 `{ctx.skill}` 缺少入口脚本：{entrypoint.name}")
+        raise RuntimeError(t("error.pluginMissingEntrypoint", skill=ctx.skill, entrypoint=entrypoint.name))
 
     params = ctx.params
     target = ctx.target
@@ -23,7 +25,7 @@ def execute_plugin_skill(state: Any, ctx: SkillExecutionContext, plugin: PluginS
 
     def persist_adata(label: str, output_adata: Any, *, kind: str | None = None) -> dict[str, Any]:
         if target is None:
-            raise RuntimeError("当前插件技能没有可持久化的目标对象。")
+            raise RuntimeError(t("error.pluginNoTargetForPersist"))
         persisted = state._persist_adata_object(
             session_id=ctx.session_id,
             workspace_root=ctx.workspace_root,
@@ -44,10 +46,10 @@ def execute_plugin_skill(state: Any, ctx: SkillExecutionContext, plugin: PluginS
         )
         return {
             "kind": "plot",
-            "title": title or f"{ctx.skill} 输出图",
+            "title": title or t("runtime.pluginPlotArtifactTitle", skill=ctx.skill),
             "path": str(figure_path),
             "content_type": "image/png",
-            "summary": summary or "由 Skill Hub 插件生成的图。",
+            "summary": summary or t("runtime.pluginPlotArtifactSummary"),
         }
 
     def save_table(table: Any, stem: str, *, title: str = "", summary: str = "") -> dict[str, Any]:
@@ -59,10 +61,10 @@ def execute_plugin_skill(state: Any, ctx: SkillExecutionContext, plugin: PluginS
         )
         return {
             "kind": "table",
-            "title": title or f"{ctx.skill} 输出表",
+            "title": title or t("runtime.pluginTableArtifactTitle", skill=ctx.skill),
             "path": str(table_path),
             "content_type": "text/csv",
-            "summary": summary or "由 Skill Hub 插件生成的表。",
+            "summary": summary or t("runtime.pluginTableArtifactSummary"),
         }
 
     context = {
@@ -104,13 +106,13 @@ def execute_plugin_skill(state: Any, ctx: SkillExecutionContext, plugin: PluginS
         exec(entrypoint.read_text(encoding="utf-8"), exec_env, exec_env)
         handler = exec_env.get(plugin.callable_name)
         if not callable(handler):
-            raise RuntimeError(f"插件技能 `{ctx.skill}` 未定义可调用入口 `{plugin.callable_name}`。")
+            raise RuntimeError(t("error.pluginMissingCallable", skill=ctx.skill, callable_name=plugin.callable_name))
         response = handler(context)
 
     if response is None:
         response = {}
     if not isinstance(response, dict):
-        raise RuntimeError(f"插件技能 `{ctx.skill}` 返回值必须是 dict。")
+        raise RuntimeError(t("error.pluginReturnMustBeDict", skill=ctx.skill))
 
     metadata = response.get("metadata")
     if not isinstance(metadata, dict):

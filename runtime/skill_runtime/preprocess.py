@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from i18n import t
+
 from .base import SkillExecutionContext
 from .common import require_target
 
@@ -20,7 +22,7 @@ def filter_cells(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     if ctx.params.get("max_mt_pct") is not None:
         thresholds["max_mt_pct"] = float(ctx.params["max_mt_pct"])
     if not thresholds:
-        raise RuntimeError("filter_cells 至少需要一个阈值：min_genes、max_genes 或 max_mt_pct。")
+        raise RuntimeError(t("error.filterCellsNoThreshold"))
 
     mask = np.ones(adata.n_obs, dtype=bool)
     if "min_genes" in thresholds:
@@ -32,7 +34,7 @@ def filter_cells(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
 
     filtered = adata[mask].copy()
     if filtered.n_obs == 0:
-        raise RuntimeError("filter_cells 的筛选结果为空，请检查阈值。")
+        raise RuntimeError(t("error.filterCellsEmpty"))
 
     removed = adata.n_obs - filtered.n_obs
     threshold_bits = [f"{name}={value:g}" for name, value in thresholds.items()]
@@ -42,10 +44,7 @@ def filter_cells(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         label=f"filtered_cells_{target.label}",
         kind="filtered_dataset",
         adata=filtered,
-        summary=(
-            f"已对 {target.label} 应用细胞过滤（{', '.join(threshold_bits)}），"
-            f"保留 {filtered.n_obs} 个细胞，移除 {removed} 个细胞。"
-        ),
+        summary=t("runtime.filterCellsSummary", label=target.label, thresholds=', '.join(threshold_bits), kept=filtered.n_obs, removed=removed),
         request_id=ctx.request_id,
     )
 
@@ -61,7 +60,7 @@ def filter_genes(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     if ctx.params.get("min_counts") is not None:
         thresholds["min_counts"] = float(ctx.params["min_counts"])
     if not thresholds:
-        raise RuntimeError("filter_genes 至少需要一个阈值：min_cells 或 min_counts。")
+        raise RuntimeError(t("error.filterGenesNoThreshold"))
 
     matrix = adata.X
     if sp.issparse(matrix):
@@ -80,7 +79,7 @@ def filter_genes(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
 
     filtered = adata[:, gene_mask].copy()
     if filtered.n_vars == 0:
-        raise RuntimeError("filter_genes 的筛选结果为空，请检查阈值。")
+        raise RuntimeError(t("error.filterGenesEmpty"))
 
     removed = adata.n_vars - filtered.n_vars
     threshold_bits = [f"{name}={value:g}" for name, value in thresholds.items()]
@@ -90,10 +89,7 @@ def filter_genes(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         label=f"filtered_genes_{target.label}",
         kind="filtered_dataset",
         adata=filtered,
-        summary=(
-            f"已对 {target.label} 应用基因过滤（{', '.join(threshold_bits)}），"
-            f"保留 {filtered.n_vars} 个基因，移除 {removed} 个基因。"
-        ),
+        summary=t("runtime.filterGenesSummary", label=target.label, thresholds=', '.join(threshold_bits), kept=filtered.n_vars, removed=removed),
         request_id=ctx.request_id,
     )
 
@@ -110,7 +106,7 @@ def normalize_total(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         label=f"normalized_{target.label}",
         kind=state._default_kind_after_processing(target),
         adata=adata,
-        summary=f"已对 {target.label} 完成总表达归一化（target_sum={target_sum:g}）。",
+        summary=t("runtime.normalizeTotalSummary", label=target.label, target_sum=f"{target_sum:g}"),
         request_id=ctx.request_id,
     )
 
@@ -126,7 +122,7 @@ def log1p_transform(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         label=f"log1p_{target.label}",
         kind=state._default_kind_after_processing(target),
         adata=adata,
-        summary=f"已对 {target.label} 完成 log1p 变换。",
+        summary=t("runtime.log1pSummary", label=target.label),
         request_id=ctx.request_id,
     )
 
@@ -156,7 +152,7 @@ def select_hvg(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         label=f"hvg_{target.label}",
         kind=state._default_kind_after_processing(target),
         adata=adata,
-        summary=f"已为 {target.label} 选择高变基因（n_top_genes={n_top_genes}，实际标记 {n_hvg} 个）。",
+        summary=t("runtime.selectHvgSummary", label=target.label, n_top_genes=n_top_genes, n_hvg=n_hvg),
         request_id=ctx.request_id,
     )
 
@@ -168,10 +164,10 @@ def scale_matrix(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     max_value = ctx.params.get("max_value")
     if max_value is not None:
         sc.pp.scale(adata, max_value=float(max_value))
-        summary = f"已对 {target.label} 完成表达矩阵缩放（max_value={float(max_value):g}）。"
+        summary = t("runtime.scaleMatrixSummaryWithMax", label=target.label, max_value=f"{float(max_value):g}")
     else:
         sc.pp.scale(adata)
-        summary = f"已对 {target.label} 完成表达矩阵缩放。"
+        summary = t("runtime.scaleMatrixSummary", label=target.label)
 
     return state._persist_adata_object(
         session_id=ctx.session_id,
@@ -199,7 +195,7 @@ def run_pca(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         label=f"pca_{target.label}",
         kind=state._default_kind_after_processing(target),
         adata=adata,
-        summary=f"已为 {target.label} 计算 PCA（n_comps={max_comps}）。",
+        summary=t("runtime.runPcaSummary", label=target.label, n_comps=max_comps),
         request_id=ctx.request_id,
     )
 
@@ -209,7 +205,7 @@ def compute_neighbors(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     _, sc, _, _, _ = state.analysis_modules()
     adata = state._load_adata(target)
     if "X_pca" not in adata.obsm:
-        raise RuntimeError("当前对象缺少 `X_pca`，请先执行 run_pca。")
+        raise RuntimeError(t("error.missingPCA"))
 
     n_neighbors = int(ctx.params.get("n_neighbors") or 15)
     use_rep = ctx.params.get("use_rep")
@@ -224,7 +220,7 @@ def compute_neighbors(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         label=f"neighbors_{target.label}",
         kind=state._default_kind_after_processing(target),
         adata=adata,
-        summary=f"已为 {target.label} 计算邻接图（n_neighbors={n_neighbors}）。",
+        summary=t("runtime.computeNeighborsSummary", label=target.label, n_neighbors=n_neighbors),
         request_id=ctx.request_id,
     )
 
@@ -234,7 +230,7 @@ def run_umap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     _, sc, _, _, _ = state.analysis_modules()
     adata = state._load_adata(target)
     if "neighbors" not in adata.uns and "connectivities" not in getattr(adata, "obsp", {}):
-        raise RuntimeError("当前对象缺少邻接图，请先执行 compute_neighbors。")
+        raise RuntimeError(t("error.missingNeighborGraph"))
 
     min_dist = float(ctx.params.get("min_dist") or 0.5)
     sc.tl.umap(adata, min_dist=min_dist)
@@ -244,7 +240,7 @@ def run_umap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         label=f"umap_{target.label}",
         kind=state._default_kind_after_processing(target),
         adata=adata,
-        summary=f"已为 {target.label} 计算 UMAP（min_dist={min_dist:g}）。",
+        summary=t("runtime.runUmapSummary", label=target.label, min_dist=f"{min_dist:g}"),
         request_id=ctx.request_id,
     )
 
@@ -265,7 +261,7 @@ def prepare_umap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         label=f"prepared_{target.label}",
         kind=state._default_kind_after_processing(target),
         adata=adata,
-        summary=f"已为 {target.label} 完成常规预处理链，并生成 PCA、邻接图和 UMAP。",
+        summary=t("runtime.prepareUmapSummary", label=target.label),
         request_id=ctx.request_id,
     )
 

@@ -1,4 +1,5 @@
 import { layoutConfig, storageKeys } from "./state.mjs";
+import { t } from "./i18n.mjs";
 
 export function bindSidebarResize() {
   const shell = document.querySelector(".shell");
@@ -179,8 +180,8 @@ function syncRightSidebarToggle(shell) {
   const collapsed = isRightSidebarCollapsed(shell);
   button.textContent = collapsed ? "<" : ">";
   button.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  button.setAttribute("aria-label", collapsed ? "展开右侧信息栏" : "收起右侧信息栏");
-  button.title = collapsed ? "展开右侧信息栏" : "收起右侧信息栏";
+  button.setAttribute("aria-label", collapsed ? t("html.expandRightPanel") : t("html.collapseRightPanel"));
+  button.title = collapsed ? t("html.expandRightPanel") : t("html.collapseRightPanel");
 }
 
 function clampSidebarWidths(shell, widths) {

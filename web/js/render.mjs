@@ -1,4 +1,5 @@
-import { appState, quickActions } from "./state.mjs";
+import { appState, getQuickActions } from "./state.mjs";
+import { t } from "./i18n.mjs";
 import {
   escapeAttribute,
   escapeHTML,
@@ -191,7 +192,7 @@ function startMenuInlineRename(element, onSave) {
 function openWorkspaceContextMenu(event, workspaceID, renameElement) {
   openEntityContextMenu(event, [
     {
-      label: "重命名",
+      label: t("ui.rename"),
       onSelect: async () => {
         startMenuInlineRename(renameElement, async (newLabel) => {
           await renderActions.renameWorkspace(workspaceID, newLabel);
@@ -199,15 +200,15 @@ function openWorkspaceContextMenu(event, workspaceID, renameElement) {
       },
     },
     {
-      label: "删除工作区",
+      label: t("ui.deleteWorkspace"),
       danger: true,
       onSelect: async () => {
         const label = renameElement?.textContent?.trim() || workspaceID;
         const confirmed = await openConfirmModal({
-          eyebrow: "删除工作区",
-          title: `确认删除“${label}”？`,
-          message: "工作区下的对话、对象和结果文件都会一起移除，这个操作不能撤销。",
-          confirmLabel: "删除工作区",
+          eyebrow: t("ui.deleteWorkspace"),
+          title: t("ui.confirmDeleteWorkspaceTitle", { label }),
+          message: t("ui.confirmDeleteWorkspaceMsg"),
+          confirmLabel: t("ui.confirmDeleteWorkspaceButton"),
           danger: true,
         });
         if (!confirmed) {
@@ -222,7 +223,7 @@ function openWorkspaceContextMenu(event, workspaceID, renameElement) {
 function openConversationContextMenu(event, conversationID, renameElement) {
   openEntityContextMenu(event, [
     {
-      label: "重命名",
+      label: t("ui.rename"),
       onSelect: async () => {
         startMenuInlineRename(renameElement, async (newLabel) => {
           await renderActions.renameConversation(conversationID, newLabel);
@@ -230,15 +231,15 @@ function openConversationContextMenu(event, conversationID, renameElement) {
       },
     },
     {
-      label: "删除对话",
+      label: t("ui.deleteConversation"),
       danger: true,
       onSelect: async () => {
         const label = renameElement?.textContent?.trim() || conversationID;
         const confirmed = await openConfirmModal({
-          eyebrow: "删除对话",
-          title: `确认删除“${label}”？`,
-          message: "这条对话的消息、任务记录和关联结果会一起移除，这个操作不能撤销。",
-          confirmLabel: "删除对话",
+          eyebrow: t("ui.deleteConversation"),
+          title: t("ui.confirmDeleteConversationTitle", { label }),
+          message: t("ui.confirmDeleteConversationMsg"),
+          confirmLabel: t("ui.confirmDeleteConversationButton"),
           danger: true,
         });
         if (!confirmed) {
@@ -257,7 +258,7 @@ export function renderQuickActions() {
   }
 
   container.innerHTML = "";
-  for (const action of quickActions) {
+  for (const action of getQuickActions()) {
     const button = document.createElement("button");
     button.className = "chip";
     button.type = "button";
@@ -289,20 +290,20 @@ export function render() {
 export function renderSessionMeta() {
   const meta = document.getElementById("sessionMeta");
   if (!appState.snapshot) {
-    meta.innerHTML = "<p class='muted'>尚未加载会话。</p>";
+    meta.innerHTML = `<p class='muted'>${escapeHTML(t("ui.sessionNotLoaded"))}</p>`;
     return;
   }
   const { session, workspace, objects, jobs, artifacts } = appState.snapshot;
   const conversations = appState.workspaceSnapshot?.conversations || (session ? [session] : []);
   const currentWorkspace = appState.workspaceSnapshot?.workspace || workspace;
-  const workspaceLabel = currentWorkspace?.label || "未命名 workspace";
+  const workspaceLabel = currentWorkspace?.label || t("ui.unnamedWorkspace");
   const collapsed = Boolean(appState.sessionMetaCollapsed);
   const workspaceStatus = appState.workspaceStatus ? `<p class="workspace-status muted">${escapeHTML(appState.workspaceStatus)}</p>` : "";
   const conversationMarkup = conversations.length
     ? `
       <div class="workspace-collection-meta">
-        <span>${escapeHTML(`${conversations.length} 个对话`)}</span>
-        ${conversations.length > 3 ? `<span>仅显示 3 条高度，可滚动查看更多</span>` : ""}
+        <span>${escapeHTML(t("ui.conversationCount", { count: conversations.length }))}</span>
+        ${conversations.length > 3 ? `<span>${escapeHTML(t("ui.showOnly3Hint"))}</span>` : ""}
       </div>
       <div class="workspace-collection-scroll">
         <div class="conversation-list">
@@ -316,7 +317,7 @@ export function renderSessionMeta() {
                 >
                   <span
                     class="conversation-chip-label"
-                    title="双击可重命名，右击可重命名或删除"
+                    title="${escapeAttribute(t("ui.dblclickRename"))}"
                   >${escapeHTML(formatConversationLabel(conversation))}</span>
                   <span class="conversation-chip-id">${escapeHTML(conversation.id)}</span>
                 </button>
@@ -326,23 +327,23 @@ export function renderSessionMeta() {
         </div>
       </div>
     `
-    : "<p class='muted'>当前 workspace 还没有其他对话。</p>";
+    : `<p class='muted'>${escapeHTML(t("ui.noConversations"))}</p>`;
 
   meta.innerHTML = `
-    <div class="workspace-meta-eyebrow">当前工作区</div>
+    <div class="workspace-meta-eyebrow">${escapeHTML(t("ui.currentWorkspace"))}</div>
     <div class="workspace-meta-head">
       <div>
         <div class="workspace-title-row">
           <div
             class="workspace-title"
             data-workspace-id="${escapeAttribute(currentWorkspace?.id || "")}"
-            title="双击可重命名，右击可重命名或删除"
+            title="${escapeAttribute(t("ui.dblclickRename"))}"
           >${escapeHTML(workspaceLabel)}</div>
           <details class="workspace-help-popover">
-            <summary aria-label="查看工作区与对话说明">?</summary>
+            <summary aria-label="${escapeAttribute(t("ui.dblclickRename"))}">?</summary>
             <div class="workspace-help-body">
-              <p><strong>新工作区</strong>：新建独立容器，适合换数据集或重新开始。</p>
-              <p><strong>新对话</strong>：复用当前工作区对象与结果，只开启新线程。</p>
+              <p><strong>${escapeHTML(t("ui.helpNewWorkspace"))}</strong>${escapeHTML(t("ui.helpNewWorkspaceDesc"))}</p>
+              <p><strong>${escapeHTML(t("ui.helpNewConversation"))}</strong>${escapeHTML(t("ui.helpNewConversationDesc"))}</p>
             </div>
           </details>
         </div>
@@ -352,14 +353,14 @@ export function renderSessionMeta() {
           id="newConversationButton"
           type="button"
           class="ghost-button conversation-create-button"
-          title="保留当前工作区里的对象和结果，只开启新的聊天线程"
-        >新对话</button>
+          title="${escapeAttribute(t("ui.newConversationTitle"))}"
+        >${escapeHTML(t("ui.newConversationButton"))}</button>
         <button
           type="button"
           class="ghost-button workspace-panel-toggle"
           data-toggle-panel="session-meta"
           aria-expanded="${collapsed ? "false" : "true"}"
-        >${collapsed ? "展开" : "收起"}</button>
+        >${escapeHTML(collapsed ? t("ui.expand") : t("ui.collapse"))}</button>
       </div>
     </div>
     <div class="workspace-panel-body ${collapsed ? "collapsed" : ""}">
@@ -367,18 +368,18 @@ export function renderSessionMeta() {
       <div class="workspace-summary-grid">
         <div class="workspace-summary-item">
           <strong>${objects.length}</strong>
-          <span>h5ad 文件</span>
+          <span>${escapeHTML(t("ui.h5adFiles"))}</span>
         </div>
         <div class="workspace-summary-item">
           <strong>${jobs.length}</strong>
-          <span>本对话任务</span>
+          <span>${escapeHTML(t("ui.taskCount"))}</span>
         </div>
         <div class="workspace-summary-item">
           <strong>${artifacts.length}</strong>
-          <span>结果文件</span>
+          <span>${escapeHTML(t("ui.resultFiles"))}</span>
         </div>
       </div>
-      <div class="workspace-section-label">对话</div>
+      <div class="workspace-section-label">${escapeHTML(t("ui.conversations"))}</div>
       ${conversationMarkup}
     </div>
   `;
@@ -401,25 +402,25 @@ export function renderPlannerPreview() {
     copyStatus.textContent = "";
   }
   if (!preview) {
-    container.innerHTML = "<p class='muted'>当前还没有规划预览。</p>";
+    container.innerHTML = `<p class='muted'>${escapeHTML(t("ui.noPlannerPreview"))}</p>`;
     return;
   }
 
   const blocks = [];
   blocks.push(
     renderSidebarCard({
-      title: "规划预览",
+      title: t("ui.plannerPreview"),
       body: `
-        <div class="kv"><span>模式</span><span>${escapeHTML(formatPlannerMode(preview.planner_mode))}</span></div>
-        <div class="kv"><span>当前对象</span><span>${escapeHTML(preview.planning_request?.focus_object?.label || "无")}</span></div>
-        <div class="kv"><span>说明</span><span>${escapeHTML(preview.note || "无")}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.mode"))}</span><span>${escapeHTML(formatPlannerMode(preview.planner_mode))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.currentObjectLabel"))}</span><span>${escapeHTML(preview.planning_request?.focus_object?.label || t("ui.none"))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.note"))}</span><span>${escapeHTML(preview.note || t("ui.none"))}</span></div>
       `,
     }),
   );
 
   blocks.push(
     renderSidebarCard({
-      title: "Working Memory",
+      title: t("ui.workingMemory"),
       open: false,
       body: renderWorkingMemoryMarkup(preview.planning_request?.working_memory),
     }),
@@ -436,7 +437,7 @@ export function renderPlannerPreview() {
 
   blocks.push(
     renderSidebarCard({
-      title: "内部规划快照",
+      title: t("ui.internalPlanSnapshot"),
       open: false,
       body: `<pre>${escapeHTML(JSON.stringify(preview.planning_request, null, 2))}</pre>`,
     }),
@@ -445,7 +446,7 @@ export function renderPlannerPreview() {
   if (preview.developer_instructions) {
     blocks.push(
       renderSidebarCard({
-        title: "开发者指令",
+        title: t("ui.developerInstructions"),
         body: `<pre>${escapeHTML(preview.developer_instructions)}</pre>`,
       }),
     );
@@ -454,7 +455,7 @@ export function renderPlannerPreview() {
   if (preview.request_body) {
     blocks.push(
       renderSidebarCard({
-        title: "规划器请求体",
+        title: t("ui.plannerRequestBody"),
         body: `<pre>${escapeHTML(JSON.stringify(preview.request_body, null, 2))}</pre>`,
       }),
     );
@@ -467,11 +468,11 @@ export function renderPlannerPreview() {
       try {
         await copyTextToClipboard(JSON.stringify(buildPlannerPreviewClipboardPayload(preview), null, 2));
         if (copyStatus) {
-          copyStatus.textContent = "已复制";
+          copyStatus.textContent = t("ui.copied");
         }
       } catch (error) {
         if (copyStatus) {
-          copyStatus.textContent = error?.message || "复制失败";
+          copyStatus.textContent = error?.message || t("ui.copyFailed");
         }
       }
     };
@@ -506,7 +507,7 @@ async function copyTextToClipboard(text) {
 
   try {
     if (!document.execCommand("copy")) {
-      throw new Error("浏览器未允许复制");
+      throw new Error(t("ui.browserCopyDenied"));
     }
   } finally {
     textarea.remove();
@@ -535,22 +536,22 @@ function renderSidebarCard({ title, body, badge = "", open = true }) {
 function buildSystemStatusMarkup() {
   const status = appState.systemStatus;
   if (!status) {
-    return "<p class='muted'>系统状态暂不可用。</p>";
+    return `<p class='muted'>${escapeHTML(t("ui.systemStatusUnavailable"))}</p>`;
   }
 
   const pills = [
-    statusPill(status.system_mode === "live" ? "ok" : "warn", `模式：${formatSystemMode(status.system_mode)}`),
-    statusPill(status.planner_mode === "llm" ? "ok" : "warn", `规划器：${formatPlannerMode(status.planner_mode)}`),
-    statusPill(status.llm_loaded ? "ok" : "muted", `模型：${status.llm_loaded ? "已加载" : "未加载"}`),
+    statusPill(status.system_mode === "live" ? "ok" : "warn", t("ui.statusPillMode", { mode: formatSystemMode(status.system_mode) })),
+    statusPill(status.planner_mode === "llm" ? "ok" : "warn", t("ui.statusPillPlanner", { mode: formatPlannerMode(status.planner_mode) })),
+    statusPill(status.llm_loaded ? "ok" : "muted", t("ui.statusPillModel", { status: status.llm_loaded ? t("ui.modelLoaded") : t("ui.modelNotLoaded") })),
     status.planner_mode === "llm"
       ? statusPill(
           status.planner_reachable ? "ok" : "bad",
-          `规划连通：${status.planner_reachable ? "正常" : "异常"}`,
+          t("ui.statusPillPlannerReachable", { status: status.planner_reachable ? t("ui.plannerNormal") : t("ui.plannerAbnormal") }),
         )
-      : statusPill("muted", "规划连通：规则模式"),
-    statusPill(status.runtime_connected ? "ok" : "bad", `运行时：${status.runtime_connected ? "已连接" : "离线"}`),
-    statusPill(status.real_h5ad_inspection ? "ok" : "muted", `h5ad 检查：${status.real_h5ad_inspection ? "真实" : "占位"}`),
-    statusPill(status.real_analysis_execution ? "ok" : "warn", `分析执行：${status.real_analysis_execution ? "真实" : "占位"}`),
+      : statusPill("muted", t("ui.plannerRuleMode")),
+    statusPill(status.runtime_connected ? "ok" : "bad", t("ui.statusPillRuntime", { status: status.runtime_connected ? t("ui.runtimeConnected") : t("ui.runtimeOffline") })),
+    statusPill(status.real_h5ad_inspection ? "ok" : "muted", t("ui.statusPillH5ad", { status: status.real_h5ad_inspection ? t("ui.h5adReal") : t("ui.h5adPlaceholder") })),
+    statusPill(status.real_analysis_execution ? "ok" : "warn", t("ui.statusPillAnalysis", { status: status.real_analysis_execution ? t("ui.analysisReal") : t("ui.analysisPlaceholder") })),
   ];
 
   const runtime = status.runtime || {};
@@ -560,12 +561,12 @@ function buildSystemStatusMarkup() {
 
   const cards = [
     renderSidebarCard({
-      title: "系统状态",
+      title: t("ui.systemStatus"),
       badge: statusPill(status.system_mode === "live" ? "ok" : "warn", formatSystemMode(status.system_mode)),
       body: `
         <div class="status-pills">${pills.join("")}</div>
         <div class="status-detail-grid">
-          <div class="kv"><span>运行模式</span><span>${escapeHTML(formatRuntimeMode(status.runtime_mode))}</span></div>
+          <div class="kv"><span>${escapeHTML(t("ui.runtimeMode"))}</span><span>${escapeHTML(formatRuntimeMode(status.runtime_mode))}</span></div>
         </div>
         ${
           notes.length
@@ -579,10 +580,10 @@ function buildSystemStatusMarkup() {
   if (status.executable_skills?.length) {
     cards.push(
       renderSidebarCard({
-        title: "可执行技能",
-        badge: statusPill("ok", `${status.executable_skills.length} 个`),
+        title: t("ui.executableSkills"),
+        badge: statusPill("ok", t("ui.skillCountBadge", { count: status.executable_skills.length })),
         body: `
-          <p class="muted">点击技能按钮会把建议指令填入输入框。</p>
+          <p class="muted">${escapeHTML(t("ui.clickSkillHint"))}</p>
           <div class="loaded-skill-grid">
             ${status.executable_skills
               .map(
@@ -609,11 +610,11 @@ function buildSystemStatusMarkup() {
   if (environmentChecks.length) {
     cards.push(
       renderSidebarCard({
-        title: "环境检查",
-        badge: failingChecks.length ? statusPill("bad", `失败 ${failingChecks.length}`) : statusPill("ok", "正常"),
+        title: t("ui.envCheck"),
+        badge: failingChecks.length ? statusPill("bad", t("ui.envFailed", { count: failingChecks.length })) : statusPill("ok", t("ui.envNormal")),
         body: `
           <div class="status-detail-grid compact">
-            <div class="kv"><span>Python</span><span>${escapeHTML(runtime.python_version || "未知")}</span></div>
+            <div class="kv"><span>Python</span><span>${escapeHTML(runtime.python_version || t("ui.unknown"))}</span></div>
           </div>
           ${
             failingChecks.length
@@ -624,14 +625,14 @@ function buildSystemStatusMarkup() {
                       (check) => `
                         <div class="status-check-failure">
                           <strong>${escapeHTML(check.name)}</strong>
-                          <p class="muted">${escapeHTML(check.detail || "未知错误")}</p>
+                          <p class="muted">${escapeHTML(check.detail || t("ui.unknownError"))}</p>
                         </div>
                       `,
                     )
                     .join("")}
                 </div>
               `
-              : `<p class="muted">运行时检查全部通过。</p>`
+              : `<p class="muted">${escapeHTML(t("ui.envAllPassed"))}</p>`
           }
         `,
       }),
@@ -648,9 +649,9 @@ function renderStatusOverviewEntry() {
     container.innerHTML = `
       <div class="status-overview-entry disabled">
         <div class="status-overview-copy">
-          <span class="status-overview-eyebrow">运行概览</span>
-          <strong>系统状态、技能与环境</strong>
-          <p class="muted">系统状态暂不可用。</p>
+          <span class="status-overview-eyebrow">${escapeHTML(t("ui.statusOverviewEyebrow"))}</span>
+          <strong>${escapeHTML(t("ui.statusOverviewTitle"))}</strong>
+          <p class="muted">${escapeHTML(t("ui.systemStatusUnavailable"))}</p>
         </div>
       </div>
     `;
@@ -670,22 +671,22 @@ function renderStatusOverviewEntry() {
       aria-controls="statusOverviewModal"
     >
       <div class="status-overview-copy">
-        <span class="status-overview-eyebrow">运行概览</span>
-        <strong>系统状态、技能与环境</strong>
+        <span class="status-overview-eyebrow">${escapeHTML(t("ui.statusOverviewEyebrow"))}</span>
+        <strong>${escapeHTML(t("ui.statusOverviewTitle"))}</strong>
       </div>
       <div class="status-overview-meta">
         ${statusPill(status.system_mode === "live" ? "ok" : "warn", formatSystemMode(status.system_mode))}
         ${
           status.planner_mode === "llm"
-            ? statusPill(status.planner_reachable ? "ok" : "bad", status.planner_reachable ? "规划器在线" : "规划器异常")
-            : statusPill("muted", "规则规划")
+            ? statusPill(status.planner_reachable ? "ok" : "bad", status.planner_reachable ? t("ui.plannerOnline") : t("ui.plannerOffline"))
+            : statusPill("muted", t("ui.rulePlanner"))
         }
-        ${statusPill(status.runtime_connected ? "ok" : "bad", status.runtime_connected ? "运行时在线" : "运行时离线")}
+        ${statusPill(status.runtime_connected ? "ok" : "bad", status.runtime_connected ? t("ui.runtimeOnline") : t("ui.runtimeOfflineShort"))}
         ${statusPill(
           failingChecks.length ? "bad" : "ok",
-          failingChecks.length ? `环境失败 ${failingChecks.length}` : "环境正常",
+          failingChecks.length ? t("ui.envFailedCount", { count: failingChecks.length }) : t("ui.envOk"),
         )}
-        ${statusPill(skillCount ? "ok" : "muted", `技能 ${skillCount}`)}
+        ${statusPill(skillCount ? "ok" : "muted", t("ui.skillCountShort", { count: skillCount }))}
       </div>
     </button>
   `;
@@ -714,10 +715,10 @@ function renderWorkspaceFilesEntry() {
   const objectCount = entries.filter((entry) => entry.type === "object").length;
   const artifactCount = entries.filter((entry) => entry.type === "artifact").length;
 
-  button.textContent = `查看 Workspace 文件 (${entries.length})`;
+  button.textContent = t("ui.viewWorkspaceFilesCount", { count: entries.length });
   button.title = entries.length
-    ? `${currentWorkspace?.label || "当前 workspace"} 中有 ${objectCount} 个 h5ad 文件、${artifactCount} 个结果文件`
-    : "当前 workspace 还没有可查看的文件";
+    ? t("ui.workspaceFilesTooltip", { label: currentWorkspace?.label || "workspace", objectCount, artifactCount })
+    : t("ui.workspaceFilesEmpty");
   button.disabled = !entries.length;
   button.onclick = entries.length ? openWorkspaceFilesModal : null;
 }
@@ -739,22 +740,22 @@ function renderWorkspaceNavigator() {
   container.innerHTML = `
     <div class="workspace-navigator-head">
       <div>
-        <div class="workspace-meta-eyebrow">工作区</div>
-        <div class="workspace-navigator-title">工作区列表</div>
+        <div class="workspace-meta-eyebrow">${escapeHTML(t("ui.workspaceSection"))}</div>
+        <div class="workspace-navigator-title">${escapeHTML(t("ui.workspaceList"))}</div>
       </div>
       <div class="workspace-meta-actions">
         <button
           id="newWorkspaceButton"
           type="button"
           class="ghost-button conversation-create-button"
-          title="新建独立工作区，适合换数据集或开始全新分析"
-        >新工作区</button>
+          title="${escapeAttribute(t("ui.newWorkspaceTitle"))}"
+        >${escapeHTML(t("ui.newWorkspaceButton"))}</button>
         <button
           type="button"
           class="ghost-button workspace-panel-toggle"
           data-toggle-panel="workspace-navigator"
           aria-expanded="${collapsed ? "false" : "true"}"
-        >${collapsed ? "展开" : "收起"}</button>
+        >${escapeHTML(collapsed ? t("ui.expand") : t("ui.collapse"))}</button>
       </div>
     </div>
     <div class="workspace-panel-body ${collapsed ? "collapsed" : ""}">
@@ -762,8 +763,8 @@ function renderWorkspaceNavigator() {
         workspaceList.length
           ? `
             <div class="workspace-collection-meta">
-              <span>${escapeHTML(`${workspaceList.length} 个工作区`)}</span>
-              ${workspaceList.length > 3 ? `<span>仅显示 3 条高度，可滚动查看更多</span>` : ""}
+              <span>${escapeHTML(t("ui.workspaceCount", { count: workspaceList.length }))}</span>
+              ${workspaceList.length > 3 ? `<span>${escapeHTML(t("ui.showOnly3Hint"))}</span>` : ""}
             </div>
             <div class="workspace-collection-scroll">
               <div class="workspace-list">
@@ -777,7 +778,7 @@ function renderWorkspaceNavigator() {
                       >
                         <span
                           class="workspace-chip-label"
-                          title="双击可重命名，右击可重命名或删除"
+                          title="${escapeAttribute(t("ui.dblclickRename"))}"
                         >${escapeHTML(item.label || item.id)}</span>
                         <span class="workspace-chip-id">${escapeHTML(item.id)}</span>
                       </button>
@@ -787,7 +788,7 @@ function renderWorkspaceNavigator() {
               </div>
             </div>
           `
-          : "<p class='muted'>当前还没有工作区。</p>"
+          : `<p class='muted'>${escapeHTML(t("ui.noWorkspaces"))}</p>`
       }
     </div>
   `;
@@ -808,20 +809,20 @@ function renderConsoleInfoBar() {
 
   const { session, workspace } = appState.snapshot;
   const currentWorkspace = appState.workspaceSnapshot?.workspace || workspace;
-  const datasetID = currentWorkspace?.dataset_id || session?.dataset_id || "未设置";
+  const datasetID = currentWorkspace?.dataset_id || session?.dataset_id || t("ui.notSet");
 
   container.innerHTML = `
     <div class="console-info-grid">
       <div class="workspace-identity-card">
         <span>Workspace</span>
-        <strong>${escapeHTML(currentWorkspace?.id || "未设置")}</strong>
+        <strong>${escapeHTML(currentWorkspace?.id || t("ui.notSet"))}</strong>
       </div>
       <div class="workspace-identity-card">
-        <span>当前对话</span>
-        <strong>${escapeHTML(session?.id || "未设置")}</strong>
+        <span>${escapeHTML(t("ui.currentConversation"))}</span>
+        <strong>${escapeHTML(session?.id || t("ui.notSet"))}</strong>
       </div>
       <div class="workspace-identity-card">
-        <span>数据集</span>
+        <span>${escapeHTML(t("ui.dataset"))}</span>
         <strong>${escapeHTML(datasetID)}</strong>
       </div>
     </div>
@@ -918,23 +919,23 @@ function renderSkillHub() {
   const bundles = appState.plugins || [];
   const enabledBundles = bundles.filter((bundle) => bundle.enabled);
   container.innerHTML = renderSidebarCard({
-    title: "Skill Hub",
+    title: t("ui.skillHub"),
     badge: statusPill(enabledBundles.length ? "ok" : "muted", `${enabledBundles.length}/${bundles.length || 0}`),
     open: false,
     body: `
-      <p class="muted">插件安装、启停和内置技能开关都已移到独立的 Skill Hub 页面统一管理。</p>
+      <p class="muted">${escapeHTML(t("ui.skillHubDesc"))}</p>
       <div class="plugin-summary-grid">
         <div class="plugin-summary-item">
           <strong>${enabledBundles.length}</strong>
-          <span>启用中的技能包</span>
+          <span>${escapeHTML(t("ui.enabledBundles"))}</span>
         </div>
         <div class="plugin-summary-item">
           <strong>${appState.skills.length}</strong>
-          <span>当前已加载技能</span>
+          <span>${escapeHTML(t("ui.loadedSkills"))}</span>
         </div>
       </div>
       <div class="plugin-hub-actions">
-        <a class="ghost-button button-link" href="/plugins.html">打开插件管理页</a>
+        <a class="ghost-button button-link" href="/plugins.html">${escapeHTML(t("ui.openPluginManager"))}</a>
       </div>
     `,
   });
@@ -952,13 +953,13 @@ async function renderWorkspaceFilesModal() {
   const currentWorkspace = appState.workspaceSnapshot?.workspace || appState.snapshot?.workspace || null;
   if (title) {
     title.textContent = currentWorkspace?.label
-      ? `当前 Workspace 文件 · ${currentWorkspace.label}`
-      : "当前 Workspace 输出文件";
+      ? t("ui.currentWorkspaceFiles", { label: currentWorkspace.label })
+      : t("ui.currentWorkspaceOutputFiles");
   }
   if (!entries.length) {
     container.innerHTML = `
       <div class="workspace-files-modal-empty">
-        <p class="muted">当前 workspace 还没有可查看的文件。</p>
+        <p class="muted">${escapeHTML(t("ui.workspaceFilesEmpty"))}</p>
       </div>
     `;
     return;
@@ -975,22 +976,22 @@ async function renderWorkspaceFilesModal() {
     <div class="workspace-files-modal-summary">
       <div class="workspace-summary-item">
         <strong>${entries.length}</strong>
-        <span>总文件数</span>
+        <span>${escapeHTML(t("ui.totalFiles"))}</span>
       </div>
       <div class="workspace-summary-item">
         <strong>${entries.filter((entry) => entry.type === "object").length}</strong>
-        <span>h5ad 文件</span>
+        <span>${escapeHTML(t("ui.h5adFiles"))}</span>
       </div>
       <div class="workspace-summary-item">
         <strong>${entries.filter((entry) => entry.type === "artifact").length}</strong>
-        <span>结果文件</span>
+        <span>${escapeHTML(t("ui.resultFiles"))}</span>
       </div>
     </div>
     <div class="workspace-files-modal-layout">
       <section class="workspace-files-modal-panel">
         <div class="workspace-files-modal-panel-head">
-          <strong>文件列表</strong>
-          <span class="muted">当前 workspace 产生的对象与结果</span>
+          <strong>${escapeHTML(t("ui.fileList"))}</strong>
+          <span class="muted">${escapeHTML(t("ui.fileListHint"))}</span>
         </div>
         <div class="workspace-files-modal-list">
           ${groups
@@ -1009,8 +1010,8 @@ async function renderWorkspaceFilesModal() {
       </section>
       <section class="workspace-files-modal-panel workspace-files-modal-detail-panel">
         <div class="workspace-files-modal-panel-head">
-          <strong>${escapeHTML(selectedResource?.label || selectedResource?.fileName || "文件详情")}</strong>
-          <span class="muted">${escapeHTML(selectedResource?.fileName || "选择一个文件查看详情")}</span>
+          <strong>${escapeHTML(selectedResource?.label || selectedResource?.fileName || t("ui.fileDetail"))}</strong>
+          <span class="muted">${escapeHTML(selectedResource?.fileName || t("ui.selectFileForDetail"))}</span>
         </div>
         <div class="workspace-files-modal-detail">
           ${detailMarkup}
@@ -1028,11 +1029,11 @@ async function renderWorkspaceFilesModal() {
 function buildWorkspaceFileGroups(entries) {
   return [
     {
-      title: "h5ad 文件",
+      title: t("ui.h5adFiles"),
       entries: entries.filter((entry) => entry.type === "object"),
     },
     {
-      title: "结果文件",
+      title: t("ui.resultFiles"),
       entries: entries.filter((entry) => entry.type === "artifact"),
     },
   ].filter((group) => group.entries.length);
@@ -1047,7 +1048,7 @@ function buildWorkspaceFileNodeMarkup(entry) {
     >
       <div class="resource-node-head">
         <span class="resource-node-title">${escapeHTML(entry.fileName)}</span>
-        ${entry.isActiveContext ? '<span class="resource-node-badge">当前上下文</span>' : ""}
+        ${entry.isActiveContext ? `<span class="resource-node-badge">${escapeHTML(t("ui.currentContextBadge"))}</span>` : ""}
       </div>
       <span class="label">${escapeHTML(entry.label)}</span>
       <span class="meta">${escapeHTML(entry.metaPrimary)}</span>
@@ -1099,7 +1100,7 @@ async function buildMessageNode(message, template) {
   }
   node.querySelector(".message-role").textContent =
     message.local_status === "sending"
-      ? `${formatRole(message.role)} · 发送中`
+      ? `${formatRole(message.role)} · ${t("ui.sending")}`
       : formatRole(message.role);
 
   const detailResult = await buildMessageDetailMarkup(message);
@@ -1145,15 +1146,15 @@ function buildMessageActionsMarkup(job) {
   const buttons = [];
   if (job.status === "failed" || job.status === "incomplete" || job.status === "canceled") {
     buttons.push(
-      `<button type="button" class="message-action-button retry-job-button" data-job-id="${escapeAttribute(job.id)}"${disabled}>重试</button>`,
+      `<button type="button" class="message-action-button retry-job-button" data-job-id="${escapeAttribute(job.id)}"${disabled}>${escapeHTML(t("ui.retryButton"))}</button>`,
     );
   }
   buttons.push(
-    `<button type="button" class="message-action-button edit-job-button" data-job-id="${escapeAttribute(job.id)}"${disabled}>编辑并重发</button>`,
+    `<button type="button" class="message-action-button edit-job-button" data-job-id="${escapeAttribute(job.id)}"${disabled}>${escapeHTML(t("ui.editResendButton"))}</button>`,
   );
   if (job.status === "succeeded" || job.status === "incomplete") {
     buttons.push(
-      `<button type="button" class="message-action-button regenerate-button" data-job-id="${escapeAttribute(job.id)}"${disabled}>重新生成</button>`,
+      `<button type="button" class="message-action-button regenerate-button" data-job-id="${escapeAttribute(job.id)}"${disabled}>${escapeHTML(t("ui.regenerateButton"))}</button>`,
     );
   }
   return buttons.join("");
@@ -1194,13 +1195,13 @@ function turnForMessage(message) {
 function formatTurnStatusLabel(status) {
   switch (status) {
     case "fulfilled":
-      return "本轮已完成";
+      return t("ui.turnFulfilled");
     case "failed":
-      return "本轮失败";
+      return t("ui.turnFailed");
     case "canceled":
-      return "已取消";
+      return t("ui.turnCanceled");
     default:
-      return "等待中";
+      return t("ui.turnPending");
   }
 }
 
@@ -1303,10 +1304,10 @@ function renderStructuredTableMarkup(table, options) {
 
   const truncation = [];
   if (totalRows > visibleRows) {
-    truncation.push(`前 ${visibleRows} 行 / 共 ${totalRows} 行`);
+    truncation.push(t("ui.truncationRows", { visible: visibleRows, total: totalRows }));
   }
   if (totalCols > visibleCols) {
-    truncation.push(`前 ${visibleCols} 列 / 共 ${totalCols} 列`);
+    truncation.push(t("ui.truncationCols", { visible: visibleCols, total: totalCols }));
   }
 
   return `
@@ -1325,14 +1326,14 @@ function renderStructuredTableMarkup(table, options) {
                         `<tr>${row.map((cell) => `<td>${escapeHTML(cell || "")}</td>`).join("")}</tr>`,
                     )
                     .join("")
-                : `<tr><td colspan="${visibleCols || 1}" class="message-table-empty">暂无数据行</td></tr>`
+                : `<tr><td colspan="${visibleCols || 1}" class="message-table-empty">${escapeHTML(t("ui.noDataRows"))}</td></tr>`
             }
           </tbody>
         </table>
       </div>
       ${
         truncation.length
-          ? `<div class="message-table-note">${escapeHTML(truncation.join("，"))}</div>`
+          ? `<div class="message-table-note">${escapeHTML(truncation.join(t("ui.truncationSeparator")))}</div>`
           : ""
       }
     </div>
@@ -1384,11 +1385,11 @@ function buildJobStatusMarkup(job) {
   return `
     <section class="message-job-card pending">
       <div class="message-job-head">
-        <strong>任务状态</strong>
+        <strong>${escapeHTML(t("ui.taskStatus"))}</strong>
         ${statusPill(statusKindForJob(job.status), formatJobStatus(job.status))}
       </div>
       ${buildJobPhasesMarkup(job)}
-      <p class="message-job-summary">${escapeHTML(job.summary || "请求已接收，等待规划器和运行时返回更新。")}</p>
+      <p class="message-job-summary">${escapeHTML(job.summary || t("ui.requestReceived"))}</p>
       ${buildCheckpointMarkup(job)}
       ${buildPlanMarkup(job)}
       ${
@@ -1427,14 +1428,14 @@ async function buildJobResultMarkup(job, assistantMessage, turn) {
   const showInlinePhases = job.status === "failed";
   const detailMarkup = buildJobExecutionDetailsMarkup(job, {
     phasesMarkup: showInlinePhases ? "" : phaseMarkup,
-    summaryLabel: showInlinePhases ? "查看任务详情" : "查看过程信息",
-    summaryHint: showInlinePhases ? "计划与执行记录" : "阶段、计划与执行记录",
+    summaryLabel: showInlinePhases ? t("ui.viewJobDetails") : t("ui.viewProcessInfo"),
+    summaryHint: showInlinePhases ? t("ui.planAndExecution") : t("ui.phasesPlanExecution"),
   });
 
   return `
     <section class="message-job-card ${cardClass}">
       <div class="message-job-head">
-        <strong>任务详情</strong>
+        <strong>${escapeHTML(t("ui.taskDetail"))}</strong>
         ${statusPill(statusKindForJob(job.status), formatJobStatus(job.status))}
       </div>
       ${showInlinePhases ? phaseMarkup : ""}
@@ -1480,7 +1481,7 @@ async function buildTurnResultMarkup(turn, assistantMessage) {
   return `
     <section class="message-job-card ${cardClass}">
       <div class="message-job-head">
-        <strong>结果详情</strong>
+        <strong>${escapeHTML(t("ui.resultDetail"))}</strong>
         ${statusPill(statusKindForTurn(turn.status), formatTurnStatusLabel(turn.status))}
       </div>
       ${
@@ -1503,7 +1504,7 @@ async function buildTurnResultGroupMarkup(turn, { fallbackJob = null } = {}) {
     <div class="message-artifact-group">
       <div class="message-artifact-head">
         <strong>${escapeHTML(turnResultGroupLabel(turn, resultCards.length))}</strong>
-        <span class="muted">${escapeHTML(`${resultCards.length} 项`)}</span>
+        <span class="muted">${escapeHTML(t("ui.itemCount", { count: resultCards.length }))}</span>
       </div>
       ${resultCards.join("")}
     </div>
@@ -1512,11 +1513,11 @@ async function buildTurnResultGroupMarkup(turn, { fallbackJob = null } = {}) {
 
 function turnResultGroupLabel(turn, count) {
   if (!count) {
-    return "结果内容";
+    return t("ui.resultContent");
   }
   const refs = turn?.result_refs || [];
   const artifactCount = refs.filter((ref) => ref.kind === "artifact").length;
-  return artifactCount === count ? "结果文件" : "结果内容";
+  return artifactCount === count ? t("ui.resultArtifacts") : t("ui.resultContent");
 }
 
 async function buildTurnResultCards(turn, { fallbackJob = null } = {}) {
@@ -1568,12 +1569,12 @@ function buildObjectResultCardMarkup(object, variant = "chat") {
   return `
     <section class="artifact-card artifact-card-${variant}">
       <div class="artifact-head">
-        <h3>${escapeHTML(object.label || object.id || "对象结果")}</h3>
+        <h3>${escapeHTML(object.label || object.id || t("ui.objectResult"))}</h3>
       </div>
-      <p class="muted">${escapeHTML(`${formatObjectKind(object.kind)} · ${object.n_obs || 0} 个细胞 · ${object.n_vars || 0} 个基因`)}</p>
-      <div class="kv"><span>对象 ID</span><span>${escapeHTML(object.id)}</span></div>
-      <div class="kv"><span>状态</span><span>${escapeHTML(formatObjectState(object.state))}</span></div>
-      <div class="kv"><span>当前上下文</span><span>${escapeHTML(object.id === appState.focusObjectId ? "是" : "否")}</span></div>
+      <p class="muted">${escapeHTML(`${formatObjectKind(object.kind)} · ${t("ui.cellCount", { count: object.n_obs || 0 })} · ${t("ui.geneCount", { count: object.n_vars || 0 })}`)}</p>
+      <div class="kv"><span>${escapeHTML(t("ui.objectId"))}</span><span>${escapeHTML(object.id)}</span></div>
+      <div class="kv"><span>${escapeHTML(t("ui.status"))}</span><span>${escapeHTML(formatObjectState(object.state))}</span></div>
+      <div class="kv"><span>${escapeHTML(t("ui.currentContext"))}</span><span>${escapeHTML(object.id === appState.focusObjectId ? t("ui.yes") : t("ui.no"))}</span></div>
     </section>
   `;
 }
@@ -1587,8 +1588,8 @@ function buildJobPhasesMarkup(job) {
   return `
     <div class="message-phase-group">
       <div class="message-checkpoint-head">
-        <strong>执行阶段</strong>
-        <span class="muted">${escapeHTML(`${phases.length} 个`)}</span>
+        <strong>${escapeHTML(t("ui.executionPhases"))}</strong>
+        <span class="muted">${escapeHTML(t("ui.phaseCount", { count: phases.length }))}</span>
       </div>
       <div class="message-phase-list">
         ${phases
@@ -1623,8 +1624,8 @@ function buildCheckpointMarkup(job) {
   return `
     <div class="message-checkpoint-group">
       <div class="message-checkpoint-head">
-        <strong>执行检查点</strong>
-        <span class="muted">${escapeHTML(`${checkpoints.length} 条`)}</span>
+        <strong>${escapeHTML(t("ui.executionCheckpoints"))}</strong>
+        <span class="muted">${escapeHTML(t("ui.checkpointCount", { count: checkpoints.length }))}</span>
       </div>
       <div class="message-checkpoint-list">
         ${checkpoints
@@ -1632,8 +1633,8 @@ function buildCheckpointMarkup(job) {
             (checkpoint) => `
               <div class="message-checkpoint-card">
                 <div class="message-checkpoint-title">
-                  <strong>${escapeHTML(checkpoint.title || "检查点")}</strong>
-                  ${statusPill(normalizeCheckpointTone(checkpoint.tone), checkpoint.label || "已记录")}
+                  <strong>${escapeHTML(checkpoint.title || t("ui.checkpoint"))}</strong>
+                  ${statusPill(normalizeCheckpointTone(checkpoint.tone), checkpoint.label || t("ui.recorded"))}
                 </div>
                 ${
                   checkpoint.summary
@@ -1658,7 +1659,7 @@ function buildCheckpointDebugMarkup(checkpoint) {
 
   return `
     <div class="message-debug-block">
-      <div class="message-debug-label">底层错误</div>
+      <div class="message-debug-label">${escapeHTML(t("ui.underlyingError"))}</div>
       <pre>${escapeHTML(rawError)}</pre>
     </div>
   `;
@@ -1666,13 +1667,13 @@ function buildCheckpointDebugMarkup(checkpoint) {
 
 function primaryJobErrorText(job) {
   const publicError = String(job?.error || "").trim();
-  if (publicError && publicError !== "本次执行失败，请稍后重试。") {
+  if (publicError && publicError !== t("ui.executionFailedRetry")) {
     return publicError;
   }
 
   const rawError = primaryJobRawError(job);
   if (rawError) {
-    return `失败原因：${rawError}`;
+    return t("ui.failureReason", { reason: rawError });
   }
 
   return publicError;
@@ -1721,8 +1722,8 @@ function shouldRenderJobSummary(job, assistantContent = "") {
 function buildJobExecutionDetailsMarkup(job, options = {}) {
   const {
     phasesMarkup = "",
-    summaryLabel = "查看任务详情",
-    summaryHint = "计划与执行记录",
+    summaryLabel = t("ui.viewJobDetails"),
+    summaryHint = t("ui.planAndExecution"),
   } = options;
   const checkpointsMarkup = buildCheckpointMarkup(job);
   const planMarkup = buildPlanMarkup(job);
@@ -1737,10 +1738,10 @@ function buildJobExecutionDetailsMarkup(job, options = {}) {
                     <strong>${escapeHTML(formatSkillName(step.skill))}</strong>
                     ${statusPill(statusKindForJob(step.status), formatJobStatus(step.status))}
                   </div>
-                  <p class="muted">${escapeHTML(step.summary || "未返回摘要。")}</p>
+                  <p class="muted">${escapeHTML(step.summary || t("ui.noSummaryReturned"))}</p>
                   ${
                     step.output_object_id
-                      ? `<div class="message-step-meta">输出对象：${escapeHTML(objectLabel(step.output_object_id))}</div>`
+                      ? `<div class="message-step-meta">${escapeHTML(t("ui.outputObject"))}${escapeHTML(objectLabel(step.output_object_id))}</div>`
                       : ""
                   }
                 </div>
@@ -1779,8 +1780,8 @@ function buildPlanMarkup(job) {
   return `
     <details class="message-plan-details">
       <summary>
-        <span>执行计划</span>
-        <span class="message-plan-summary">${escapeHTML(`${steps.length} 步`)}</span>
+        <span>${escapeHTML(t("ui.executionPlan"))}</span>
+        <span class="message-plan-summary">${escapeHTML(t("ui.stepCount", { count: steps.length }))}</span>
       </summary>
       <div class="message-plan-list">
         ${steps.map((step, index) => buildPlanStepMarkup(step, index)).join("")}
@@ -1792,20 +1793,20 @@ function buildPlanMarkup(job) {
 function buildPlanStepMarkup(step, index) {
   const params = step.params && Object.keys(step.params).length
     ? `<pre>${escapeHTML(JSON.stringify(step.params, null, 2))}</pre>`
-    : "<p class='muted'>无额外参数。</p>";
+    : `<p class='muted'>${escapeHTML(t("ui.noExtraParams"))}</p>`;
   const memoryRefs = step.memory_refs?.length
-    ? `<div class="kv"><span>记忆引用</span><span>${escapeHTML(step.memory_refs.join("、"))}</span></div>`
+    ? `<div class="kv"><span>${escapeHTML(t("ui.memoryRef"))}</span><span>${escapeHTML(step.memory_refs.join(t("ui.listSeparator")))}</span></div>`
     : "";
 
   return `
     <details class="message-plan-step">
       <summary>
-        <span>第 ${index + 1} 步 · ${escapeHTML(formatSkillName(step.skill))}</span>
+        <span>${escapeHTML(t("ui.stepN", { n: index + 1, skill: formatSkillName(step.skill) }))}</span>
         <span class="message-plan-step-target">${escapeHTML(formatPlanTarget(step.target_object_id))}</span>
       </summary>
       <div class="message-plan-step-body">
-        <div class="kv"><span>技能</span><span>${escapeHTML(step.skill || "未知")}</span></div>
-        <div class="kv"><span>目标</span><span>${escapeHTML(formatPlanTarget(step.target_object_id))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.skillLabel"))}</span><span>${escapeHTML(step.skill || t("ui.unknown"))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.target"))}</span><span>${escapeHTML(formatPlanTarget(step.target_object_id))}</span></div>
         ${memoryRefs}
         ${params}
       </div>
@@ -1821,7 +1822,7 @@ function buildSelectedResourceDetailBlocks({ includeWorkingMemory = true } = {})
   if (includeWorkingMemory) {
     blocks.push(
       renderSidebarCard({
-        title: "Working Memory",
+        title: t("ui.workingMemory"),
         open: true,
         body: renderWorkingMemoryMarkup(appState.snapshot?.working_memory),
       }),
@@ -1831,8 +1832,8 @@ function buildSelectedResourceDetailBlocks({ includeWorkingMemory = true } = {})
   if (!resource && !object) {
     blocks.push(
       renderSidebarCard({
-        title: "文件详情",
-        body: "<p class='muted'>当前工作区还没有可查看的文件。</p>",
+        title: t("ui.fileDetail"),
+        body: `<p class='muted'>${escapeHTML(t("ui.noFiles"))}</p>`,
       }),
     );
     return blocks;
@@ -1846,17 +1847,17 @@ function buildSelectedResourceDetailBlocks({ includeWorkingMemory = true } = {})
       renderSidebarCard({
         title: resource.fileName,
         body: `
-          <div class="kv"><span>文件标题</span><span>${escapeHTML(artifact.title || resource.fileName)}</span></div>
-          <div class="kv"><span>类型</span><span>${escapeHTML(formatArtifactKind(artifact.kind))}</span></div>
-          <div class="kv"><span>内容类型</span><span>${escapeHTML(artifact.content_type || "未记录")}</span></div>
-          <div class="kv"><span>文件路径</span><span>${escapeHTML(artifact.path || "未记录")}</span></div>
-          <div class="kv"><span>关联对象</span><span>${escapeHTML(linkedObject?.label || artifact.object_id || "无")}</span></div>
-          <div class="kv"><span>关联任务</span><span>${escapeHTML(artifact.job_id || "无")}</span></div>
-          <div class="kv"><span>摘要</span><span>${escapeHTML(artifact.summary || "无")}</span></div>
-          <div class="kv"><span>操作</span><span>${
+          <div class="kv"><span>${escapeHTML(t("ui.fileTitle"))}</span><span>${escapeHTML(artifact.title || resource.fileName)}</span></div>
+          <div class="kv"><span>${escapeHTML(t("ui.type"))}</span><span>${escapeHTML(formatArtifactKind(artifact.kind))}</span></div>
+          <div class="kv"><span>${escapeHTML(t("ui.contentType"))}</span><span>${escapeHTML(artifact.content_type || t("ui.notRecorded"))}</span></div>
+          <div class="kv"><span>${escapeHTML(t("ui.filePath"))}</span><span>${escapeHTML(artifact.path || t("ui.notRecorded"))}</span></div>
+          <div class="kv"><span>${escapeHTML(t("ui.linkedObject"))}</span><span>${escapeHTML(linkedObject?.label || artifact.object_id || t("ui.none"))}</span></div>
+          <div class="kv"><span>${escapeHTML(t("ui.linkedJob"))}</span><span>${escapeHTML(artifact.job_id || t("ui.none"))}</span></div>
+          <div class="kv"><span>${escapeHTML(t("ui.summary"))}</span><span>${escapeHTML(artifact.summary || t("ui.none"))}</span></div>
+          <div class="kv"><span>${escapeHTML(t("ui.actions"))}</span><span>${
             artifactURL
-              ? `<a class="inline-link" href="${artifactURL}" target="_blank" rel="noreferrer">打开</a> · <a class="inline-link" href="${artifactURL}" download>下载</a>`
-              : "暂不可用"
+              ? `<a class="inline-link" href="${artifactURL}" target="_blank" rel="noreferrer">${escapeHTML(t("ui.open"))}</a> · <a class="inline-link" href="${artifactURL}" download>${escapeHTML(t("ui.download"))}</a>`
+              : escapeHTML(t("ui.notAvailable"))
           }</span></div>
         `,
       }),
@@ -1864,12 +1865,12 @@ function buildSelectedResourceDetailBlocks({ includeWorkingMemory = true } = {})
     if (linkedObject) {
       blocks.push(
         renderSidebarCard({
-          title: "关联对象",
+          title: t("ui.linkedObjectCard"),
           body: `
-            <div class="kv"><span>名称</span><span>${escapeHTML(linkedObject.label)}</span></div>
-            <div class="kv"><span>类型</span><span>${escapeHTML(formatObjectKind(linkedObject.kind))}</span></div>
-            <div class="kv"><span>细胞数</span><span>${escapeHTML(String(linkedObject.n_obs))}</span></div>
-            <div class="kv"><span>状态</span><span>${escapeHTML(formatObjectState(linkedObject.state))}</span></div>
+            <div class="kv"><span>${escapeHTML(t("ui.name"))}</span><span>${escapeHTML(linkedObject.label)}</span></div>
+            <div class="kv"><span>${escapeHTML(t("ui.type"))}</span><span>${escapeHTML(formatObjectKind(linkedObject.kind))}</span></div>
+            <div class="kv"><span>${escapeHTML(t("ui.cellCountLabel"))}</span><span>${escapeHTML(String(linkedObject.n_obs))}</span></div>
+            <div class="kv"><span>${escapeHTML(t("ui.status"))}</span><span>${escapeHTML(formatObjectState(linkedObject.state))}</span></div>
           `,
         }),
       );
@@ -1918,20 +1919,20 @@ function appendObjectInspectorCards(blocks, object, { title } = {}) {
     renderSidebarCard({
       title: title || object.label,
       body: `
-        <div class="kv"><span>对象名称</span><span>${escapeHTML(object.label)}</span></div>
-        <div class="kv"><span>当前上下文</span><span>${escapeHTML(object.id === appState.focusObjectId ? "是" : "否")}</span></div>
-        <div class="kv"><span>对象 ID</span><span>${escapeHTML(object.id)}</span></div>
-        <div class="kv"><span>类型</span><span>${escapeHTML(formatObjectKind(object.kind))}</span></div>
-        <div class="kv"><span>父对象</span><span>${escapeHTML(object.parent_id || "无")}</span></div>
-        <div class="kv"><span>后端引用</span><span>${escapeHTML(object.backend_ref)}</span></div>
-        <div class="kv"><span>细胞数</span><span>${escapeHTML(String(object.n_obs))}</span></div>
-        <div class="kv"><span>基因数</span><span>${escapeHTML(String(object.n_vars))}</span></div>
-        <div class="kv"><span>状态</span><span>${escapeHTML(formatObjectState(object.state))}</span></div>
-        <div class="kv"><span>文件路径</span><span>${escapeHTML(object.materialized_path || "尚未生成")}</span></div>
-        <div class="kv"><span>下载</span><span>${
+        <div class="kv"><span>${escapeHTML(t("ui.objectName"))}</span><span>${escapeHTML(object.label)}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.currentContext"))}</span><span>${escapeHTML(object.id === appState.focusObjectId ? t("ui.yes") : t("ui.no"))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.objectId"))}</span><span>${escapeHTML(object.id)}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.type"))}</span><span>${escapeHTML(formatObjectKind(object.kind))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.parentObject"))}</span><span>${escapeHTML(object.parent_id || t("ui.none"))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.backendRef"))}</span><span>${escapeHTML(object.backend_ref)}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.cellCountLabel"))}</span><span>${escapeHTML(String(object.n_obs))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.geneCountLabel"))}</span><span>${escapeHTML(String(object.n_vars))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.status"))}</span><span>${escapeHTML(formatObjectState(object.state))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.materializedPath"))}</span><span>${escapeHTML(object.materialized_path || t("ui.notGenerated"))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.download"))}</span><span>${
           object.materialized_url
-            ? `<a class="inline-link" href="${object.materialized_url}" download>获取 h5ad</a>`
-            : "暂不可用"
+            ? `<a class="inline-link" href="${object.materialized_url}" download>${escapeHTML(t("ui.getH5ad"))}</a>`
+            : escapeHTML(t("ui.notAvailable"))
         }</span></div>
       `,
     }),
@@ -1939,26 +1940,26 @@ function appendObjectInspectorCards(blocks, object, { title } = {}) {
 
   blocks.push(
     renderSidebarCard({
-      title: "数据集评估",
+      title: t("ui.datasetAssessment"),
       body: `
-        <div class="kv"><span>状态</span><span>${escapeHTML(formatAnalysisState(assessment.preprocessing_state))}</span></div>
-        <div class="kv"><span>矩阵层</span><span>${escapeHTML(formatList(metadata.layer_keys))}</span></div>
-        <div class="kv"><span>Obs 字段</span><span>${escapeHTML(formatList(metadata.obs_fields))}</span></div>
-        <div class="kv"><span>Var 字段</span><span>${escapeHTML(formatList(metadata.var_fields))}</span></div>
-        <div class="kv"><span>嵌入</span><span>${escapeHTML(formatList(metadata.obsm_keys))}</span></div>
-        <div class="kv"><span>Uns 键</span><span>${escapeHTML(formatList(metadata.uns_keys))}</span></div>
-        <div class="kv"><span>细胞类型</span><span>${escapeHTML(formatAnnotation(cellType))}</span></div>
-        <div class="kv"><span>聚类</span><span>${escapeHTML(formatAnnotation(cluster))}</span></div>
-        <div class="kv"><span>可执行分析</span><span>${escapeHTML(formatSkillList(assessment.available_analyses))}</span></div>
-        <div class="kv"><span>缺失条件</span><span>${escapeHTML(formatList(assessment.missing_requirements))}</span></div>
-        <div class="kv"><span>建议下一步</span><span>${escapeHTML(formatList(assessment.suggested_next_steps))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.status"))}</span><span>${escapeHTML(formatAnalysisState(assessment.preprocessing_state))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.matrixLayers"))}</span><span>${escapeHTML(formatList(metadata.layer_keys))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.obsFields"))}</span><span>${escapeHTML(formatList(metadata.obs_fields))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.varFields"))}</span><span>${escapeHTML(formatList(metadata.var_fields))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.embeddings"))}</span><span>${escapeHTML(formatList(metadata.obsm_keys))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.unsKeys"))}</span><span>${escapeHTML(formatList(metadata.uns_keys))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.cellType"))}</span><span>${escapeHTML(formatAnnotation(cellType))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.clustering"))}</span><span>${escapeHTML(formatAnnotation(cluster))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.availableAnalyses"))}</span><span>${escapeHTML(formatSkillList(assessment.available_analyses))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.missingRequirements"))}</span><span>${escapeHTML(formatList(assessment.missing_requirements))}</span></div>
+        <div class="kv"><span>${escapeHTML(t("ui.suggestedNextSteps"))}</span><span>${escapeHTML(formatList(assessment.suggested_next_steps))}</span></div>
       `,
     }),
   );
 
   blocks.push(
     renderSidebarCard({
-      title: "注释候选字段",
+      title: t("ui.annotationCandidates"),
       body: categorical.length
         ? categorical
             .slice(0, 8)
@@ -1966,36 +1967,36 @@ function appendObjectInspectorCards(blocks, object, { title } = {}) {
               (item) => `
                 <div class="kv">
                   <span>${escapeHTML(item.field)}</span>
-                  <span>${escapeHTML(`${formatAnnotationRole(item.role)} · ${item.n_categories} 组 · ${(item.sample_values || []).join("、")}`)}</span>
+                  <span>${escapeHTML(`${formatAnnotationRole(item.role)} · ${item.n_categories} ${t("ui.groups")} · ${(item.sample_values || []).join(t("ui.listSeparator"))}`)}</span>
                 </div>
               `,
             )
             .join("")
-        : "<p class='muted'>暂未发现分类 obs 字段。</p>",
+        : `<p class='muted'>${escapeHTML(t("ui.noCategoricalFields"))}</p>`,
     }),
   );
 
   blocks.push(
     renderSidebarCard({
-      title: "最近任务",
+      title: t("ui.recentJobs"),
       body: relatedJobs.length
         ? relatedJobs
             .slice(-3)
             .reverse()
             .map(
               (job) => `
-                <div class="kv"><span>${escapeHTML(formatJobStatus(job.status))}</span><span>${escapeHTML(job.summary || "等待中...")}</span></div>
+                <div class="kv"><span>${escapeHTML(formatJobStatus(job.status))}</span><span>${escapeHTML(job.summary || t("ui.waiting"))}</span></div>
               `,
             )
             .join("")
-        : "<p class='muted'>这个对象还没有关联任务。</p>",
+        : `<p class='muted'>${escapeHTML(t("ui.noRelatedJobs"))}</p>`,
     }),
   );
 }
 
 function renderWorkingMemoryMarkup(memory) {
   if (!memory) {
-    return "<p class='muted'>当前还没有 working memory。</p>";
+    return `<p class='muted'>${escapeHTML(t("ui.noWorkingMemory"))}</p>`;
   }
 
   const focus = memory.focus;
@@ -2005,20 +2006,20 @@ function renderWorkingMemoryMarkup(memory) {
 
   const sections = [];
   sections.push(`
-    <div class="workspace-section-label">当前焦点</div>
+    <div class="workspace-section-label">${escapeHTML(t("ui.currentFocus"))}</div>
     ${
       focus
         ? `
-          <div class="kv"><span>当前对象</span><span>${escapeHTML(focus.focus_object_label || focus.focus_object_id || "无")}</span></div>
-          <div class="kv"><span>最近输出对象</span><span>${escapeHTML(focus.last_output_object_label || focus.last_output_object_id || "无")}</span></div>
-          <div class="kv"><span>最近结果</span><span>${escapeHTML(focus.last_artifact_title || focus.last_artifact_id || "无")}</span></div>
+          <div class="kv"><span>${escapeHTML(t("ui.currentObjectLabel"))}</span><span>${escapeHTML(focus.focus_object_label || focus.focus_object_id || t("ui.none"))}</span></div>
+          <div class="kv"><span>${escapeHTML(t("ui.lastOutputObject"))}</span><span>${escapeHTML(focus.last_output_object_label || focus.last_output_object_id || t("ui.none"))}</span></div>
+          <div class="kv"><span>${escapeHTML(t("ui.lastResult"))}</span><span>${escapeHTML(focus.last_artifact_title || focus.last_artifact_id || t("ui.none"))}</span></div>
         `
-        : "<p class='muted'>暂无焦点信息。</p>"
+        : `<p class='muted'>${escapeHTML(t("ui.noFocus"))}</p>`
     }
   `);
 
   sections.push(`
-    <div class="workspace-section-label">确认偏好</div>
+    <div class="workspace-section-label">${escapeHTML(t("ui.confirmedPreferences"))}</div>
     ${
       confirmedPreferences.length
         ? confirmedPreferences
@@ -2031,12 +2032,12 @@ function renderWorkingMemoryMarkup(memory) {
               `,
             )
             .join("")
-        : "<p class='muted'>暂无确认偏好。</p>"
+        : `<p class='muted'>${escapeHTML(t("ui.noConfirmedPreferences"))}</p>`
     }
   `);
 
   sections.push(`
-    <div class="workspace-section-label">最近结果引用</div>
+    <div class="workspace-section-label">${escapeHTML(t("ui.recentArtifactRefs"))}</div>
     ${
       recentArtifacts.length
         ? recentArtifacts
@@ -2044,17 +2045,17 @@ function renderWorkingMemoryMarkup(memory) {
               (artifact) => `
                 <div class="kv">
                   <span>${escapeHTML(artifact.kind || "artifact")}</span>
-                  <span>${escapeHTML(artifact.title || artifact.id || "未命名结果")}</span>
+                  <span>${escapeHTML(artifact.title || artifact.id || t("ui.unnamedResult"))}</span>
                 </div>
               `,
             )
             .join("")
-        : "<p class='muted'>暂无最近结果引用。</p>"
+        : `<p class='muted'>${escapeHTML(t("ui.noRecentArtifacts"))}</p>`
     }
   `);
 
   sections.push(`
-    <div class="workspace-section-label">语义状态变更</div>
+    <div class="workspace-section-label">${escapeHTML(t("ui.semanticStateChanges"))}</div>
     ${
       stateChanges.length
         ? stateChanges
@@ -2062,12 +2063,12 @@ function renderWorkingMemoryMarkup(memory) {
               (change) => `
                 <div class="kv">
                   <span>${escapeHTML(change.kind || "change")}</span>
-                  <span>${escapeHTML(change.summary || change.object_label || change.artifact_title || change.skill || "已记录")}</span>
+                  <span>${escapeHTML(change.summary || change.object_label || change.artifact_title || change.skill || t("ui.recorded"))}</span>
                 </div>
               `,
             )
             .join("")
-        : "<p class='muted'>暂无语义状态变更。</p>"
+        : `<p class='muted'>${escapeHTML(t("ui.noStateChanges"))}</p>`
     }
   `);
 
@@ -2110,8 +2111,8 @@ async function buildArtifactCardMarkup(artifact, variant = "chat") {
       <div class="artifact-head">
         <h3>${escapeHTML(artifact.title)}</h3>
         <div class="artifact-actions">
-          <a class="inline-link" href="${artifactURL}" target="_blank" rel="noreferrer">打开</a>
-          <a class="inline-link" href="${artifactURL}" download>下载</a>
+          <a class="inline-link" href="${artifactURL}" target="_blank" rel="noreferrer">${escapeHTML(t("ui.open"))}</a>
+          <a class="inline-link" href="${artifactURL}" download>${escapeHTML(t("ui.download"))}</a>
         </div>
       </div>
       ${body}
@@ -2122,7 +2123,7 @@ async function buildArtifactCardMarkup(artifact, variant = "chat") {
 function renderDelimitedArtifactPreviewMarkup(artifact, text) {
   const table = parseDelimitedTableBlock(text, artifactDelimiterHint(artifact));
   if (!table) {
-    return "<p class='muted'>无法生成表格预览，请下载查看。</p>";
+    return `<p class='muted'>${escapeHTML(t("ui.cannotPreviewTable"))}</p>`;
   }
   return renderStructuredTableMarkup(table, artifactTablePreviewOptions);
 }
@@ -2165,7 +2166,7 @@ async function getArtifactTextPreview(artifact) {
     appState.artifactTextCache.set(artifact.id, text);
     return text;
   } catch (error) {
-    const fallback = `无法加载预览：${error.message}`;
+    const fallback = t("ui.cannotLoadPreview", { message: error.message });
     appState.artifactTextCache.set(artifact.id, fallback);
     return fallback;
   }
@@ -2205,7 +2206,7 @@ function bindRetryButtons(container) {
       const jobId = button.dataset.jobId;
       if (jobId) {
         button.disabled = true;
-        button.textContent = "重试中…";
+        button.textContent = t("ui.retrying");
         renderActions.retryJob(jobId);
       }
     });
@@ -2218,7 +2219,7 @@ function bindRegenerateButtons(container) {
       const jobId = button.dataset.jobId;
       if (jobId) {
         button.disabled = true;
-        button.textContent = "重新生成中…";
+        button.textContent = t("ui.regenerating");
         renderActions.regenerateResponse(jobId);
       }
     });
@@ -2312,8 +2313,10 @@ function buildObjectFileEntry(object) {
     resourceKey: `object:${object.id}`,
     fileName: resourceBasename(location) || `${object.label || object.id}.h5ad`,
     label: object.label || object.id,
-    metaPrimary: `${formatObjectKind(object.kind)} · ${object.n_obs} 个细胞`,
-    metaSecondary: `${formatObjectState(object.state)}${parent ? ` · 来自 ${parent.label}` : ""}`,
+    metaPrimary: `${formatObjectKind(object.kind)} · ${t("ui.cellCount", { count: object.n_obs })}`,
+    metaSecondary: parent
+      ? `${formatObjectState(object.state)} · ${t("ui.fromLabel")} ${parent.label}`
+      : formatObjectState(object.state),
     createdAt: object.last_accessed_at || object.created_at || "",
     isActiveContext: object.id === appState.focusObjectId,
     locationKey: normalizeResourceLocation(location),
@@ -2335,9 +2338,9 @@ function buildArtifactFileEntry(artifact) {
     type: "artifact",
     resourceKey: `artifact:${artifact.id}`,
     fileName: resourceBasename(location) || artifact.id || "artifact",
-    label: artifact.title || resourceBasename(location) || artifact.id || "未命名结果",
-    metaPrimary: `${formatArtifactKind(artifact.kind)} · ${linkedObject?.label || artifact.object_id || "未关联对象"}`,
-    metaSecondary: artifact.summary || artifact.content_type || "结果文件",
+    label: artifact.title || resourceBasename(location) || artifact.id || t("ui.unnamedResultLabel"),
+    metaPrimary: `${formatArtifactKind(artifact.kind)} · ${linkedObject?.label || artifact.object_id || t("ui.unlinkedObject")}`,
+    metaSecondary: artifact.summary || artifact.content_type || t("ui.resultFiles"),
     createdAt: artifact.created_at || "",
     isActiveContext: false,
     locationKey: normalizeResourceLocation(location),

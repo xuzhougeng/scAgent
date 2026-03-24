@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from i18n import t
+
 from .base import SkillExecutionContext
 from .common import require_target
 
@@ -23,7 +25,7 @@ def plot_umap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         except RuntimeError:
             color_by = ""
     if color_by and color_by not in adata.obs.columns:
-        raise RuntimeError(f"`{color_by}` 不是 obs 字段；如果要按基因表达着色，请使用 plot_gene_umap。")
+        raise RuntimeError(t("error.plotUmapNotObsField", field=color_by))
     if color_by and legend_loc_param == "":
         series = adata.obs[color_by]
         if getattr(series.dtype, "kind", "") not in {"i", "u", "f"}:
@@ -44,22 +46,22 @@ def plot_umap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         figure_height=figure_height,
     )
 
-    summary_bits = [f"已为 {target.label} 生成真实 UMAP 图。"]
+    summary_bits = [t("runtime.plotUmapSummary", label=target.label)]
     if color_by:
-        summary_bits.append(f"着色字段：{color_by}。")
+        summary_bits.append(t("runtime.plotUmapColorBy", color_by=color_by))
     if legend_loc != "best":
-        summary_bits.append(f"图例位置：{legend_loc}。")
+        summary_bits.append(t("runtime.plotUmapLegendLoc", legend_loc=legend_loc))
     if title:
-        summary_bits.append(f"标题：{title}。")
+        summary_bits.append(t("runtime.plotUmapTitle", title=title))
     return {
         "summary": "".join(summary_bits),
         "artifacts": [
             {
                 "kind": "plot",
-                "title": f"{target.label} 的 UMAP 图",
+                "title": t("runtime.plotUmapArtifactTitle", label=target.label),
                 "path": str(path),
                 "content_type": "image/png",
-                "summary": f"{target.label} 的真实 UMAP 散点图。",
+                "summary": t("runtime.plotUmapArtifactSummary", label=target.label),
             }
         ],
         "metadata": {
@@ -80,7 +82,7 @@ def plot_gene_umap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     adata = state._load_adata(target)
     requested_genes = state._normalize_gene_list(ctx.params.get("genes"))
     if not requested_genes:
-        raise RuntimeError("plot_gene_umap 需要至少一个基因。")
+        raise RuntimeError(t("error.plotGeneUmapNoGenes"))
 
     layer_name = str(ctx.params.get("layer") or "").strip() or None
     artifacts: list[dict[str, Any]] = []
@@ -92,10 +94,10 @@ def plot_gene_umap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         artifacts.append(
             {
                 "kind": "plot",
-                "title": f"{target.label} 的 {display_gene} 基因 UMAP",
+                "title": t("runtime.plotGeneUmapArtifactTitle", label=target.label, gene=display_gene),
                 "path": str(path),
                 "content_type": "image/png",
-                "summary": f"{target.label} 中 {display_gene} 的真实基因表达 UMAP 图。",
+                "summary": t("runtime.plotGeneUmapArtifactSummary", label=target.label, gene=display_gene),
             }
         )
         resolved_genes.append(
@@ -106,9 +108,9 @@ def plot_gene_umap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
             }
         )
 
-    summary_bits = [f"已为 {target.label} 生成 {len(artifacts)} 个基因 UMAP 图：{state.format_list_zh(requested_genes)}。"]
+    summary_bits = [t("runtime.plotGeneUmapSummary", label=target.label, count=len(artifacts), genes=state.format_list_zh(requested_genes))]
     if layer_name:
-        summary_bits.append(f"使用 layer：{layer_name}。")
+        summary_bits.append(t("runtime.plotGeneUmapLayer", layer=layer_name))
     return {
         "summary": "".join(summary_bits),
         "artifacts": artifacts,
@@ -164,18 +166,18 @@ def plot_dotplot(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         palette=palette,
     )
 
-    summary_bits = [f"已为 {target.label} 生成 dotplot（groupby={groupby}，基因：{state.format_list_zh(gene_labels)}）。"]
+    summary_bits = [t("runtime.plotDotplotSummary", label=target.label, groupby=groupby, genes=state.format_list_zh(gene_labels))]
     if missing_genes:
-        summary_bits.append(f"未命中的基因：{state.format_list_zh(missing_genes)}。")
+        summary_bits.append(t("runtime.missingGenes", genes=state.format_list_zh(missing_genes)))
     return {
         "summary": "".join(summary_bits),
         "artifacts": [
             {
                 "kind": "plot",
-                "title": f"{target.label} 的 dotplot",
+                "title": t("runtime.plotDotplotArtifactTitle", label=target.label),
                 "path": str(path),
                 "content_type": "image/png",
-                "summary": f"{target.label} 按 {groupby} 汇总的 dotplot。",
+                "summary": t("runtime.plotDotplotArtifactSummary", label=target.label, groupby=groupby),
             }
         ],
         "metadata": {
@@ -199,7 +201,7 @@ def plot_violin(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     requested_groupby = str(ctx.params.get("groupby") or "").strip()
     if requested_groupby:
         if requested_groupby not in adata.obs.columns:
-            raise RuntimeError(f"当前对象缺少 obs 字段 `{requested_groupby}`。")
+            raise RuntimeError(t("error.missingObsField", field=requested_groupby))
         groupby = requested_groupby
     else:
         try:
@@ -237,20 +239,20 @@ def plot_violin(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         palette=palette,
     )
 
-    summary_bits = [f"已为 {target.label} 生成小提琴图（基因：{state.format_list_zh([item['requested'] for item in resolved_genes])}）。"]
+    summary_bits = [t("runtime.plotViolinSummary", label=target.label, genes=state.format_list_zh([item['requested'] for item in resolved_genes]))]
     if groupby:
-        summary_bits.append(f"分组字段：{groupby}。")
+        summary_bits.append(t("runtime.plotViolinGroupby", groupby=groupby))
     if missing_genes:
-        summary_bits.append(f"未命中的基因：{state.format_list_zh(missing_genes)}。")
+        summary_bits.append(t("runtime.missingGenes", genes=state.format_list_zh(missing_genes)))
     return {
         "summary": "".join(summary_bits),
         "artifacts": [
             {
                 "kind": "plot",
-                "title": f"{target.label} 的小提琴图",
+                "title": t("runtime.plotViolinArtifactTitle", label=target.label),
                 "path": str(path),
                 "content_type": "image/png",
-                "summary": f"{target.label} 的基因表达小提琴图。",
+                "summary": t("runtime.plotViolinArtifactSummary", label=target.label),
             }
         ],
         "metadata": {
@@ -275,7 +277,7 @@ def plot_heatmap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
     requested_groupby = str(ctx.params.get("groupby") or "").strip()
     if requested_groupby:
         if requested_groupby not in adata.obs.columns:
-            raise RuntimeError(f"当前对象缺少 obs 字段 `{requested_groupby}`。")
+            raise RuntimeError(t("error.missingObsField", field=requested_groupby))
         groupby = requested_groupby
     else:
         try:
@@ -313,20 +315,20 @@ def plot_heatmap(state: Any, ctx: SkillExecutionContext) -> dict[str, Any]:
         palette=palette,
     )
 
-    summary_bits = [f"已为 {target.label} 生成热图（基因：{state.format_list_zh([item['requested'] for item in resolved_genes])}）。"]
+    summary_bits = [t("runtime.plotHeatmapSummary", label=target.label, genes=state.format_list_zh([item['requested'] for item in resolved_genes]))]
     if groupby:
-        summary_bits.append(f"分组字段：{groupby}。")
+        summary_bits.append(t("runtime.plotHeatmapGroupby", groupby=groupby))
     if missing_genes:
-        summary_bits.append(f"未命中的基因：{state.format_list_zh(missing_genes)}。")
+        summary_bits.append(t("runtime.missingGenes", genes=state.format_list_zh(missing_genes)))
     return {
         "summary": "".join(summary_bits),
         "artifacts": [
             {
                 "kind": "plot",
-                "title": f"{target.label} 的热图",
+                "title": t("runtime.plotHeatmapArtifactTitle", label=target.label),
                 "path": str(path),
                 "content_type": "image/png",
-                "summary": f"{target.label} 的基因表达热图。",
+                "summary": t("runtime.plotHeatmapArtifactSummary", label=target.label),
             }
         ],
         "metadata": {
@@ -346,11 +348,11 @@ def plot_celltype_composition(state: Any, ctx: SkillExecutionContext) -> dict[st
     groupby = str(ctx.params.get("groupby") or "").strip()
     split_by = str(ctx.params.get("split_by") or "").strip()
     if groupby == "" or split_by == "":
-        raise RuntimeError("plot_celltype_composition 需要 groupby 和 split_by。")
+        raise RuntimeError(t("error.compositionMissingParams"))
     if groupby not in adata.obs.columns:
-        raise RuntimeError(f"当前对象缺少 obs 字段 `{groupby}`。")
+        raise RuntimeError(t("error.missingObsField", field=groupby))
     if split_by not in adata.obs.columns:
-        raise RuntimeError(f"当前对象缺少 obs 字段 `{split_by}`。")
+        raise RuntimeError(t("error.missingObsField", field=split_by))
 
     composition = pd.crosstab(
         adata.obs[split_by].astype(str),
@@ -358,20 +360,20 @@ def plot_celltype_composition(state: Any, ctx: SkillExecutionContext) -> dict[st
         normalize="index",
     ) * 100.0
     if composition.empty:
-        raise RuntimeError("plot_celltype_composition 没有可绘制的数据。")
+        raise RuntimeError(t("error.compositionNoData"))
 
     title = str(ctx.params.get("title") or "").strip() or None
     path = state._plot_path(ctx.workspace_root, ctx.skill, target.label, ctx.request_id)
     state._save_stacked_bar_plot(path, composition, title=title)
     return {
-        "summary": f"已为 {target.label} 生成组成图（groupby={groupby}，split_by={split_by}）。",
+        "summary": t("runtime.plotCompositionSummary", label=target.label, groupby=groupby, split_by=split_by),
         "artifacts": [
             {
                 "kind": "plot",
-                "title": f"{target.label} 的组成图",
+                "title": t("runtime.plotCompositionArtifactTitle", label=target.label),
                 "path": str(path),
                 "content_type": "image/png",
-                "summary": f"{target.label} 按 {split_by} 分层的 {groupby} 组成图。",
+                "summary": t("runtime.plotCompositionArtifactSummary", label=target.label, split_by=split_by, groupby=groupby),
             }
         ],
         "metadata": {

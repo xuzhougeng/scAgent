@@ -12,6 +12,7 @@ RUNTIME_DIR = Path(__file__).resolve().parent
 if str(RUNTIME_DIR) not in sys.path:
     sys.path.insert(0, str(RUNTIME_DIR))
 
+from i18n import t
 from runtime_core import ManagedRuntimeState, build_request_handler
 
 logging.basicConfig(
@@ -37,13 +38,7 @@ def ensure_runtime_environment() -> None:
         return
 
     details = "; ".join(f"{item['name']}: {item.get('detail', '')}" for item in failures)
-    raise RuntimeError(
-        "运行时依赖环境不完整，无法安全启动。"
-        f" 当前失败项：{details}。"
-        " 请优先使用 `pixi install && pixi run doctor` 修复环境，"
-        "并通过 `./start.sh` 或 `pixi run runtime` 启动。"
-        " 若确需跳过该检查，可设置 SCAGENT_ALLOW_UNHEALTHY_ENV=1。"
-    )
+    raise RuntimeError(t("error.unhealthyEnvironment", details=details))
 
 
 def main() -> None:

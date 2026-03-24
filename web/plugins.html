@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Skill Hub 管理</title>
+    <title data-i18n="html.pluginsTitle">Skill Hub 管理</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/plugins.css" />
   </head>
@@ -11,22 +11,22 @@
     <div class="hub-shell">
       <aside class="hub-sidebar">
         <div class="hub-brand">
-          <p class="eyebrow">插件管理</p>
-          <h1>Skill Hub</h1>
-          <p class="muted">统一管理内置技能和外部插件包，包括上传、刷新、关闭和重新启用。</p>
+          <p class="eyebrow" data-i18n="html.pluginsEyebrow">插件管理</p>
+          <h1 data-i18n="html.pluginsH1">Skill Hub</h1>
+          <p class="muted" data-i18n="html.pluginsDesc">统一管理内置技能和外部插件包，包括上传、刷新、关闭和重新启用。</p>
           <div class="hub-brand-links">
-            <a class="ghost-link" href="/">返回分析台</a>
-            <a class="ghost-link" href="/help.html" target="_blank" rel="noreferrer">打开帮助</a>
+            <a class="ghost-link" href="/" data-i18n="html.backToAnalysis">返回分析台</a>
+            <a class="ghost-link" href="/help.html" target="_blank" rel="noreferrer" data-i18n="html.helpLink">打开帮助</a>
           </div>
         </div>
 
         <details class="sidebar-card sidebar-fold">
           <summary class="sidebar-fold-summary">
             <div>
-              <strong>概览</strong>
-              <p>只保留技能包和已加载技能的摘要。</p>
+              <strong data-i18n="html.summaryTitle">概览</strong>
+              <p data-i18n="html.summaryDesc">只保留技能包和已加载技能的摘要。</p>
             </div>
-            <span id="summaryBadge" class="summary-badge">加载中</span>
+            <span id="summaryBadge" class="summary-badge" data-i18n="html.loadingBadge">加载中</span>
           </summary>
           <div class="sidebar-fold-body">
             <div id="hubSummary" class="summary-grid"></div>
@@ -36,19 +36,19 @@
         <details class="sidebar-card sidebar-fold">
           <summary class="sidebar-fold-summary">
             <div>
-              <strong>管理动作</strong>
-              <p>上传 zip 插件包，或刷新当前 Skill Hub 状态。</p>
+              <strong data-i18n="html.managementTitle">管理动作</strong>
+              <p data-i18n="html.managementDesc">上传 zip 插件包，或刷新当前 Skill Hub 状态。</p>
             </div>
-            <span class="summary-badge">操作</span>
+            <span class="summary-badge" data-i18n="html.operationBadge">操作</span>
           </summary>
           <div class="sidebar-fold-body">
             <form id="pluginUploadForm" class="upload-form">
-              <label for="pluginFileInput">上传 zip 插件包</label>
+              <label for="pluginFileInput" data-i18n="html.uploadZipLabel">上传 zip 插件包</label>
               <input id="pluginFileInput" name="file" type="file" accept=".zip,application/zip" />
-              <button type="submit">安装插件</button>
+              <button type="submit" data-i18n="html.installPlugin">安装插件</button>
             </form>
             <div class="hub-actions">
-              <button id="refreshButton" type="button" class="ghost-button">刷新列表</button>
+              <button id="refreshButton" type="button" class="ghost-button" data-i18n="html.refreshList">刷新列表</button>
             </div>
             <div id="hubStatus" class="status-text muted"></div>
           </div>
@@ -58,16 +58,16 @@
       <main class="hub-main">
         <header class="hub-header">
           <div>
-            <p class="eyebrow">Skill Hub</p>
-            <h2>插件与技能包</h2>
-            <p class="muted">技能统一放在右侧技能包区域。展开某个技能包后即可查看全部技能，点击任一技能会以悬浮窗打开说明、输入输出规范和实现方式，按 ESC 可快速退出。</p>
+            <p class="eyebrow" data-i18n="html.mainEyebrow">Skill Hub</p>
+            <h2 data-i18n="html.mainTitle">插件与技能包</h2>
+            <p class="muted" data-i18n="html.mainDesc">技能统一放在右侧技能包区域。展开某个技能包后即可查看全部技能，点击任一技能会以悬浮窗打开说明、输入输出规范和实现方式，按 ESC 可快速退出。</p>
           </div>
         </header>
         <div class="hub-workspace">
           <section class="bundle-column">
             <div class="section-head">
-              <h3>插件与技能包</h3>
-              <p class="muted">支持启停内置技能包和外部插件包。展开卡片可查看该 bundle 里的全部技能。</p>
+              <h3 data-i18n="html.bundleSectionTitle">插件与技能包</h3>
+              <p class="muted" data-i18n="html.bundleSectionDesc">支持启停内置技能包和外部插件包。展开卡片可查看该 bundle 里的全部技能。</p>
             </div>
             <section id="bundleList" class="bundle-grid"></section>
           </section>
@@ -86,16 +86,16 @@
       >
         <div class="skill-detail-dialog-head">
           <div>
-            <p class="eyebrow">技能详情</p>
-            <h3 id="skillDetailModalTitle">查看技能规范</h3>
-            <p class="muted">按 ESC 可关闭悬浮窗，按方向键可切换不同技能</p>
+            <p class="eyebrow" data-i18n="html.skillDetailEyebrow">技能详情</p>
+            <h3 id="skillDetailModalTitle" data-i18n="html.skillDetailTitle">查看技能规范</h3>
+            <p class="muted" data-i18n="html.skillDetailHint">按 ESC 可关闭悬浮窗，按方向键可切换不同技能</p>
           </div>
-          <button id="skillDetailClose" type="button" class="ghost-button">关闭</button>
+          <button id="skillDetailClose" type="button" class="ghost-button" data-i18n="html.close">关闭</button>
         </div>
         <div id="skillDetail" class="skill-detail-modal-body"></div>
       </section>
     </div>
 
-    <script src="/plugins.js" defer></script>
+    <script type="module" src="/plugins.js"></script>
   </body>
 </html>
