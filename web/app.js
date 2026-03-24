@@ -876,10 +876,26 @@ async function startApp() {
     if (!switcher) {
       return;
     }
-    switcher.value = getLocale();
-    switcher.addEventListener("change", async () => {
-      await setLocale(switcher.value);
-      renderApp();
+
+    function syncLanguageSwitcher(locale) {
+      switcher.dataset.locale = locale;
+      switcher.setAttribute("aria-checked", locale === "en" ? "true" : "false");
+    }
+
+    syncLanguageSwitcher(getLocale());
+    switcher.addEventListener("click", async () => {
+      if (switcher.disabled) {
+        return;
+      }
+      switcher.disabled = true;
+      try {
+        const nextLocale = getLocale() === "zh" ? "en" : "zh";
+        await setLocale(nextLocale);
+        syncLanguageSwitcher(getLocale());
+        renderApp();
+      } finally {
+        switcher.disabled = false;
+      }
     });
   }
 

@@ -36,10 +36,19 @@
           <div>
             <h2 data-i18n="html.consoleTitle">分析控制台</h2>
             <div class="panel-head-links">
-              <select id="languageSwitcher" class="language-switcher" aria-label="Language">
-                <option value="zh">中文</option>
-                <option value="en">English</option>
-              </select>
+              <button
+                id="languageSwitcher"
+                class="language-switcher"
+                type="button"
+                role="switch"
+                aria-checked="false"
+                data-locale="zh"
+                data-i18n-aria-label="ui.languageSwitcher"
+                aria-label="语言"
+              >
+                <span class="language-switcher-option language-switcher-option-zh" aria-hidden="true">中</span>
+                <span class="language-switcher-option language-switcher-option-en" aria-hidden="true">En</span>
+              </button>
               <a class="inline-link" href="/plugins.html" data-i18n="html.pluginLink">插件管理</a>
               <a class="inline-link" href="/help.html" target="_blank" rel="noreferrer" data-i18n="html.helpLink">打开帮助</a>
             </div>

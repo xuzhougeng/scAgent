@@ -36,6 +36,8 @@
 - Python: 4-space indentation, `snake_case` functions, keep runtime responses JSON-friendly.
 - Keep `runtime/server.py` thin; add runtime infrastructure under `runtime/runtime_core/` and skill implementations under `runtime/skill_runtime/` instead of growing the entrypoint.
 - JavaScript/CSS/HTML: follow existing simple static-file style; use 2-space indentation in `web/`.
+- Any change that affects frontend UI or backend-provided UI state/contracts must be implemented in sync across both sides; do not ship one-sided UI changes that leave the paired layer outdated.
+- For any user-facing language change, update I18N in both Chinese and English together; do not add or modify visible copy in only one locale.
 - Keep new skill names lower_snake_case, e.g. `plot_gene_umap`, `subcluster_group`.
 
 ## AI Responsibilities & Context Boundaries
