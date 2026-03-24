@@ -136,11 +136,11 @@ async function startApp() {
 
     container.classList.remove("hidden");
     container.innerHTML = `
-      <div class=”composer-mode-copy”>
-        <strong>${t(“ui.editAndResend”)}</strong>
-        <p class=”muted”>${t(“ui.editAndResendHint”)}</p>
+      <div class="composer-mode-copy">
+        <strong>${t("ui.editAndResend")}</strong>
+        <p class="muted">${t("ui.editAndResendHint")}</p>
       </div>
-      <button id=”composerModeCancelButton” type=”button”>${t(“ui.cancel”)}</button>
+      <button id="composerModeCancelButton" type="button">${t("ui.cancel")}</button>
     `;
 
     container.querySelector("#composerModeCancelButton")?.addEventListener("click", () => {
@@ -483,7 +483,7 @@ async function startApp() {
     input.value = message.content || "";
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
-    appState.workspaceStatus = t(“ui.loadedEditRequest”);
+    appState.workspaceStatus = t("ui.loadedEditRequest");
     renderApp();
   }
 
