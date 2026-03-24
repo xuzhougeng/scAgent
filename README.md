@@ -11,13 +11,17 @@
 - Upload a real `.h5ad` file and assess its readiness, annotations, embeddings, and analysis state.
 - Reuse one shared workspace across multiple conversations while keeping each conversation's jobs and messages isolated.
 - Create, inspect, and delete workspaces and conversations through the REST API.
-- Execute 18 `wired` skills covering the full single-cell analysis pipeline:
+- Execute 32 `wired` skills covering the full single-cell analysis pipeline:
   - **Inspection**: `inspect_dataset`, `assess_dataset`
-  - **Preprocessing**: `normalize_total`, `log1p_transform`, `select_hvg`
+  - **Quality control**: `summarize_qc`, `plot_qc_metrics`, `filter_cells`, `filter_genes`
+  - **Preprocessing**: `normalize_total`, `log1p_transform`, `select_hvg`, `scale_matrix`
   - **Dimensionality reduction**: `run_pca`, `compute_neighbors`, `run_umap`, `prepare_umap`
-  - **Visualization**: `plot_umap`, `plot_gene_umap`
-  - **Subsetting & clustering**: `subset_cells`, `subcluster_from_global`, `recluster`, `reanalyze_subset`
-  - **Downstream**: `find_markers`, `run_python_analysis`, `export_h5ad`
+  - **Visualization**: `plot_umap`, `plot_gene_umap`, `plot_dotplot`, `plot_violin`, `plot_heatmap`, `plot_celltype_composition`
+  - **Subsetting**: `subset_cells`, `score_gene_set`
+  - **Clustering**: `subcluster_from_global`, `recluster`, `reanalyze_subset`, `subcluster_group`, `rename_clusters`
+  - **Differential expression**: `find_markers`
+  - **Custom**: `run_python_analysis`
+  - **Export**: `export_h5ad`, `export_markers_csv`, `write_method`
 - Run long tasks as background jobs. The web client streams plan updates, execution checkpoints, step results, and artifacts over SSE.
 - Preview the planning context before execution through `/api/sessions/{id}/planner-preview`.
 - Manage built-in bundles and uploaded plugin bundles from `/plugins.html` without restarting the server.
@@ -37,9 +41,10 @@ Only `wired` skills are executable. `planned` skills remain registry placeholder
 - `internal/skill`: built-in registry plus Skill Hub plugin loading.
 - `internal/weixin`: WeChat bridge client and protocol types.
 - `runtime/server.py`: long-lived Python runtime service.
+- `runtime/session_worker.py`: per-session worker process for isolated skill execution.
 - `runtime/doctor.py`: environment health check utility.
 - `skills/registry.json`: shared skill catalog and parameter schema.
-- `web`: main SPA, help site, and plugin management UI.
+- `web`: main SPA (`index.html`, `app.js`), modular CSS (`css/`) and JS modules (`js/`), help site, and plugin management UI.
 - `docs/agent-architecture.md`: current execution flow and extension points.
 - `docs/help-guide.md`: user-facing workflow guide.
 - `docs/protocol.md`: control-plane, runtime, and web API contract.
@@ -286,7 +291,7 @@ The Go control plane uses your local Go toolchain. The Python analysis stack is 
 
 - Workspace and conversation lifecycle management with full CRUD
 - Structured job execution with three-phase pipeline, plans, steps, and checkpoints
-- Real `.h5ad` inspection and 18 `wired` single-cell skills covering the standard analysis pipeline
+- Real `.h5ad` inspection and 32 `wired` single-cell skills covering the standard analysis pipeline
 - Dynamic plugin registration through Skill Hub
 - Optional WeChat bridge for voice and text message interaction
 - Persistence is SQLite-backed at `data/state/store.db`

@@ -11,11 +11,12 @@
   - `models/`, `session/`, `orchestrator/`, `runtime/`, `skill/`: core domain, state, planner, runtime client, and skill registry.
 - `runtime/`: Python runtime service and diagnostics.
   - `server.py`: thin runtime entrypoint that wires state, HTTP handler, and startup.
+  - `session_worker.py`: per-session worker process for isolated skill execution.
   - `runtime_core/`: shared runtime infrastructure such as object store, HTTP layer, h5ad inspection, and analysis helpers.
   - `skill_runtime/`: builtin skill registry, plugin loading, and skill execution/support modules.
   - `doctor.py`: environment diagnostics entrypoint.
 - `skills/registry.json`: shared skill catalog.
-- `web/`: static frontend (`index.html`, `app.js`, `styles.css`, help pages).
+- `web/`: static frontend — `index.html`, `app.js`, modular CSS (`css/chat.css`, `css/layout.css`, `css/modal.css`, `css/sidebar.css`), JS modules (`js/api.mjs`, `js/format.mjs`, `js/layout.mjs`, `js/modals.mjs`, `js/render.mjs`, `js/state.mjs`), help pages, and plugin management UI.
 - `docs/`: Markdown docs rendered by the in-app help site.
 
 ## Build, Test, and Development Commands
@@ -26,7 +27,7 @@
 - `pixi run runtime`: runs the Python runtime inside Pixi.
 - `go run ./cmd/scagent`: runs only the Go control plane.
 - `GOCACHE=/tmp/go-build go test ./...`: runs all Go tests.
-- `python3 -m py_compile runtime/server.py runtime/doctor.py runtime/runtime_core/*.py runtime/skill_runtime/*.py`: checks Python syntax.
+- `python3 -m py_compile runtime/server.py runtime/session_worker.py runtime/doctor.py runtime/runtime_core/*.py runtime/skill_runtime/*.py`: checks Python syntax.
 - `node --check web/app.js && node --check web/help.js`: checks frontend script syntax.
 
 ## Coding Style & Naming Conventions
