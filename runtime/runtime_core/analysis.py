@@ -5,6 +5,7 @@ from typing import Any
 _ANALYSIS_MODULES: tuple[Any, Any, Any, Any, Any] | None = None
 SAFE_IMPORT_MODULES = {
     "anndata",
+    "difflib",
     "json",
     "math",
     "matplotlib",

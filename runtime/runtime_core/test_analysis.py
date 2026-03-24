@@ -61,6 +61,22 @@ for exc_type in [ValueError, RuntimeError, TypeError, KeyError, IndexError]:
         with self.assertRaises(NameError):
             exec("open('blocked.txt', 'w')", exec_env, exec_env)
 
+    def test_allowed_stdlib_modules_can_be_imported(self) -> None:
+        exec_env = {"__builtins__": SAFE_EXEC_BUILTINS.copy()}
+        code = """
+import difflib
+
+result = difflib.get_close_matches("CD3D", ["CD3E", "TRAC", "CD3D"], n=2, cutoff=0.6)
+"""
+        exec(code, exec_env, exec_env)
+
+        self.assertEqual(exec_env["result"], ["CD3D", "CD3E"])
+
+    def test_disallowed_modules_raise_import_error(self) -> None:
+        exec_env = {"__builtins__": SAFE_EXEC_BUILTINS.copy()}
+        with self.assertRaisesRegex(ImportError, "import 'subprocess' is not allowed"):
+            exec("import subprocess", exec_env, exec_env)
+
 
 if __name__ == "__main__":
     unittest.main()

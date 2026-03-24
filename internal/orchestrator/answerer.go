@@ -171,7 +171,11 @@ func (a *NoopAnswerer) BuildFailureAnswer(err error) string {
 			return message
 		}
 	}
-	return "本次执行失败，请稍后重试。"
+	detail := strings.Join(strings.Fields(err.Error()), " ")
+	if detail == "" {
+		return "本次执行失败，请稍后重试。"
+	}
+	return "本次执行失败：" + detail
 }
 
 type LLMAnswererConfig struct {

@@ -1414,6 +1414,7 @@ function buildJobStatusMarkup(job) {
 async function buildJobResultMarkup(job, assistantMessage, turn) {
   const resultMarkup = await buildTurnResultGroupMarkup(turn, { fallbackJob: job });
   const showSummary = shouldRenderJobSummary(job, assistantMessage?.content || "");
+  const primaryError = primaryJobErrorText(job);
   const cardClass =
     job.status === "failed"
       ? "failed"
@@ -1443,8 +1444,8 @@ async function buildJobResultMarkup(job, assistantMessage, turn) {
           : ""
       }
       ${
-        job.error
-          ? `<p class="message-job-error">${escapeHTML(job.error)}</p>`
+        primaryError
+          ? `<p class="message-job-error">${escapeHTML(primaryError)}</p>`
           : ""
       }
       ${
@@ -1661,6 +1662,38 @@ function buildCheckpointDebugMarkup(checkpoint) {
       <pre>${escapeHTML(rawError)}</pre>
     </div>
   `;
+}
+
+function primaryJobErrorText(job) {
+  const publicError = String(job?.error || "").trim();
+  if (publicError && publicError !== "本次执行失败，请稍后重试。") {
+    return publicError;
+  }
+
+  const rawError = primaryJobRawError(job);
+  if (rawError) {
+    return `失败原因：${rawError}`;
+  }
+
+  return publicError;
+}
+
+function primaryJobRawError(job) {
+  for (const checkpoint of job?.checkpoints || []) {
+    const rawError = String(checkpoint?.metadata?.raw_error || "").trim();
+    if (rawError) {
+      return rawError;
+    }
+  }
+
+  for (const phase of job?.phases || []) {
+    const rawError = String(phase?.metadata?.raw_error || "").trim();
+    if (rawError) {
+      return rawError;
+    }
+  }
+
+  return "";
 }
 
 function shouldRenderJobSummary(job, assistantContent = "") {

@@ -1662,7 +1662,7 @@ func TestRunJobFailsCleanlyWhenPlannerIsUnavailable(t *testing.T) {
 	if job.Status != models.JobFailed {
 		t.Fatalf("expected job to fail, got %s (%s)", job.Status, job.Error)
 	}
-	if job.Error != "本次执行失败，请稍后重试。" {
+	if job.Error != "本次执行失败：规划器执行失败：planner request failed: context deadline exceeded" {
 		t.Fatalf("unexpected public planner error: %q", job.Error)
 	}
 	if len(job.Checkpoints) == 0 {
@@ -1678,15 +1678,15 @@ func TestRunJobFailsCleanlyWhenPlannerIsUnavailable(t *testing.T) {
 	if failureCheckpoint.Metadata["raw_error"] == "" {
 		t.Fatalf("expected raw_error in checkpoint metadata, got %+v", failureCheckpoint.Metadata)
 	}
-	if strings.Contains(failureCheckpoint.Summary, "context deadline exceeded") {
-		t.Fatalf("expected public checkpoint summary to hide raw planner error, got %q", failureCheckpoint.Summary)
+	if !strings.Contains(failureCheckpoint.Summary, "规划器执行失败") || !strings.Contains(failureCheckpoint.Summary, "context deadline exceeded") {
+		t.Fatalf("expected checkpoint summary to expose failure reason, got %q", failureCheckpoint.Summary)
 	}
 	snapshot, err := store.Snapshot(sessionRecord.ID)
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
 	lastMessage := snapshot.Messages[len(snapshot.Messages)-1]
-	if lastMessage.Role != models.MessageAssistant || lastMessage.Content != "本次执行失败，请稍后重试。" {
+	if lastMessage.Role != models.MessageAssistant || lastMessage.Content != "本次执行失败：规划器执行失败：planner request failed: context deadline exceeded" {
 		t.Fatalf("unexpected assistant failure message: %+v", lastMessage)
 	}
 }

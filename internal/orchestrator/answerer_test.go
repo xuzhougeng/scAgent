@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -205,5 +206,38 @@ func TestLLMAnswererBuildRequestIncludesOnlyExplicitImageInputs(t *testing.T) {
 	}
 	if !bytes.Contains(capturedBody, []byte(`最近生成图片`)) {
 		t.Fatalf("expected recent artifact summary in compact context: %s", string(capturedBody))
+	}
+}
+
+type stubPublicMessageError struct {
+	message string
+}
+
+func (e stubPublicMessageError) Error() string {
+	return "internal detail"
+}
+
+func (e stubPublicMessageError) PublicMessage() string {
+	return e.message
+}
+
+func TestBuildFailureAnswerIncludesConcreteReason(t *testing.T) {
+	answerer := NewNoopAnswerer()
+
+	got := answerer.BuildFailureAnswer(errors.New("runtime /execute returned 400 Bad Request: import 'difflib' is not allowed"))
+
+	want := "本次执行失败：runtime /execute returned 400 Bad Request: import 'difflib' is not allowed"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestBuildFailureAnswerPrefersPublicMessage(t *testing.T) {
+	answerer := NewNoopAnswerer()
+
+	got := answerer.BuildFailureAnswer(stubPublicMessageError{message: "当前对象已失效，请重新选择后再试。"})
+
+	if got != "当前对象已失效，请重新选择后再试。" {
+		t.Fatalf("unexpected public message: %q", got)
 	}
 }
