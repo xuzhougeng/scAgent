@@ -1,21 +1,6 @@
 package orchestrator
 
-import (
-	"strings"
-
-	"scagent/internal/models"
-)
-
-var plotFollowUpPhrases = []string{
-	"这个图",
-	"这张图",
-	"上一张图",
-	"刚才的图",
-	"改图",
-	"修改图",
-	"重画",
-	"不符合要求",
-}
+import "scagent/internal/models"
 
 var inheritedPlotUMAPParamKeys = []string{
 	"legend_loc",
@@ -24,25 +9,6 @@ var inheritedPlotUMAPParamKeys = []string{
 	"point_size",
 	"figure_width",
 	"figure_height",
-}
-
-func isPlotFollowUpRequest(request PlanningRequest, explicitPlotParams map[string]any) bool {
-	if latestRecentPlotSkill(request) == "" {
-		return false
-	}
-	if len(explicitPlotParams) > 0 {
-		return true
-	}
-	return hasPlotFollowUpCue(request.Message)
-}
-
-func hasPlotFollowUpCue(message string) bool {
-	for _, phrase := range plotFollowUpPhrases {
-		if strings.Contains(message, phrase) {
-			return true
-		}
-	}
-	return false
 }
 
 func latestRecentJobStepBySkill(request PlanningRequest, skill string) *models.JobStep {
@@ -84,15 +50,26 @@ func recentPlotUMAPParams(step models.JobStep) map[string]any {
 	return params
 }
 
+func shouldInheritRecentPlotParams(request PlanningRequest) bool {
+	if request.CurrentTurn == nil {
+		return false
+	}
+	if request.CurrentTurn.Contract.DeliverableKind != models.TurnDeliverablePlot {
+		return false
+	}
+	if request.CurrentTurn.Contract.FollowUpTurnID == "" && request.CurrentTurn.Contract.FollowUpArtifactID == "" {
+		return false
+	}
+	return latestRecentJobStepBySkill(request, "plot_umap") != nil
+}
+
 func mergeRecentPlotUMAPParams(request PlanningRequest, currentParams map[string]any) map[string]any {
-	explicitPlotParams := parseExplicitPlotParams(request.Message)
-	followUp := isPlotFollowUpRequest(request, explicitPlotParams) && latestRecentPlotSkill(request) == "plot_umap"
 	merged := cloneParams(currentParams)
 	if merged == nil {
 		merged = make(map[string]any)
 	}
 
-	if !followUp {
+	if !shouldInheritRecentPlotParams(request) {
 		if len(merged) == 0 {
 			return nil
 		}
@@ -116,9 +93,6 @@ func mergeRecentPlotUMAPParams(request PlanningRequest, currentParams map[string
 	}
 
 	for key, value := range inherited {
-		if _, ok := explicitPlotParams[key]; ok {
-			continue
-		}
 		if _, ok := merged[key]; ok {
 			continue
 		}

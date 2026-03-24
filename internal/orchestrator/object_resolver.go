@@ -150,3 +150,20 @@ func resolvedObjectPriority(object *models.ObjectMeta) int {
 	}
 	return score
 }
+
+func objectIsAnalysisReady(object *models.ObjectMeta) bool {
+	if object == nil || len(object.Metadata) == 0 {
+		return false
+	}
+	assessment, ok := object.Metadata["assessment"].(map[string]any)
+	if !ok {
+		return objectHasEmbedding(object, "X_umap")
+	}
+	if state, ok := assessment["preprocessing_state"].(string); ok && state == "analysis_ready" {
+		return true
+	}
+	if hasUMAP, ok := assessment["has_umap"].(bool); ok && hasUMAP {
+		return true
+	}
+	return objectHasEmbedding(object, "X_umap")
+}

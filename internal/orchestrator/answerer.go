@@ -30,6 +30,10 @@ type AnswererConfig struct {
 
 type NoopAnswerer struct{}
 
+type publicMessageError interface {
+	PublicMessage() string
+}
+
 type LLMAnswerer struct {
 	*NoopAnswerer
 	apiKey          string
@@ -140,7 +144,7 @@ func (a *NoopAnswerer) BuildInvestigationResponse(_ context.Context, request Res
 			Summary: strings.TrimSpace(job.Summary),
 		}, nil
 	default:
-		answer := composeAnswerFromEvidence(request.Message, job)
+		answer := composeAnswerFromEvidence(job)
 		if answer == "" {
 			answer = bestResponseSummary(job)
 		}
@@ -162,32 +166,12 @@ func (a *NoopAnswerer) BuildFailureAnswer(err error) string {
 	if err == nil {
 		return "本次执行失败，请稍后重试。"
 	}
-	raw := strings.TrimSpace(err.Error())
-	lower := strings.ToLower(raw)
-
-	switch {
-	case strings.Contains(raw, "需要一个目标对象"),
-		strings.Contains(raw, "未找到对象"),
-		strings.Contains(raw, "当前没有活动对象"):
-		return "当前没有可用的目标对象。请先上传或选择数据集。"
-	case strings.Contains(raw, "未找到 workspace"):
-		return "当前 workspace 不可用，请刷新后重试。"
-	case strings.Contains(raw, "规划器执行失败"),
-		strings.Contains(raw, "规划上下文构建失败"),
-		strings.Contains(lower, "planner"),
-		strings.Contains(lower, "invalid schema"),
-		strings.Contains(lower, "response_format"):
-		return "规划器暂时不可用，本次执行未开始。请稍后重试。"
-	case userFacingRuntimeDetail(raw) != "":
-		return userFacingRuntimeDetail(raw)
-	case strings.Contains(lower, "decode runtime response"),
-		strings.Contains(lower, "json"),
-		strings.Contains(lower, "traceback"),
-		strings.Contains(lower, "bad request"):
-		return "本次执行失败，请稍后重试。"
-	default:
-		return raw
+	if typed, ok := err.(publicMessageError); ok {
+		if message := strings.TrimSpace(typed.PublicMessage()); message != "" {
+			return message
+		}
 	}
+	return "本次执行失败，请稍后重试。"
 }
 
 type LLMAnswererConfig struct {
@@ -514,6 +498,7 @@ func (a *LLMAnswerer) turnInstructions(requestPayload PlanningRequest) string {
 		"Use strategy=reuse_existing_artifact only when the current session already has concrete result refs that satisfy the deliverable. Return those refs explicitly.",
 		"Use strategy=execute when new analysis, generation, or materialization is required.",
 		"Use strategy=ask_clarification only when ambiguity prevents safe fulfillment.",
+		"When the user refers to modifying, showing, or continuing a previous result, set follow_up_turn_id and/or follow_up_artifact_id to the referenced prior result when it is identifiable from context.",
 		"For requests like 给我 umap / 画一下 UMAP, set deliverable_kind=plot and prefer strategy=execute unless a matching existing artifact clearly satisfies the request.",
 		"For follow-up requests like 图呢 / 文件呢 / 结果呢, prefer reuse_existing_artifact when a recent turn already produced matching results.",
 		"Set completion_criteria so deterministic code can verify fulfillment later.",
@@ -699,26 +684,6 @@ func responseComposeSchema() map[string]any {
 	}
 }
 
-func userFacingRuntimeDetail(raw string) string {
-	if !strings.Contains(raw, "runtime /execute returned") {
-		return ""
-	}
-	index := strings.LastIndex(raw, ": ")
-	if index < 0 || index+2 >= len(raw) {
-		return ""
-	}
-	detail := strings.TrimSpace(raw[index+2:])
-	lower := strings.ToLower(detail)
-	if detail == "" ||
-		strings.Contains(lower, "bad request") ||
-		strings.Contains(lower, "traceback") ||
-		strings.Contains(lower, "decode") ||
-		strings.Contains(lower, "json") {
-		return ""
-	}
-	return detail
-}
-
 func formatResponseComposeContext(request ResponseComposeRequest) []string {
 	contextLines := formatEvaluationContext(EvaluationRequest{
 		Message:         request.Message,
@@ -739,7 +704,7 @@ func formatResponseComposeContext(request ResponseComposeRequest) []string {
 	return contextLines
 }
 
-func composeAnswerFromEvidence(message string, job *models.Job) string {
+func composeAnswerFromEvidence(job *models.Job) string {
 	if text := strings.TrimSpace(extractResultText(job)); text != "" {
 		return text
 	}
@@ -749,7 +714,7 @@ func composeAnswerFromEvidence(message string, job *models.Job) string {
 	if stdout := strings.TrimSpace(extractScalarStdout(job)); stdout != "" {
 		return fmt.Sprintf("结果是 %s。", stdout)
 	}
-	if strings.TrimSpace(job.Summary) != "" && !isGenericStepSummary(job.Summary) {
+	if strings.TrimSpace(job.Summary) != "" {
 		return strings.TrimSpace(job.Summary)
 	}
 	return bestJobSummary(job)
@@ -759,7 +724,7 @@ func bestResponseSummary(job *models.Job) string {
 	if job == nil {
 		return ""
 	}
-	if strings.TrimSpace(job.Summary) != "" && !isGenericStepSummary(job.Summary) {
+	if strings.TrimSpace(job.Summary) != "" {
 		return strings.TrimSpace(job.Summary)
 	}
 	if summary := bestJobSummary(job); summary != "" {
@@ -773,13 +738,11 @@ func bestJobSummary(job *models.Job) string {
 		return ""
 	}
 	if strings.TrimSpace(job.Summary) != "" {
-		if len(job.Steps) != 1 || isGenericStepSummary(job.Steps[0].Summary) {
-			return strings.TrimSpace(job.Summary)
-		}
+		return strings.TrimSpace(job.Summary)
 	}
 	if len(job.Steps) == 1 {
 		stepSummary := strings.TrimSpace(job.Steps[0].Summary)
-		if stepSummary != "" && !isGenericStepSummary(stepSummary) {
+		if stepSummary != "" {
 			return stepSummary
 		}
 		return strings.TrimSpace(job.Summary)
@@ -863,22 +826,4 @@ func isSingleTokenValue(value string) bool {
 		return false
 	}
 	return true
-}
-
-func isGenericStepSummary(summary string) bool {
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return false
-	}
-	genericMarkers := []string{
-		"已完成针对",
-		"自定义 Python 分析",
-		"编排器已接受执行计划",
-	}
-	for _, marker := range genericMarkers {
-		if strings.Contains(summary, marker) {
-			return true
-		}
-	}
-	return false
 }

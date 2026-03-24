@@ -31,6 +31,17 @@ var geneTokenPattern = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9._-]{2,}\b`)
 
 const defaultSubsetCellType = "T cells"
 
+var fakePlotFollowUpPhrases = []string{
+	"这个图",
+	"这张图",
+	"上一张图",
+	"刚才的图",
+	"改图",
+	"修改图",
+	"重画",
+	"不符合要求",
+}
+
 func NewFakePlanner() *FakePlanner {
 	return &FakePlanner{}
 }
@@ -152,7 +163,7 @@ func (p *FakePlanner) Plan(_ context.Context, request PlanningRequest) (models.P
 			for key, value := range explicitPlotParams {
 				plotParams[key] = value
 			}
-			plotParams = mergeRecentPlotUMAPParams(request, plotParams)
+			plotParams = mergeRecentPlotUMAPParamsForFake(request, plotParams, explicitPlotParams)
 			steps = append(steps, models.PlanStep{
 				ID:             stepID(len(steps) + 1),
 				Skill:          "plot_umap",
@@ -281,6 +292,66 @@ func latestRecentPlotSkill(request PlanningRequest) string {
 	}
 
 	return ""
+}
+
+func isPlotFollowUpRequest(request PlanningRequest, explicitPlotParams map[string]any) bool {
+	if latestRecentPlotSkill(request) == "" {
+		return false
+	}
+	if len(explicitPlotParams) > 0 {
+		return true
+	}
+	for _, phrase := range fakePlotFollowUpPhrases {
+		if strings.Contains(request.Message, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeRecentPlotUMAPParamsForFake(request PlanningRequest, currentParams, explicitPlotParams map[string]any) map[string]any {
+	merged := cloneParams(currentParams)
+	if merged == nil {
+		merged = make(map[string]any)
+	}
+
+	if !(isPlotFollowUpRequest(request, explicitPlotParams) && latestRecentPlotSkill(request) == "plot_umap") {
+		if len(merged) == 0 {
+			return nil
+		}
+		return merged
+	}
+
+	recentStep := latestRecentJobStepBySkill(request, "plot_umap")
+	if recentStep == nil {
+		if len(merged) == 0 {
+			return nil
+		}
+		return merged
+	}
+
+	inherited := recentPlotUMAPParams(*recentStep)
+	if len(inherited) == 0 {
+		if len(merged) == 0 {
+			return nil
+		}
+		return merged
+	}
+
+	for key, value := range inherited {
+		if _, ok := explicitPlotParams[key]; ok {
+			continue
+		}
+		if _, ok := merged[key]; ok {
+			continue
+		}
+		merged[key] = value
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
 }
 
 func inferCellTypeValue(request PlanningRequest, message string) string {

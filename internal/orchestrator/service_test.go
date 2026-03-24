@@ -1095,6 +1095,14 @@ func TestBuildExecutablePlanInheritsMissingLegendFromRecentPlotContext(t *testin
 
 	plan, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
 		Message: "把这个图改一下",
+		CurrentTurn: &models.Turn{
+			ID: "turn_current",
+			Contract: models.TurnContract{
+				DeliverableKind:    models.TurnDeliverablePlot,
+				FollowUpTurnID:     "turn_prev",
+				FollowUpArtifactID: "art_prev",
+			},
+		},
 		RecentJobs: []*models.Job{
 			{
 				ID:     "job_prev",
@@ -1149,6 +1157,14 @@ func TestBuildExecutablePlanKeepsPlannerLegendChoiceWhenProvided(t *testing.T) {
 
 	plan, err := service.buildExecutablePlan(context.Background(), PlanningRequest{
 		Message: "把图例放右边",
+		CurrentTurn: &models.Turn{
+			ID: "turn_current",
+			Contract: models.TurnContract{
+				DeliverableKind:    models.TurnDeliverablePlot,
+				FollowUpTurnID:     "turn_prev",
+				FollowUpArtifactID: "art_prev",
+			},
+		},
 		RecentJobs: []*models.Job{
 			{
 				ID:     "job_prev",
@@ -1229,7 +1245,14 @@ func TestRunJobReplansRemainingStepsFromCurrentState(t *testing.T) {
 			},
 		},
 	}
-	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, NewFakeEvaluator(), t.TempDir())
+	evaluator := &scriptedEvaluator{
+		results: []*CompletionEvaluation{
+			{Completed: false, Reason: "当前对象仍未达到 analysis_ready，需要继续执行后续预处理步骤。"},
+			{Completed: false, Reason: "当前对象仍未达到 analysis_ready，需要继续执行后续预处理步骤。"},
+			{Completed: false, Reason: "当前对象仍未达到 analysis_ready，需要继续执行后续预处理步骤。"},
+		},
+	}
+	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, evaluator, t.TempDir())
 
 	service.runJob(context.Background(), sessionRecord.ID, "job_replan", "完成常规的数据预处理", nil)
 
@@ -1489,7 +1512,13 @@ func TestRunJobKeepsOriginalRemainingStepsWhenCheckpointReplanFails(t *testing.T
 			2: errors.New("checkpoint replan failed"),
 		},
 	}
-	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, NewFakeEvaluator(), t.TempDir())
+	evaluator := &scriptedEvaluator{
+		results: []*CompletionEvaluation{
+			{Completed: false, Reason: "当前对象仍未达到 analysis_ready，需要继续执行后续预处理步骤。"},
+			{Completed: false, Reason: "当前对象仍未达到 analysis_ready，需要继续执行后续预处理步骤。"},
+		},
+	}
+	service := NewServiceWithEvaluator(store, registry, &sequentialRuntime{}, planner, evaluator, t.TempDir())
 
 	service.runJob(context.Background(), sessionRecord.ID, "job_keep_plan", "完成常规的数据预处理", nil)
 
@@ -1633,7 +1662,7 @@ func TestRunJobFailsCleanlyWhenPlannerIsUnavailable(t *testing.T) {
 	if job.Status != models.JobFailed {
 		t.Fatalf("expected job to fail, got %s (%s)", job.Status, job.Error)
 	}
-	if job.Error != "规划器暂时不可用，本次执行未开始。请稍后重试。" {
+	if job.Error != "本次执行失败，请稍后重试。" {
 		t.Fatalf("unexpected public planner error: %q", job.Error)
 	}
 	if len(job.Checkpoints) == 0 {
@@ -1657,7 +1686,7 @@ func TestRunJobFailsCleanlyWhenPlannerIsUnavailable(t *testing.T) {
 		t.Fatalf("snapshot: %v", err)
 	}
 	lastMessage := snapshot.Messages[len(snapshot.Messages)-1]
-	if lastMessage.Role != models.MessageAssistant || lastMessage.Content != "规划器暂时不可用，本次执行未开始。请稍后重试。" {
+	if lastMessage.Role != models.MessageAssistant || lastMessage.Content != "本次执行失败，请稍后重试。" {
 		t.Fatalf("unexpected assistant failure message: %+v", lastMessage)
 	}
 }
